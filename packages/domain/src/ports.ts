@@ -1,10 +1,25 @@
 import { Decimal } from "decimal.js";
 import type { AccountRiskHead, OrderReservation, RuleVersion } from "./entities.js";
+import type { RuleType } from "./enums.js";
 
 export interface NewReservationInput {
   accountId: string;
   clientIntentId: string;
   reservedAmount: Decimal;
+}
+
+export interface NewAccountRuleInput {
+  ruleType: RuleType;
+  param: Decimal;
+}
+
+export interface NewAccountInput {
+  accountId: string;
+  ownerUserId: string;
+  venue: string;
+  /** Starting equity snapshot the owner declares at provisioning time (no live venue read yet — Phase 2). */
+  initialEquity: Decimal;
+  initialRules: readonly NewAccountRuleInput[];
 }
 
 /**
@@ -33,4 +48,13 @@ export interface LedgerContext {
  */
 export interface RiskLedgerStore {
   runExclusive<T>(accountId: string, fn: (ctx: LedgerContext) => Promise<T>): Promise<T>;
+  /** Provisions a brand-new account. Throws AccountAlreadyExistsError on a duplicate accountId. */
+  createAccount(input: NewAccountInput): Promise<void>;
+}
+
+export class AccountAlreadyExistsError extends Error {
+  constructor(public readonly accountId: string) {
+    super(`Account already exists: ${accountId}`);
+    this.name = "AccountAlreadyExistsError";
+  }
 }

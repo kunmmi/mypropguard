@@ -1,7 +1,16 @@
 import type pg from "pg";
 import { Decimal } from "decimal.js";
-import { OrderReservationStatus, type LedgerContext, type NewReservationInput, type RiskLedgerStore } from "@mypropguard/domain";
+import {
+  AccountAlreadyExistsError,
+  OrderReservationStatus,
+  type LedgerContext,
+  type NewAccountInput,
+  type NewReservationInput,
+  type RiskLedgerStore,
+} from "@mypropguard/domain";
 import { rowToAccountRiskHead, rowToOrderReservation, rowToRuleVersion } from "./mappers.js";
+
+const POSTGRES_UNIQUE_VIOLATION = "23505";
 
 /**
  * Postgres-backed RiskLedgerStore. `account_risk_heads` is the per-account
@@ -70,4 +79,48 @@ export class PgRiskLedgerStore implements RiskLedgerStore {
       client.release();
     }
   }
+
+  async createAccount(input: NewAccountInput): Promise<void> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      try {
+        await client.query(
+          "INSERT INTO protected_accounts (account_id, owner_user_id, venue, protection_enabled) VALUES ($1, $2, $3, false)",
+          [input.accountId, input.ownerUserId, input.venue],
+        );
+      } catch (error) {
+        if (isUniqueViolation(error)) {
+          throw new AccountAlreadyExistsError(input.accountId);
+        }
+        throw error;
+      }
+
+      const equity = input.initialEquity.toString();
+      await client.query(
+        `INSERT INTO account_risk_heads (account_id, equity_start_of_day, current_equity, peak_equity, open_notional)
+         VALUES ($1, $2, $2, $2, 0)`,
+        [input.accountId, equity],
+      );
+
+      for (const rule of input.initialRules) {
+        await client.query("INSERT INTO rule_versions (account_id, rule_type, param) VALUES ($1, $2, $3)", [
+          input.accountId,
+          rule.ruleType,
+          rule.param.toString(),
+        ]);
+      }
+
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+}
+
+function isUniqueViolation(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && error.code === POSTGRES_UNIQUE_VIOLATION;
 }

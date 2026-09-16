@@ -1,5 +1,6 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import type { RiskLedgerStore } from "@mypropguard/domain";
+import { registerAccountRoutes } from "./routes/accounts.js";
 import { registerOrderRoutes } from "./routes/orders.js";
 import { registerProtectionRoutes } from "./routes/protection.js";
 
@@ -10,6 +11,7 @@ export interface AppDeps {
 export function buildApp(deps: AppDeps): FastifyInstance {
   const app = Fastify({ logger: false });
 
+  registerAccountRoutes(app, deps);
   registerOrderRoutes(app, deps);
   registerProtectionRoutes(app, deps);
 

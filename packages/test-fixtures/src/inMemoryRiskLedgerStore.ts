@@ -1,8 +1,10 @@
 import { Decimal } from "decimal.js";
 import {
+  AccountAlreadyExistsError,
   OrderReservationStatus,
   type AccountRiskHead,
   type LedgerContext,
+  type NewAccountInput,
   type NewReservationInput,
   type OrderReservation,
   type RiskLedgerStore,
@@ -10,6 +12,7 @@ import {
 } from "@mypropguard/domain";
 
 let reservationSequence = 0;
+let ruleSequence = 0;
 
 /**
  * In-memory RiskLedgerStore for tests. Serializes `runExclusive` calls per
@@ -39,6 +42,42 @@ export class InMemoryRiskLedgerStore implements RiskLedgerStore {
 
   getReservations(): readonly OrderReservation[] {
     return this.reservations;
+  }
+
+  async createAccount(input: NewAccountInput): Promise<void> {
+    if (this.heads.has(input.accountId)) {
+      throw new AccountAlreadyExistsError(input.accountId);
+    }
+
+    this.heads.set(input.accountId, {
+      accountId: input.accountId,
+      equityStartOfDay: input.initialEquity,
+      currentEquity: input.initialEquity,
+      realizedPnlToday: new Decimal(0),
+      peakEquity: input.initialEquity,
+      currentDrawdown: new Decimal(0),
+      openNotional: new Decimal(0),
+      leverage: new Decimal(0),
+      tradeCountToday: 0,
+      lastTradeAt: null,
+      version: 1,
+    });
+    this.protectionEnabled.set(input.accountId, false);
+    this.rules.set(
+      input.accountId,
+      input.initialRules.map((rule) => {
+        ruleSequence += 1;
+        return {
+          id: `rule_${ruleSequence}`,
+          accountId: input.accountId,
+          ruleType: rule.ruleType,
+          param: rule.param,
+          effectiveFrom: new Date(),
+          isActive: true,
+          createdAt: new Date(),
+        };
+      }),
+    );
   }
 
   async runExclusive<T>(accountId: string, fn: (ctx: LedgerContext) => Promise<T>): Promise<T> {
