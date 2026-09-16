@@ -1,0 +1,20 @@
+{
+  "name": "@mypropguard/test-fixtures",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b"
+  },
+  "dependencies": {
+    "@mypropguard/domain": "workspace:*",
+    "decimal.js": "^10.4.3"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0"
+  }
+}
