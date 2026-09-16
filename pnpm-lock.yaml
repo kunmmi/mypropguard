@@ -181,6 +181,9 @@ importers:
       '@mypropguard/domain':
         specifier: workspace:*
         version: link:../../packages/domain
+      '@mypropguard/hyperliquid':
+        specifier: workspace:*
+        version: link:../../packages/hyperliquid
       '@mypropguard/persistence':
         specifier: workspace:*
         version: link:../../packages/persistence
@@ -237,6 +240,13 @@ importers:
         version: 2.1.9(@types/node@22.20.3)
 
   packages/hyperliquid:
+    dependencies:
+      '@mypropguard/domain':
+        specifier: workspace:*
+        version: link:../domain
+      decimal.js:
+        specifier: ^10.4.3
+        version: 10.6.0
     devDependencies:
       typescript:
         specifier: ^5.7.0
@@ -260,6 +270,9 @@ importers:
         specifier: ^8.13.1
         version: 8.23.0
     devDependencies:
+      '@mypropguard/hyperliquid':
+        specifier: workspace:*
+        version: link:../hyperliquid
       '@mypropguard/test-fixtures':
         specifier: workspace:*
         version: link:../test-fixtures

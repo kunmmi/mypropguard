@@ -61,3 +61,16 @@ export const OrderReservationStatus = {
 } as const;
 export type OrderReservationStatus =
   (typeof OrderReservationStatus)[keyof typeof OrderReservationStatus];
+
+/**
+ * Whether an account's venue-derived state can be trusted right now. Per
+ * the blueprint: "the UI must never show green protection when
+ * authority/state continuity is unknown" — ProtectionGate only allows new
+ * trades when the latest checkpoint is VERIFIED and still fresh.
+ */
+export const StateConfidence = {
+  VERIFIED: "VERIFIED",
+  STALE: "STALE",
+  UNKNOWN: "UNKNOWN",
+} as const;
+export type StateConfidence = (typeof StateConfidence)[keyof typeof StateConfidence];

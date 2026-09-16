@@ -1,4 +1,5 @@
 import { createPool, PgRiskLedgerStore } from "@mypropguard/persistence";
+import { HyperliquidInfoClient } from "@mypropguard/hyperliquid";
 import { buildApp } from "./app.js";
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -10,7 +11,10 @@ if (!DATABASE_URL) {
 
 const pool = createPool(DATABASE_URL);
 const store = new PgRiskLedgerStore(pool);
-const app = buildApp({ store });
+// Read-only public Hyperliquid Info API client (Phase 2) — no credentials,
+// cannot place orders or move funds.
+const venueReader = new HyperliquidInfoClient();
+const app = buildApp({ store, venueReader });
 
 const port = Number(process.env.PORT ?? 3000);
 app

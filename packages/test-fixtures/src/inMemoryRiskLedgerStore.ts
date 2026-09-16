@@ -6,13 +6,16 @@ import {
   type LedgerContext,
   type NewAccountInput,
   type NewReservationInput,
+  type NewStateCheckpointInput,
   type OrderReservation,
   type RiskLedgerStore,
   type RuleVersion,
+  type StateCheckpoint,
 } from "@mypropguard/domain";
 
 let reservationSequence = 0;
 let ruleSequence = 0;
+let checkpointSequence = 0;
 
 /**
  * In-memory RiskLedgerStore for tests. Serializes `runExclusive` calls per
@@ -27,6 +30,7 @@ export class InMemoryRiskLedgerStore implements RiskLedgerStore {
   private readonly reservations: OrderReservation[] = [];
   private readonly locks = new Map<string, Promise<unknown>>();
   private readonly protectionEnabled = new Map<string, boolean>();
+  private readonly checkpoints = new Map<string, StateCheckpoint[]>();
 
   seedAccountRiskHead(head: AccountRiskHead): void {
     this.heads.set(head.accountId, head);
@@ -99,6 +103,9 @@ export class InMemoryRiskLedgerStore implements RiskLedgerStore {
           if (!head) throw new Error(`No account risk head seeded for ${id}`);
           return head;
         },
+        updateAccountRiskHead: async (head) => {
+          this.heads.set(head.accountId, head);
+        },
         getActiveRules: async (id) => this.rules.get(id) ?? [],
         getOutstandingReservationTotal: async (id) =>
           this.reservations
@@ -121,6 +128,17 @@ export class InMemoryRiskLedgerStore implements RiskLedgerStore {
         isProtectionEnabled: async (id) => this.protectionEnabled.get(id) ?? false,
         setProtectionEnabled: async (id, enabled) => {
           this.protectionEnabled.set(id, enabled);
+        },
+        recordStateCheckpoint: async (input: NewStateCheckpointInput) => {
+          checkpointSequence += 1;
+          const list = this.checkpoints.get(input.accountId) ?? [];
+          list.push({ id: `chk_${checkpointSequence}`, ...input });
+          this.checkpoints.set(input.accountId, list);
+        },
+        getLatestStateCheckpoint: async (id) => {
+          const list = this.checkpoints.get(id);
+          if (!list || list.length === 0) return null;
+          return list.reduce((latest, c) => (c.verifiedAt > latest.verifiedAt ? c : latest));
         },
       };
       return await fn(ctx);

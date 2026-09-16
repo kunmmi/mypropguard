@@ -1,6 +1,6 @@
 import { Decimal } from "decimal.js";
-import type { AccountRiskHead, OrderReservation, RuleVersion } from "@mypropguard/domain";
-import { OrderReservationStatus } from "@mypropguard/domain";
+import type { AccountRiskHead, OrderReservation, RuleVersion, StateCheckpoint } from "@mypropguard/domain";
+import { OrderReservationStatus, StateConfidence } from "@mypropguard/domain";
 
 export function rowToAccountRiskHead(row: Record<string, unknown>): AccountRiskHead {
   return {
@@ -39,5 +39,14 @@ export function rowToOrderReservation(row: Record<string, unknown>): OrderReserv
     status: row.status as OrderReservationStatus,
     createdAt: new Date(row.created_at as string),
     releasedAt: row.released_at ? new Date(row.released_at as string) : null,
+  };
+}
+
+export function rowToStateCheckpoint(row: Record<string, unknown>): StateCheckpoint {
+  return {
+    id: row.id as string,
+    accountId: row.account_id as string,
+    confidence: row.confidence as StateConfidence,
+    verifiedAt: new Date(row.verified_at as string),
   };
 }

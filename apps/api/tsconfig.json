@@ -8,6 +8,7 @@
   "references": [
     { "path": "../../packages/domain" },
     { "path": "../../packages/contracts" },
-    { "path": "../../packages/persistence" }
+    { "path": "../../packages/persistence" },
+    { "path": "../../packages/hyperliquid" }
   ]
 }

@@ -1,6 +1,6 @@
 import { Decimal } from "decimal.js";
 import type { AccountRiskHead, OrderReservation, RuleVersion } from "./entities.js";
-import type { RuleType } from "./enums.js";
+import type { RuleType, StateConfidence } from "./enums.js";
 
 export interface NewReservationInput {
   accountId: string;
@@ -30,12 +30,54 @@ export interface NewAccountInput {
  */
 export interface LedgerContext {
   getAccountRiskHead(accountId: string): Promise<AccountRiskHead>;
+  updateAccountRiskHead(head: AccountRiskHead): Promise<void>;
   getActiveRules(accountId: string): Promise<readonly RuleVersion[]>;
   /** Sum of reservedAmount for all HELD reservations on this account. */
   getOutstandingReservationTotal(accountId: string): Promise<Decimal>;
   insertReservation(input: NewReservationInput): Promise<OrderReservation>;
   isProtectionEnabled(accountId: string): Promise<boolean>;
   setProtectionEnabled(accountId: string, enabled: boolean): Promise<void>;
+  recordStateCheckpoint(checkpoint: NewStateCheckpointInput): Promise<void>;
+  getLatestStateCheckpoint(accountId: string): Promise<StateCheckpoint | null>;
+}
+
+export interface NewStateCheckpointInput {
+  accountId: string;
+  confidence: StateConfidence;
+  verifiedAt: Date;
+}
+
+export interface StateCheckpoint extends NewStateCheckpointInput {
+  id: string;
+}
+
+/** One position on a venue, as read from that venue's public account-state API. */
+export interface VenuePosition {
+  coin: string;
+  /** Signed size: positive = long, negative = short. */
+  size: Decimal;
+  positionValue: Decimal;
+  leverage: Decimal;
+}
+
+/** Venue-native account snapshot, normalized just enough to feed AccountRiskHead. */
+export interface ClearinghouseState {
+  accountValue: Decimal;
+  totalMarginUsed: Decimal;
+  /** Aggregate absolute notional across all open positions. */
+  totalNotionalPosition: Decimal;
+  withdrawable: Decimal;
+  positions: readonly VenuePosition[];
+}
+
+/**
+ * A read-only venue state reader (Phase 2). Deliberately narrow: no
+ * signing, no order placement — just public account-state reads. Hyperliquid
+ * implements this in packages/hyperliquid; other venues can add their own
+ * later without changing the reconciliation orchestrator.
+ */
+export interface VenueStateReader {
+  getClearinghouseState(address: string): Promise<ClearinghouseState>;
 }
 
 /**

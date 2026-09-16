@@ -6,9 +6,10 @@ import {
   type LedgerContext,
   type NewAccountInput,
   type NewReservationInput,
+  type NewStateCheckpointInput,
   type RiskLedgerStore,
 } from "@mypropguard/domain";
-import { rowToAccountRiskHead, rowToOrderReservation, rowToRuleVersion } from "./mappers.js";
+import { rowToAccountRiskHead, rowToOrderReservation, rowToRuleVersion, rowToStateCheckpoint } from "./mappers.js";
 
 const POSTGRES_UNIQUE_VIOLATION = "23505";
 
@@ -36,6 +37,27 @@ export class PgRiskLedgerStore implements RiskLedgerStore {
           const row = result.rows[0];
           if (!row) throw new Error(`No account_risk_heads row for ${id}`);
           return rowToAccountRiskHead(row);
+        },
+        updateAccountRiskHead: async (head) => {
+          await client.query(
+            `UPDATE account_risk_heads SET
+               equity_start_of_day = $2, current_equity = $3, realized_pnl_today = $4,
+               peak_equity = $5, current_drawdown = $6, open_notional = $7, leverage = $8,
+               trade_count_today = $9, last_trade_at = $10, version = version + 1, updated_at = now()
+             WHERE account_id = $1`,
+            [
+              head.accountId,
+              head.equityStartOfDay.toString(),
+              head.currentEquity.toString(),
+              head.realizedPnlToday.toString(),
+              head.peakEquity.toString(),
+              head.currentDrawdown.toString(),
+              head.openNotional.toString(),
+              head.leverage.toString(),
+              head.tradeCountToday,
+              head.lastTradeAt,
+            ],
+          );
         },
         getActiveRules: async (id) => {
           const result = await client.query(
@@ -66,6 +88,19 @@ export class PgRiskLedgerStore implements RiskLedgerStore {
         },
         setProtectionEnabled: async (id, enabled) => {
           await client.query("UPDATE protected_accounts SET protection_enabled = $2 WHERE account_id = $1", [id, enabled]);
+        },
+        recordStateCheckpoint: async (input: NewStateCheckpointInput) => {
+          await client.query(
+            "INSERT INTO state_checkpoints (account_id, confidence, verified_at) VALUES ($1, $2, $3)",
+            [input.accountId, input.confidence, input.verifiedAt],
+          );
+        },
+        getLatestStateCheckpoint: async (id) => {
+          const result = await client.query(
+            "SELECT * FROM state_checkpoints WHERE account_id = $1 ORDER BY verified_at DESC LIMIT 1",
+            [id],
+          );
+          return result.rows[0] ? rowToStateCheckpoint(result.rows[0]) : null;
         },
       };
 

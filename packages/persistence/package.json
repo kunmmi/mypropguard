@@ -18,6 +18,7 @@
     "pg": "^8.13.1"
   },
   "devDependencies": {
+    "@mypropguard/hyperliquid": "workspace:*",
     "@mypropguard/test-fixtures": "workspace:*",
     "@types/pg": "^8.11.10",
     "typescript": "^5.7.0",

@@ -13,6 +13,10 @@
     "typecheck": "tsc -b",
     "test": "vitest run --passWithNoTests"
   },
+  "dependencies": {
+    "@mypropguard/domain": "workspace:*",
+    "decimal.js": "^10.4.3"
+  },
   "devDependencies": {
     "typescript": "^5.7.0",
     "vitest": "^2.1.8"
