@@ -37,11 +37,12 @@ export interface ReserveOrderResult {
  */
 export async function reserveOrder(store: RiskLedgerStore, input: ReserveOrderInput): Promise<ReserveOrderResult> {
   return store.runExclusive(input.accountId, async (ctx) => {
-    const [head, rules, outstanding] = await Promise.all([
-      ctx.getAccountRiskHead(input.accountId),
-      ctx.getActiveRules(input.accountId),
-      ctx.getOutstandingReservationTotal(input.accountId),
-    ]);
+    // Sequential, not Promise.all: the Postgres-backed LedgerContext issues
+    // these through a single client tied to this transaction, which cannot
+    // multiplex concurrent queries.
+    const head = await ctx.getAccountRiskHead(input.accountId);
+    const rules = await ctx.getActiveRules(input.accountId);
+    const outstanding = await ctx.getOutstandingReservationTotal(input.accountId);
 
     const projectedHead = outstanding.gt(0)
       ? { ...head, openNotional: head.openNotional.plus(outstanding) }

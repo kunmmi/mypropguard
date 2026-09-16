@@ -12,11 +12,11 @@ import { evaluateProtectionGate } from "@mypropguard/risk-engine";
  */
 export async function getProtectionStatus(store: RiskLedgerStore, accountId: string): Promise<ProtectionGateResult> {
   return store.runExclusive(accountId, async (ctx) => {
-    const [head, rules, protectionEnabled] = await Promise.all([
-      ctx.getAccountRiskHead(accountId),
-      ctx.getActiveRules(accountId),
-      ctx.isProtectionEnabled(accountId),
-    ]);
+    // Sequential: the Postgres-backed LedgerContext shares one client per
+    // transaction, which cannot multiplex concurrent queries.
+    const head = await ctx.getAccountRiskHead(accountId);
+    const rules = await ctx.getActiveRules(accountId);
+    const protectionEnabled = await ctx.isProtectionEnabled(accountId);
 
     return evaluateProtectionGate({
       accountRiskHead: head,
