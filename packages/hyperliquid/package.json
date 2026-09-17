@@ -15,10 +15,14 @@
   },
   "dependencies": {
     "@mypropguard/domain": "workspace:*",
+    "@msgpack/msgpack": "^3.0.0",
+    "@noble/hashes": "^1.6.1",
     "decimal.js": "^10.4.3"
   },
   "devDependencies": {
+    "@types/node": "^22.10.2",
     "typescript": "^5.7.0",
+    "viem": "^2.21.54",
     "vitest": "^2.1.8"
   }
 }
