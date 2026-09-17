@@ -1,0 +1,48 @@
+:root{
+/* Brand palette, per Ighodalo Labs Brand Guideline 2026 */
+--color-primary:#183A37;      /* Deep Forest, primary */
+--color-primary-dark:#0F2725;
+--color-primary-light:#265551;
+--color-graphite:#3B3F46;     /* Graphite, secondary neutral */
+--color-graphite-light:#565b63;
+--color-accent:#B8933F;       /* Antique Gold, accent */
+--color-accent-dark:#94742F;
+--color-accent-light:#CDAA5C;
+--color-ink:#1C1C1C;          /* Rich Black, typography */
+--color-secondary-text:#6E7274;
+--color-surface-dark:#3B3F46; /* Graphite doubles as the alternate dark surface */
+--color-tint:#F5F4F1;         /* Warm White, background */
+--color-ground:#FFFFFF;
+--color-border:#E2E0DA;
+--color-border-dark:#4A4F57;
+--color-success:#265551;
+--color-danger:#8A3324;
+
+--surface-page:var(--color-tint);
+--surface-card:var(--color-ground);
+--surface-dark:var(--color-surface-dark);
+--surface-brand:var(--color-primary);
+--surface-sunken:#ECEAE3;
+
+--text-heading:var(--color-ink);
+--text-body:var(--color-ink);
+--text-muted:var(--color-secondary-text);
+--text-on-dark:#F5F4F1;
+--text-on-brand:#F5F4F1;
+--text-accent:var(--color-accent-dark);
+
+--link:var(--color-primary);
+--link-hover:var(--color-primary-dark);
+
+--border-default:var(--color-border);
+--border-dark:var(--color-border-dark);
+--border-accent:var(--color-accent);
+
+--action-primary-bg:var(--color-primary);
+--action-primary-bg-hover:var(--color-primary-dark);
+--action-primary-text:#F5F4F1;
+--action-secondary-border:var(--color-ink);
+--action-secondary-text:var(--color-ink);
+--action-subtle-bg:var(--color-tint);
+--action-subtle-text:var(--color-primary);
+}

@@ -1,0 +1,5 @@
+:root{
+--shadow-card:0 1px 2px rgba(28,28,28,0.06),0 2px 8px rgba(28,28,28,0.06);
+--shadow-raised:0 4px 16px rgba(28,28,28,0.10);
+--shadow-focus:0 0 0 3px rgba(184,147,63,0.35);
+}

@@ -1,0 +1,33 @@
+@import "../design-system/tokens.css";
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--surface-page);
+  color: var(--text-body);
+  font-family: var(--font-body);
+  font-size: var(--text-body-md);
+  line-height: var(--leading-body);
+}
+
+h1,
+h2,
+h3,
+h4 {
+  font-family: var(--font-display);
+  color: var(--text-heading);
+  margin: 0;
+}
+
+a {
+  color: var(--link);
+}
+
+button {
+  font-family: var(--font-body);
+}

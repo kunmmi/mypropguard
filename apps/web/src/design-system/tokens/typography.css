@@ -1,0 +1,29 @@
+:root{
+/* Primary face, Hanken Grotesk. Display, headings, body. */
+--font-display:'Hanken Grotesk','Inter',sans-serif;
+--font-body:'Hanken Grotesk','Inter',sans-serif;
+/* Secondary face, Space Grotesk. Subheadings, captions, labels, technical UI moments. */
+--font-accent:'Space Grotesk','Hanken Grotesk',sans-serif;
+
+--text-display:56px;
+--text-h1:36px;
+--text-h2:26px;
+--text-h3:20px;
+--text-body-lg:18px;
+--text-body-md:16px;
+--text-caption:13px;
+--text-label:12px;
+
+--weight-light:300;
+--weight-regular:400;
+--weight-medium:500;
+--weight-semibold:600;
+--weight-bold:700;
+--weight-extrabold:800;
+
+--leading-tight:1.15;
+--leading-heading:1.25;
+--leading-body:1.6;
+
+--tracking-label:0.04em;
+}
