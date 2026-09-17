@@ -8,7 +8,7 @@ import type {
 /**
  * The per-account serialization root. Any mutation that can change whether
  * new risk may be opened must acquire this row's lock (see
- * packages/persistence AccountRiskHeadRepository).
+ * packages/risk-ledger AccountRiskHeadRepository).
  */
 export interface AccountRiskHead {
   accountId: string;

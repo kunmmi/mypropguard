@@ -17,7 +17,7 @@ create table protected_accounts (
 
 -- The per-account serialization root. `SELECT ... FOR UPDATE` on this row
 -- is what makes concurrent order reservations for the same account safe
--- (see packages/persistence PgRiskLedgerStore).
+-- (see packages/risk-ledger PgRiskLedgerStore).
 create table account_risk_heads (
   account_id text primary key references protected_accounts (account_id),
   equity_start_of_day numeric(38, 18) not null,

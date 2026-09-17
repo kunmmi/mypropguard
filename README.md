@@ -27,7 +27,7 @@ on `/v1/orders/:id` for exactly where the line is drawn today.
 - `packages/risk-engine` — pure, deterministic risk decisions. No I/O.
 - `packages/hyperliquid` — static Hyperliquid Standard-mode capability manifest, a read-only Info API client, and the **real** signing stack: `signing.ts` (MsgPack + Keccak256 action hashing, phantom-agent EIP-712 typed data — ported from Hyperliquid's own TS SDK), `orderAction.ts` (exact schema field order), `assetIndex.ts` (coin → asset index, public read), `hyperliquidActionHasher.ts` (real `ActionHasher`), `privyClient.ts` (real Privy REST wallet client), and `privySignerGateway.ts` — a real `SignerGateway` that independently recomputes the Hyperliquid hash, refuses anything that doesn't match, and signs via a real Privy-managed key. See "Signer vendor" below.
 - `packages/execution` — the venue-agnostic orchestrator: canonical action → nonce lease → exact-hash authorization → signer, plus the offline scaffold pair `PlaceholderActionHasher`/`FakeSignerGateway`/`InMemoryExecutionSequencer` (fake key — never real). Pass it `HyperliquidActionHasher`/`PrivySignerGateway` instead for the real path.
-- `packages/persistence` — Postgres-backed and in-memory `RiskLedgerStore` implementations, plus the `reserveOrder`/`getProtectionStatus`/`activateProtection`/`reconcileAccountFromVenue` orchestrators.
+- `packages/risk-ledger` — Postgres-backed and in-memory `RiskLedgerStore` implementations, plus the `reserveOrder`/`getProtectionStatus`/`activateProtection`/`reconcileAccountFromVenue` orchestrators.
 - `packages/test-fixtures` — deterministic fixtures and the in-memory store used across test suites.
 - `apps/api` — Fastify HTTP server for the `/v1` contracts, plus the experimental `/v1/execution/dry-run` scaffold endpoint. CORS is open (`origin: true`) since this is a local dev tool, not a public service.
 - `apps/web` — a Next.js dashboard for this backend: load or provision an account, see real protection status, reconcile against Hyperliquid, and check an order against the real risk engine. Styled with the Ighodalo Labs design system (tokens/components copied into `src/design-system/`) — MyPropGuard has no finished brand of its own yet, so this uses the parent company's real, ready system rather than inventing one. Copy is scoped honestly to what this backend actually does (no MT5/Telegram/billing claims from the separate, more mature MyPropGuard MT5 product).
@@ -58,7 +58,7 @@ DATABASE_URL=<connection string> pnpm dev:api
 
 Without a database, `pnpm test` still fully exercises the API and
 reservation-concurrency logic via the in-memory `RiskLedgerStore` — see
-`packages/persistence/test/*.test.ts` (the `*.postgres.test.ts` files there
+`packages/risk-ledger/test/*.test.ts` (the `*.postgres.test.ts` files there
 are skipped automatically when `DATABASE_URL` isn't set) and
 `apps/api/test/*.test.ts`.
 

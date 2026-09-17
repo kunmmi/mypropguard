@@ -31,7 +31,7 @@ export interface AuthorizeAndSignInput {
 /**
  * Reservation -> nonce lease -> canonical action -> exact-hash authorization
  * -> signer. Requires an ALLOW/RESIZE decision and its reservation (from
- * reserveOrder in packages/persistence) — this function does not itself
+ * reserveOrder in packages/risk-ledger) — this function does not itself
  * evaluate risk.
  *
  * The `hasher` determines whether the resulting authorization is real

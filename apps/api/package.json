@@ -15,7 +15,7 @@
     "@mypropguard/domain": "workspace:*",
     "@mypropguard/execution": "workspace:*",
     "@mypropguard/hyperliquid": "workspace:*",
-    "@mypropguard/persistence": "workspace:*",
+    "@mypropguard/risk-ledger": "workspace:*",
     "decimal.js": "^10.4.3",
     "fastify": "^5.2.0",
     "zod": "^3.24.1"

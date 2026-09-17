@@ -53,7 +53,7 @@ function decision(
 /**
  * Pure, deterministic risk decision. No network/database I/O: callers are
  * responsible for loading account state and rules, and for atomically
- * reserving budget once ALLOW/RESIZE is returned (see packages/persistence).
+ * reserving budget once ALLOW/RESIZE is returned (see packages/risk-ledger).
  */
 export function evaluate(input: ProjectedRiskInput): DecisionArtifact {
   const { accountRiskHead, rules, proposedOrder, currentPositionSize } = input;

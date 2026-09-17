@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { ZodError, z } from "zod";
-import { reconcileAccountFromVenue } from "@mypropguard/persistence";
+import { reconcileAccountFromVenue } from "@mypropguard/risk-ledger";
 import type { AppDeps } from "../app.js";
 
 const reconcileRequestSchema = z.object({ venueAddress: z.string().min(1) });

@@ -7,7 +7,7 @@ import {
   type DeactivateProtectionResponse,
   type GetProtectionResponse,
 } from "@mypropguard/contracts";
-import { activateProtection, deactivateProtection, getProtectionStatus } from "@mypropguard/persistence";
+import { activateProtection, deactivateProtection, getProtectionStatus } from "@mypropguard/risk-ledger";
 import type { AppDeps } from "../app.js";
 
 export function registerProtectionRoutes(app: FastifyInstance, deps: AppDeps): void {

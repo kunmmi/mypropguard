@@ -1,5 +1,5 @@
 import type { ActionHasher, SignerGateway } from "@mypropguard/domain";
-import { createPool, PgRiskLedgerStore } from "@mypropguard/persistence";
+import { createPool, PgRiskLedgerStore } from "@mypropguard/risk-ledger";
 import { HyperliquidInfoClient, HyperliquidActionHasher, PrivyClient, PrivySignerGateway } from "@mypropguard/hyperliquid";
 import { FakeSignerGateway, InMemoryExecutionSequencer, PlaceholderActionHasher } from "@mypropguard/execution";
 import { buildApp } from "./app.js";

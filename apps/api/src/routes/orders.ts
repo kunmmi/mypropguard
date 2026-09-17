@@ -8,7 +8,7 @@ import {
   type CreateOrderResponse,
 } from "@mypropguard/contracts";
 import { DecisionOutcome, type ProposedOrder } from "@mypropguard/domain";
-import { reserveOrder } from "@mypropguard/persistence";
+import { reserveOrder } from "@mypropguard/risk-ledger";
 import type { AppDeps } from "../app.js";
 
 function outcomeToStatus(outcome: string): CreateOrderResponse["status"] {

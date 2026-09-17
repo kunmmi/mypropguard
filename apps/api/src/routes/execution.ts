@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { ZodError, z } from "zod";
 import { Decimal } from "decimal.js";
 import { DecisionOutcome, OrderSide, type ProposedOrder } from "@mypropguard/domain";
-import { reserveOrder } from "@mypropguard/persistence";
+import { reserveOrder } from "@mypropguard/risk-ledger";
 import { authorizeAndSignOrder, BlockedDecisionError } from "@mypropguard/execution";
 import type { AppDeps } from "../app.js";
 
