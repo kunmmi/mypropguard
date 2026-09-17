@@ -1,0 +1,124 @@
+import { describe, expect, it } from "vitest";
+import { verifyTypedData } from "viem";
+import { OrderSide } from "@mypropguard/domain";
+import { buildProposedOrder } from "@mypropguard/test-fixtures";
+import { fetchAssetIndex } from "../src/assetIndex.js";
+import { buildOrderAction } from "../src/orderAction.js";
+import { buildAgentTypedData, createL1ActionHash } from "../src/signing.js";
+import { PrivyClient } from "../src/privyClient.js";
+import { PrivySignerGateway } from "../src/privySignerGateway.js";
+
+const PRIVY_APP_ID = process.env.PRIVY_APP_ID;
+const PRIVY_APP_SECRET = process.env.PRIVY_APP_SECRET;
+const hasPrivyCreds = Boolean(PRIVY_APP_ID && PRIVY_APP_SECRET);
+
+/**
+ * Real integration test against the live Privy API. Creates a fresh
+ * (unfunded) Privy wallet each run — cheap, safe, no side effects beyond
+ * that wallet existing in your Privy dashboard. Cannot place a Hyperliquid
+ * order or move funds: no venue submission happens anywhere here.
+ *
+ * NOTE: this deliberately does NOT go through packages/execution's generic
+ * `authorizeAndSignOrder` — that orchestrator still computes a PLACEHOLDER
+ * SHA-256 hash (packages/execution/src/connectionId.ts), not Hyperliquid's
+ * real one. Running it against PrivySignerGateway correctly fails, because
+ * the gateway independently recomputes the real hash and refuses anything
+ * that doesn't match. That mismatch is a known, real gap — the generic
+ * scaffold and this real signer aren't wired together yet — not a bug in
+ * either piece. This test instead authorizes with the REAL hash directly,
+ * to prove PrivySignerGateway itself is correct.
+ */
+describe.skipIf(!hasPrivyCreds)("PrivySignerGateway against the real Privy API", () => {
+  it("signs when handed a correctly-computed real authorization, and the signature recovers to the wallet address", async () => {
+    const privyClient = new PrivyClient({ appId: PRIVY_APP_ID!, appSecret: PRIVY_APP_SECRET! });
+    const wallet = await privyClient.createEthereumWallet();
+
+    const gateway = new PrivySignerGateway({
+      privyClient,
+      walletId: wallet.id,
+      walletAddress: wallet.address as `0x${string}`,
+      isTestnet: true,
+    });
+
+    const proposedOrder = buildProposedOrder({ coin: "BTC", side: OrderSide.BUY });
+    const nonce = Date.now();
+    const assetIndex = await fetchAssetIndex(proposedOrder.coin);
+    const hyperliquidAction = buildOrderAction({
+      assetIndex,
+      isBuy: true,
+      price: proposedOrder.price.toString(),
+      size: proposedOrder.size.toString(),
+      reduceOnly: false,
+      tif: "Gtc",
+    });
+    const connectionId = createL1ActionHash({ action: hyperliquidAction, nonce });
+
+    const signed = await gateway.signExact(
+      {
+        connectionId,
+        reservationId: "resv_it",
+        accountId: "acct_privy_it",
+        issuedAt: new Date(),
+        expiresAt: new Date(Date.now() + 30_000),
+      },
+      {
+        accountId: "acct_privy_it",
+        clientIntentId: proposedOrder.clientIntentId,
+        coin: proposedOrder.coin,
+        side: proposedOrder.side,
+        size: proposedOrder.size,
+        price: proposedOrder.price,
+        reduceOnly: false,
+        nonce,
+        expiresAt: new Date(Date.now() + 30_000),
+      },
+    );
+
+    expect(signed.signerAddress.toLowerCase()).toBe(wallet.address.toLowerCase());
+
+    const typedData = buildAgentTypedData(connectionId, true);
+    const valid = await verifyTypedData({
+      address: wallet.address as `0x${string}`,
+      domain: typedData.domain,
+      types: typedData.types,
+      primaryType: typedData.primaryType,
+      message: typedData.message,
+      signature: signed.signature,
+    });
+    expect(valid).toBe(true);
+  }, 30_000);
+
+  it("refuses to sign when the authorized connectionId doesn't match the real action hash", async () => {
+    const privyClient = new PrivyClient({ appId: PRIVY_APP_ID!, appSecret: PRIVY_APP_SECRET! });
+    const wallet = await privyClient.createEthereumWallet();
+    const gateway = new PrivySignerGateway({
+      privyClient,
+      walletId: wallet.id,
+      walletAddress: wallet.address as `0x${string}`,
+      isTestnet: true,
+    });
+
+    await expect(
+      gateway.signExact(
+        {
+          connectionId: "0xbad0000000000000000000000000000000000000000000000000000000bad",
+          reservationId: "resv_x",
+          accountId: "acct_x",
+          issuedAt: new Date(),
+          expiresAt: new Date(Date.now() + 30_000),
+        },
+        {
+          accountId: "acct_x",
+          clientIntentId: "intent_x",
+          coin: "BTC",
+          side: OrderSide.BUY,
+          size: buildProposedOrder().size,
+          price: buildProposedOrder().price,
+          reduceOnly: false,
+          nonce: 1,
+          expiresAt: new Date(Date.now() + 30_000),
+        },
+      ),
+    ).rejects.toThrow(/does not match/);
+  }, 30_000);
+});
