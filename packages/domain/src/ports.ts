@@ -1,6 +1,6 @@
 import { Decimal } from "decimal.js";
 import type { AccountRiskHead, OrderReservation, RuleVersion } from "./entities.js";
-import type { RuleType, StateConfidence } from "./enums.js";
+import type { OrderSide, RuleType, StateConfidence } from "./enums.js";
 
 export interface NewReservationInput {
   accountId: string;
@@ -99,4 +99,76 @@ export class AccountAlreadyExistsError extends Error {
     super(`Account already exists: ${accountId}`);
     this.name = "AccountAlreadyExistsError";
   }
+}
+
+/**
+ * ---------------------------------------------------------------------
+ * Phase 3 SCAFFOLD ONLY — architecture, not a real execution path.
+ *
+ * `computeConnectionId` (packages/execution) is a placeholder hash, NOT
+ * Hyperliquid's real MsgPack+Keccak canonicalization. `FakeSignerGateway`
+ * (packages/test-fixtures) signs with a made-up string, not a real key.
+ * Nothing here can ever reach a real venue or move funds. Real signing
+ * requires: byte-exact Hyperliquid wire-format compatibility, a real
+ * signer vendor (Privy/Turnkey/etc.) with actual credentials, and a
+ * funded+approved agent wallet — none of which exist yet, and none of
+ * which should be added without an explicit, separate decision.
+ * ---------------------------------------------------------------------
+ */
+
+/** A fully-specified, about-to-be-signed order action — one exact economic action. */
+export interface CanonicalOrderAction {
+  accountId: string;
+  clientIntentId: string;
+  coin: string;
+  side: OrderSide;
+  size: Decimal;
+  price: Decimal;
+  reduceOnly: boolean;
+  nonce: number;
+  expiresAt: Date;
+}
+
+/**
+ * Binds a risk decision's reservation to one exact canonical action. A
+ * signer must refuse to sign anything whose hash doesn't match this
+ * connectionId — that's the "exact-hash authorization" invariant from the
+ * blueprint, independent of which signer vendor eventually implements it.
+ */
+export interface ActionAuthorization {
+  connectionId: string;
+  reservationId: string;
+  accountId: string;
+  issuedAt: Date;
+  expiresAt: Date;
+}
+
+export interface SignedAction {
+  authorization: ActionAuthorization;
+  signature: string;
+  signerAddress: string;
+}
+
+/**
+ * Default-deny signing boundary: signs only the exact authorized action.
+ * FakeSignerGateway (test-fixtures) is the only implementation right now.
+ */
+export interface SignerGateway {
+  signExact(authorization: ActionAuthorization, action: CanonicalOrderAction): Promise<SignedAction>;
+}
+
+export interface NonceLease {
+  accountId: string;
+  nonce: number;
+  leasedAt: Date;
+}
+
+/**
+ * Leases strictly-increasing nonces per account. Must be safe under
+ * concurrency — two concurrent leases for the same account must never
+ * return the same nonce (mirrors the RiskLedgerStore mutual-exclusion
+ * requirement, but scoped to nonce issuance specifically).
+ */
+export interface ExecutionSequencer {
+  leaseNonce(accountId: string): Promise<NonceLease>;
 }

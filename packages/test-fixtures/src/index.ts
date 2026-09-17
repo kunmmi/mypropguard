@@ -1,9 +1,11 @@
 import { Decimal } from "decimal.js";
 export * from "./inMemoryRiskLedgerStore.js";
 import {
+  OrderReservationStatus,
   OrderSide,
   RuleType,
   type AccountRiskHead,
+  type OrderReservation,
   type ProposedOrder,
   type RiskDay,
   type RuleVersion,
@@ -54,6 +56,19 @@ export function buildProposedOrder(overrides: Partial<ProposedOrder> = {}): Prop
     size: new Decimal(1),
     price: new Decimal(50_000),
     reduceOnly: false,
+    ...overrides,
+  };
+}
+
+export function buildOrderReservation(overrides: Partial<OrderReservation> = {}): OrderReservation {
+  return {
+    id: "resv_test_1",
+    accountId: "acct_test_1",
+    clientIntentId: "intent_1",
+    reservedAmount: new Decimal(50_000),
+    status: OrderReservationStatus.HELD,
+    createdAt: new Date("2026-01-01T00:00:00Z"),
+    releasedAt: null,
     ...overrides,
   };
 }

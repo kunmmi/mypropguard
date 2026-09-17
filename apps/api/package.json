@@ -12,6 +12,7 @@
   "dependencies": {
     "@mypropguard/contracts": "workspace:*",
     "@mypropguard/domain": "workspace:*",
+    "@mypropguard/execution": "workspace:*",
     "@mypropguard/hyperliquid": "workspace:*",
     "@mypropguard/persistence": "workspace:*",
     "decimal.js": "^10.4.3",

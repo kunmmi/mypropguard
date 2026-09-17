@@ -9,6 +9,7 @@
     { "path": "../../packages/domain" },
     { "path": "../../packages/contracts" },
     { "path": "../../packages/persistence" },
-    { "path": "../../packages/hyperliquid" }
+    { "path": "../../packages/hyperliquid" },
+    { "path": "../../packages/execution" }
   ]
 }
