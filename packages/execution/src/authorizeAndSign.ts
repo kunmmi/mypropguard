@@ -1,6 +1,7 @@
 import {
   DecisionOutcome,
   type ActionAuthorization,
+  type ActionHasher,
   type DecisionArtifact,
   type ExecutionSequencer,
   type OrderReservation,
@@ -9,7 +10,6 @@ import {
   type SignerGateway,
 } from "@mypropguard/domain";
 import { canonicalizeOrderAction } from "./canonicalize.js";
-import { computeConnectionId } from "./connectionId.js";
 
 const DEFAULT_TTL_MS = 30_000;
 
@@ -29,16 +29,23 @@ export interface AuthorizeAndSignInput {
 }
 
 /**
- * Phase 3 scaffold: reservation -> nonce lease -> canonical action ->
- * exact-hash authorization -> signer. Requires an ALLOW/RESIZE decision and
- * its reservation (from reserveOrder in packages/persistence) — this
- * function does not itself evaluate risk.
+ * Reservation -> nonce lease -> canonical action -> exact-hash authorization
+ * -> signer. Requires an ALLOW/RESIZE decision and its reservation (from
+ * reserveOrder in packages/persistence) — this function does not itself
+ * evaluate risk.
  *
- * This is architecture proof, not a real execution path — see the
- * Phase-3-scaffold warning on the domain ports it uses.
+ * The `hasher` determines whether the resulting authorization is real
+ * (`HyperliquidActionHasher`, packages/hyperliquid — produces a hash
+ * Hyperliquid's real validator would check) or a fast offline placeholder
+ * (`PlaceholderActionHasher`, this package — for testing the orchestration
+ * shape without network calls). Pass the hasher that matches whichever
+ * signer you're driving: PrivySignerGateway independently recomputes the
+ * real hash and refuses anything else, so pairing it with the placeholder
+ * hasher fails closed rather than producing a bad signature.
  */
 export async function authorizeAndSignOrder(
   sequencer: ExecutionSequencer,
+  hasher: ActionHasher,
   signer: SignerGateway,
   input: AuthorizeAndSignInput,
 ): Promise<SignedAction> {
@@ -61,7 +68,7 @@ export async function authorizeAndSignOrder(
     ttlMs: input.ttlMs ?? DEFAULT_TTL_MS,
   });
 
-  const connectionId = computeConnectionId(action);
+  const connectionId = await hasher.computeConnectionId(action);
   const authorization: ActionAuthorization = {
     connectionId,
     reservationId: input.reservation.id,

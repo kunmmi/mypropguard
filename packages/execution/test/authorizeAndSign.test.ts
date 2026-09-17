@@ -4,15 +4,17 @@ import { DecisionOutcome, ReasonCode, RuleType } from "@mypropguard/domain";
 import { buildOrderReservation, buildProposedOrder } from "@mypropguard/test-fixtures";
 import { authorizeAndSignOrder, BlockedDecisionError } from "../src/authorizeAndSign.js";
 import { FakeSignerGateway, InMemoryExecutionSequencer } from "../src/fake.js";
+import { PlaceholderActionHasher } from "../src/connectionId.js";
 
 describe("authorizeAndSignOrder", () => {
   it("signs the exact canonical action for an ALLOW decision", async () => {
     const sequencer = new InMemoryExecutionSequencer();
-    const signer = new FakeSignerGateway();
+    const hasher = new PlaceholderActionHasher();
+    const signer = new FakeSignerGateway(hasher);
     const reservation = buildOrderReservation();
     const proposedOrder = buildProposedOrder();
 
-    const signed = await authorizeAndSignOrder(sequencer, signer, {
+    const signed = await authorizeAndSignOrder(sequencer, hasher, signer, {
       accountId: "acct_test_1",
       proposedOrder,
       decision: {
@@ -33,11 +35,12 @@ describe("authorizeAndSignOrder", () => {
 
   it("uses the RESIZED approved size, not the originally requested size, when authorizing", async () => {
     const sequencer = new InMemoryExecutionSequencer();
-    const signer = new FakeSignerGateway();
+    const hasher = new PlaceholderActionHasher();
+    const signer = new FakeSignerGateway(hasher);
     const reservation = buildOrderReservation();
     const proposedOrder = buildProposedOrder({ size: new Decimal(5) });
 
-    const signed = await authorizeAndSignOrder(sequencer, signer, {
+    const signed = await authorizeAndSignOrder(sequencer, hasher, signer, {
       accountId: "acct_test_1",
       proposedOrder,
       decision: {
@@ -59,10 +62,11 @@ describe("authorizeAndSignOrder", () => {
 
   it("refuses to authorize/sign a BLOCK decision", async () => {
     const sequencer = new InMemoryExecutionSequencer();
-    const signer = new FakeSignerGateway();
+    const hasher = new PlaceholderActionHasher();
+    const signer = new FakeSignerGateway(hasher);
 
     await expect(
-      authorizeAndSignOrder(sequencer, signer, {
+      authorizeAndSignOrder(sequencer, hasher, signer, {
         accountId: "acct_test_1",
         proposedOrder: buildProposedOrder(),
         decision: {
@@ -80,7 +84,8 @@ describe("authorizeAndSignOrder", () => {
 
   it("never issues the same nonce twice for concurrent authorizations on one account", async () => {
     const sequencer = new InMemoryExecutionSequencer();
-    const signer = new FakeSignerGateway();
+    const hasher = new PlaceholderActionHasher();
+    const signer = new FakeSignerGateway(hasher);
     const decision = {
       outcome: DecisionOutcome.ALLOW as const,
       approvedSize: null,
@@ -91,13 +96,13 @@ describe("authorizeAndSignOrder", () => {
     };
 
     const [a, b] = await Promise.all([
-      authorizeAndSignOrder(sequencer, signer, {
+      authorizeAndSignOrder(sequencer, hasher, signer, {
         accountId: "acct_test_1",
         proposedOrder: buildProposedOrder({ clientIntentId: "intent_a" }),
         decision,
         reservation: buildOrderReservation({ id: "resv_a" }),
       }),
-      authorizeAndSignOrder(sequencer, signer, {
+      authorizeAndSignOrder(sequencer, hasher, signer, {
         accountId: "acct_test_1",
         proposedOrder: buildProposedOrder({ clientIntentId: "intent_b" }),
         decision,
@@ -109,7 +114,8 @@ describe("authorizeAndSignOrder", () => {
   });
 
   it("the signer independently refuses a mismatched connectionId (default-deny)", async () => {
-    const signer = new FakeSignerGateway();
+    const hasher = new PlaceholderActionHasher();
+    const signer = new FakeSignerGateway(hasher);
     const proposedOrder = buildProposedOrder();
 
     await expect(

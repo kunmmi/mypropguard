@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { Decimal } from "decimal.js";
 import { RuleType } from "@mypropguard/domain";
-import { FakeSignerGateway, InMemoryExecutionSequencer } from "@mypropguard/execution";
+import { FakeSignerGateway, InMemoryExecutionSequencer, PlaceholderActionHasher } from "@mypropguard/execution";
 import { InMemoryRiskLedgerStore, buildAccountRiskHead, buildRuleVersion } from "@mypropguard/test-fixtures";
 import { buildApp } from "../src/app.js";
 
@@ -11,7 +11,8 @@ describe("POST /v1/execution/dry-run", () => {
     store.seedAccountRiskHead(buildAccountRiskHead({ accountId: "acct_exec_1" }));
     store.seedRules("acct_exec_1", [buildRuleVersion(RuleType.MAX_POSITION_SIZE, 100_000)]);
 
-    const app = buildApp({ store, executionSequencer: new InMemoryExecutionSequencer(), signer: new FakeSignerGateway() });
+    const hasher = new PlaceholderActionHasher();
+    const app = buildApp({ store, executionSequencer: new InMemoryExecutionSequencer(), hasher, signer: new FakeSignerGateway(hasher) });
 
     const response = await app.inject({
       method: "POST",
@@ -38,7 +39,8 @@ describe("POST /v1/execution/dry-run", () => {
     store.seedAccountRiskHead(buildAccountRiskHead({ accountId: "acct_exec_2", openNotional: new Decimal(100_000) }));
     store.seedRules("acct_exec_2", [buildRuleVersion(RuleType.MAX_POSITION_SIZE, 100_000)]);
 
-    const app = buildApp({ store, executionSequencer: new InMemoryExecutionSequencer(), signer: new FakeSignerGateway() });
+    const hasher = new PlaceholderActionHasher();
+    const app = buildApp({ store, executionSequencer: new InMemoryExecutionSequencer(), hasher, signer: new FakeSignerGateway(hasher) });
 
     const response = await app.inject({
       method: "POST",

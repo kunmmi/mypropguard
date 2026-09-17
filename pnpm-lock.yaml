@@ -279,6 +279,9 @@ importers:
         specifier: ^10.4.3
         version: 10.6.0
     devDependencies:
+      '@mypropguard/execution':
+        specifier: workspace:*
+        version: link:../execution
       '@mypropguard/test-fixtures':
         specifier: workspace:*
         version: link:../test-fixtures

@@ -7,15 +7,15 @@ execution. See `MyPropGuard for DeFi - Discovery Notes.docx` (kept outside
 this repo) for the full architecture research this is built from.
 
 **Scope of this repo right now: Phase 0 + Phase 1 + Phase 2 (read-only) +
-Phase 3 (real Hyperliquid/Privy signing, plus a separate architecture
-scaffold with a fake signer — the two are not yet wired into one path)**,
-per that research's own ADR-009/build sequence. There is a real
-deterministic risk engine, real account/rule provisioning, a real
-(read-only) Hyperliquid state feed, a real `PrivySignerGateway` that
-produces genuinely valid Hyperliquid signatures via a real Privy-managed
-key, and — separately — a full canonicalize → nonce-lease →
-exact-hash-authorization → sign orchestration pipeline proven against a
-fake signer. Nothing in this repo can place a real order or move money: no
+Phase 3 (real Hyperliquid/Privy signing, now wired into the generic
+orchestrator)**, per that research's own ADR-009/build sequence. There is a
+real deterministic risk engine, real account/rule provisioning, a real
+(read-only) Hyperliquid state feed, and a canonicalize → nonce-lease →
+exact-hash-authorization → sign pipeline that runs against either a fast
+offline fake signer (`PlaceholderActionHasher` + `FakeSignerGateway`) or the
+real one (`HyperliquidActionHasher` + `PrivySignerGateway`) — same
+orchestrator either way, selected by which hasher/signer pair you inject.
+Nothing in this repo can place a real order or move money: no
 funded/approved agent wallet exists, and nothing submits to Hyperliquid's
 exchange endpoint. See "Signer vendor" below and `apps/api`'s 501 responses
 on `/v1/orders/:id` for exactly where the line is drawn today.
@@ -25,8 +25,8 @@ on `/v1/orders/:id` for exactly where the line is drawn today.
 - `packages/domain` — types, enums, reason codes, and the `RiskLedgerStore`/`LedgerContext`/`VenueStateReader`/`SignerGateway`/`ExecutionSequencer` ports.
 - `packages/contracts` — Zod schemas for the external `/v1` API and internal decision/authorization shapes.
 - `packages/risk-engine` — pure, deterministic risk decisions. No I/O.
-- `packages/hyperliquid` — static Hyperliquid Standard-mode capability manifest, a read-only Info API client, and the **real** signing stack: `signing.ts` (MsgPack + Keccak256 action hashing, phantom-agent EIP-712 typed data — ported from Hyperliquid's own TS SDK), `orderAction.ts` (exact schema field order), `assetIndex.ts` (coin → asset index, public read), `privyClient.ts` (real Privy REST wallet client), and `privySignerGateway.ts` — a real `SignerGateway` implementation that independently recomputes the Hyperliquid hash, refuses anything that doesn't match, and signs via a real Privy-managed key. See "Signer vendor" below.
-- `packages/execution` — Phase 3 scaffold: canonical action + placeholder connectionId hash + authorize/sign orchestration, plus `FakeSignerGateway`/`InMemoryExecutionSequencer` (fake key, in-memory nonce counter — never real).
+- `packages/hyperliquid` — static Hyperliquid Standard-mode capability manifest, a read-only Info API client, and the **real** signing stack: `signing.ts` (MsgPack + Keccak256 action hashing, phantom-agent EIP-712 typed data — ported from Hyperliquid's own TS SDK), `orderAction.ts` (exact schema field order), `assetIndex.ts` (coin → asset index, public read), `hyperliquidActionHasher.ts` (real `ActionHasher`), `privyClient.ts` (real Privy REST wallet client), and `privySignerGateway.ts` — a real `SignerGateway` that independently recomputes the Hyperliquid hash, refuses anything that doesn't match, and signs via a real Privy-managed key. See "Signer vendor" below.
+- `packages/execution` — the venue-agnostic orchestrator: canonical action → nonce lease → exact-hash authorization → signer, plus the offline scaffold pair `PlaceholderActionHasher`/`FakeSignerGateway`/`InMemoryExecutionSequencer` (fake key — never real). Pass it `HyperliquidActionHasher`/`PrivySignerGateway` instead for the real path.
 - `packages/persistence` — Postgres-backed and in-memory `RiskLedgerStore` implementations, plus the `reserveOrder`/`getProtectionStatus`/`activateProtection`/`reconcileAccountFromVenue` orchestrators.
 - `packages/test-fixtures` — deterministic fixtures and the in-memory store used across test suites.
 - `apps/api` — Fastify HTTP server for the `/v1` contracts, plus the experimental `/v1/execution/dry-run` scaffold endpoint.
@@ -64,7 +64,7 @@ be offline.
 - `POST /v1/orders` runs the real deterministic risk engine and atomic reservation logic against whatever account/rule state is in Postgres.
 - `POST /v1/accounts/:accountId/reconcile` fetches an account's live equity/exposure from Hyperliquid's public Info API (read-only, any address, no auth) and folds it into `account_risk_heads`, recording a `VERIFIED` state checkpoint.
 - `GET /v1/protection` only reports `botCanOpenNewTrades: true` once a **fresh** (< 5 minutes) `VERIFIED` checkpoint exists for that account — before the first reconcile, or once one goes stale, it correctly reports `walletNeedsAttention: true` instead. Per the blueprint: never show green protection when state continuity is unverified.
-- `POST /v1/execution/dry-run` (experimental Phase 3 scaffold) runs the real reservation flow and, if not BLOCKed, the real nonce-lease/exact-hash-authorization pipeline against a **fake** signer — proves the architecture end to end without any real key or venue call. Response fields are explicitly named `mock*` so nothing here is mistakable for a real signature.
+- `POST /v1/execution/dry-run` runs the real reservation flow and, if not BLOCKed, the real nonce-lease/exact-hash-authorization pipeline. Defaults to the offline fake signer; set `ENABLE_REAL_SIGNER=true` (plus Privy credentials and an agent wallet — see below) to switch it to real Hyperliquid hashing + real Privy signing. Response fields are named `mock*` in the fake case; still no venue submission either way.
 - `POST /v1/orders/:id/cancel` and `GET /v1/orders/:id` return `501` — they require live venue execution, which needs a real signer and venue submission.
 
 ## Signer vendor: Privy (real)
@@ -88,15 +88,17 @@ order action's real connectionId, and confirmed with `viem`'s
 `verifyTypedData` that the signature genuinely recovers to the wallet's
 address. A second test confirms it correctly refuses a mismatched hash.
 
-**A real gap this surfaced, not yet closed**: `packages/execution`'s
-generic `authorizeAndSignOrder` orchestrator (the one `/v1/execution/dry-run`
-uses) still computes a placeholder SHA-256 hash, not Hyperliquid's real one
-— so routing it at `PrivySignerGateway` today correctly fails, because the
-gateway refuses the mismatched authorization. The orchestrator and the real
-signer aren't wired into one path yet; that's the next piece, not a bug in
-either one.
+**The gap between the generic orchestrator and this real signer is now
+closed.** `authorizeAndSignOrder` (`packages/execution`) takes an
+`ActionHasher` as an explicit parameter instead of hardcoding a hash
+algorithm — pass `PlaceholderActionHasher` for the fast offline scaffold, or
+`HyperliquidActionHasher` to get a real Hyperliquid connectionId that
+`PrivySignerGateway` will actually accept. A third integration test
+(`"works through the generic authorizeAndSignOrder orchestrator..."`) proves
+the full real path — reservation → nonce lease → real hash → real Privy
+signature — end to end.
 
-Even once wired, nothing here could move funds or place a live order: there
+Nothing here could move funds or place a live order regardless: there
 is no funded or approved Hyperliquid agent wallet, and Hyperliquid itself
 never receives a signed action from this codebase. Getting from "valid
 signature" to "live testnet order" needs: approving this Privy wallet as a

@@ -20,6 +20,7 @@
     "decimal.js": "^10.4.3"
   },
   "devDependencies": {
+    "@mypropguard/execution": "workspace:*",
     "@mypropguard/test-fixtures": "workspace:*",
     "@types/node": "^22.10.2",
     "typescript": "^5.7.0",

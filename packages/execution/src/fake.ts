@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type {
   ActionAuthorization,
+  ActionHasher,
   CanonicalOrderAction,
   ExecutionSequencer,
   NonceLease,
@@ -46,12 +47,20 @@ const FAKE_SIGNER_ADDRESS = "0xFAKE00000000000000000000000000000000000";
  * deterministic pseudo-signature (hash of the authorized connectionId) so
  * tests can assert "the signer only ever signs the exact authorized
  * action," without any real cryptography or credentials involved.
+ *
+ * Takes an ActionHasher so it independently recomputes the SAME hash the
+ * orchestrator used to build the authorization (PlaceholderActionHasher for
+ * fast offline tests, or HyperliquidActionHasher if you want to prove the
+ * pipeline against the real hash without a real key) — mirroring the real
+ * default-deny signer boundary the blueprint requires.
  */
 export class FakeSignerGateway implements SignerGateway {
   private readonly signedConnectionIds = new Set<string>();
 
+  constructor(private readonly hasher: ActionHasher) {}
+
   async signExact(authorization: ActionAuthorization, action: CanonicalOrderAction): Promise<SignedAction> {
-    const expectedConnectionId = deterministicFakeHash(action);
+    const expectedConnectionId = await this.hasher.computeConnectionId(action);
     if (authorization.connectionId !== expectedConnectionId) {
       throw new Error("Refused to sign: authorization connectionId does not match the canonical action.");
     }
@@ -71,22 +80,4 @@ export class FakeSignerGateway implements SignerGateway {
   hasSigned(connectionId: string): boolean {
     return this.signedConnectionIds.has(connectionId);
   }
-}
-
-/** Duplicated on purpose: the fake signer independently recomputes the hash
- * rather than trusting the caller's connectionId, mirroring the real
- * default-deny signer boundary the blueprint requires. */
-function deterministicFakeHash(action: CanonicalOrderAction): string {
-  const canonicalJson = JSON.stringify({
-    accountId: action.accountId,
-    clientIntentId: action.clientIntentId,
-    coin: action.coin,
-    side: action.side,
-    size: action.size.toString(),
-    price: action.price.toString(),
-    reduceOnly: action.reduceOnly,
-    nonce: action.nonce,
-    expiresAt: action.expiresAt.toISOString(),
-  });
-  return createHash("sha256").update(canonicalJson).digest("hex");
 }

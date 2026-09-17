@@ -151,10 +151,24 @@ export interface SignedAction {
 
 /**
  * Default-deny signing boundary: signs only the exact authorized action.
- * FakeSignerGateway (test-fixtures) is the only implementation right now.
+ * FakeSignerGateway (packages/execution) is venue-agnostic; PrivySignerGateway
+ * (packages/hyperliquid) is the real Hyperliquid+Privy implementation.
  */
 export interface SignerGateway {
   signExact(authorization: ActionAuthorization, action: CanonicalOrderAction): Promise<SignedAction>;
+}
+
+/**
+ * Computes the connectionId a signer will be asked to authorize for a given
+ * canonical action. Kept separate from the signer itself so the same
+ * orchestrator (authorizeAndSignOrder) can run against a fast placeholder
+ * hasher in tests or the real Hyperliquid MsgPack+Keccak256 hasher in
+ * production — the signer independently recomputes the hash either way and
+ * refuses anything that doesn't match, so using the wrong hasher for a given
+ * signer simply fails closed rather than silently producing a bad signature.
+ */
+export interface ActionHasher {
+  computeConnectionId(action: CanonicalOrderAction): Promise<string>;
 }
 
 export interface NonceLease {

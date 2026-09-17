@@ -28,10 +28,10 @@ const dryRunRequestSchema = z.object({
  */
 export function registerExecutionRoutes(app: FastifyInstance, deps: AppDeps): void {
   app.post("/v1/execution/dry-run", async (request, reply) => {
-    if (!deps.executionSequencer || !deps.signer) {
+    if (!deps.executionSequencer || !deps.signer || !deps.hasher) {
       return reply.status(501).send({
         error: "NOT_IMPLEMENTED",
-        message: "No execution sequencer/signer configured for this server (Phase 3 scaffold not enabled).",
+        message: "No execution sequencer/hasher/signer configured for this server (Phase 3 scaffold not enabled).",
       });
     }
 
@@ -69,7 +69,7 @@ export function registerExecutionRoutes(app: FastifyInstance, deps: AppDeps): vo
     }
 
     try {
-      const signed = await authorizeAndSignOrder(deps.executionSequencer, deps.signer, {
+      const signed = await authorizeAndSignOrder(deps.executionSequencer, deps.hasher, deps.signer, {
         accountId: body.accountId,
         proposedOrder,
         decision,

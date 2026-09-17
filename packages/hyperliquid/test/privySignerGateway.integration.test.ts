@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { verifyTypedData } from "viem";
-import { OrderSide } from "@mypropguard/domain";
-import { buildProposedOrder } from "@mypropguard/test-fixtures";
+import { DecisionOutcome, OrderSide, ReasonCode } from "@mypropguard/domain";
+import { buildOrderReservation, buildProposedOrder } from "@mypropguard/test-fixtures";
+import { InMemoryExecutionSequencer, authorizeAndSignOrder } from "@mypropguard/execution";
 import { fetchAssetIndex } from "../src/assetIndex.js";
 import { buildOrderAction } from "../src/orderAction.js";
 import { buildAgentTypedData, createL1ActionHash } from "../src/signing.js";
+import { HyperliquidActionHasher } from "../src/hyperliquidActionHasher.js";
 import { PrivyClient } from "../src/privyClient.js";
 import { PrivySignerGateway } from "../src/privySignerGateway.js";
 
@@ -17,16 +19,6 @@ const hasPrivyCreds = Boolean(PRIVY_APP_ID && PRIVY_APP_SECRET);
  * (unfunded) Privy wallet each run — cheap, safe, no side effects beyond
  * that wallet existing in your Privy dashboard. Cannot place a Hyperliquid
  * order or move funds: no venue submission happens anywhere here.
- *
- * NOTE: this deliberately does NOT go through packages/execution's generic
- * `authorizeAndSignOrder` — that orchestrator still computes a PLACEHOLDER
- * SHA-256 hash (packages/execution/src/connectionId.ts), not Hyperliquid's
- * real one. Running it against PrivySignerGateway correctly fails, because
- * the gateway independently recomputes the real hash and refuses anything
- * that doesn't match. That mismatch is a known, real gap — the generic
- * scaffold and this real signer aren't wired together yet — not a bug in
- * either piece. This test instead authorizes with the REAL hash directly,
- * to prove PrivySignerGateway itself is correct.
  */
 describe.skipIf(!hasPrivyCreds)("PrivySignerGateway against the real Privy API", () => {
   it("signs when handed a correctly-computed real authorization, and the signature recovers to the wallet address", async () => {
@@ -120,5 +112,47 @@ describe.skipIf(!hasPrivyCreds)("PrivySignerGateway against the real Privy API",
         },
       ),
     ).rejects.toThrow(/does not match/);
+  }, 30_000);
+
+  it("works through the generic authorizeAndSignOrder orchestrator when paired with HyperliquidActionHasher (the gap is closed)", async () => {
+    const privyClient = new PrivyClient({ appId: PRIVY_APP_ID!, appSecret: PRIVY_APP_SECRET! });
+    const wallet = await privyClient.createEthereumWallet();
+
+    const gateway = new PrivySignerGateway({
+      privyClient,
+      walletId: wallet.id,
+      walletAddress: wallet.address as `0x${string}`,
+      isTestnet: true,
+    });
+    const hasher = new HyperliquidActionHasher();
+    const sequencer = new InMemoryExecutionSequencer();
+    const proposedOrder = buildProposedOrder({ coin: "BTC", side: OrderSide.BUY });
+
+    const signed = await authorizeAndSignOrder(sequencer, hasher, gateway, {
+      accountId: "acct_privy_orchestrated",
+      proposedOrder,
+      decision: {
+        outcome: DecisionOutcome.ALLOW,
+        approvedSize: null,
+        reasonCode: ReasonCode.WITHIN_LIMITS,
+        message: "ok",
+        ruleType: null,
+        evaluatedAt: new Date(),
+      },
+      reservation: buildOrderReservation(),
+    });
+
+    expect(signed.signerAddress.toLowerCase()).toBe(wallet.address.toLowerCase());
+
+    const typedData = buildAgentTypedData(signed.authorization.connectionId as `0x${string}`, true);
+    const valid = await verifyTypedData({
+      address: wallet.address as `0x${string}`,
+      domain: typedData.domain,
+      types: typedData.types,
+      primaryType: typedData.primaryType,
+      message: typedData.message,
+      signature: signed.signature,
+    });
+    expect(valid).toBe(true);
   }, 30_000);
 });

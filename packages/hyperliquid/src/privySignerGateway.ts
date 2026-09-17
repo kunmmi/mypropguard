@@ -1,8 +1,8 @@
 import type { ActionAuthorization, CanonicalOrderAction, SignedAction, SignerGateway } from "@mypropguard/domain";
-import { OrderSide } from "@mypropguard/domain";
-import { fetchAssetIndex, type FetchAssetIndexOptions } from "./assetIndex.js";
-import { buildOrderAction, type TimeInForce } from "./orderAction.js";
-import { buildAgentTypedData, createL1ActionHash } from "./signing.js";
+import type { FetchAssetIndexOptions } from "./assetIndex.js";
+import type { TimeInForce } from "./orderAction.js";
+import { buildAgentTypedData } from "./signing.js";
+import { HyperliquidActionHasher } from "./hyperliquidActionHasher.js";
 import type { PrivyClient } from "./privyClient.js";
 
 export interface PrivySignerGatewayOptions {
@@ -16,12 +16,11 @@ export interface PrivySignerGatewayOptions {
 }
 
 /**
- * REAL Hyperliquid + Privy signer. Builds the actual Hyperliquid order
- * action (with a real asset index resolved from Hyperliquid's public meta
- * endpoint), computes the REAL connectionId (MsgPack + Keccak256, see
- * signing.ts), independently verifies it matches the authorization it was
- * handed (default-deny), and signs the phantom-agent EIP-712 message with a
- * Privy-managed key.
+ * REAL Hyperliquid + Privy signer. Independently recomputes the REAL
+ * connectionId via HyperliquidActionHasher (real asset index, real order
+ * action, real MsgPack + Keccak256 hash), refuses to sign anything that
+ * doesn't match the authorization it was handed (default-deny), and signs
+ * the phantom-agent EIP-712 message with a Privy-managed key.
  *
  * This CAN produce a signature Hyperliquid's real validator would accept —
  * but nothing in this codebase submits it anywhere. There is no funded or
@@ -30,21 +29,14 @@ export interface PrivySignerGatewayOptions {
  * signature -> recovers to the wallet address via viem) on 2026-09-17.
  */
 export class PrivySignerGateway implements SignerGateway {
-  constructor(private readonly options: PrivySignerGatewayOptions) {}
+  private readonly hasher: HyperliquidActionHasher;
+
+  constructor(private readonly options: PrivySignerGatewayOptions) {
+    this.hasher = new HyperliquidActionHasher({ tif: options.tif, assetIndexOptions: options.assetIndexOptions });
+  }
 
   async signExact(authorization: ActionAuthorization, action: CanonicalOrderAction): Promise<SignedAction> {
-    const assetIndex = await fetchAssetIndex(action.coin, this.options.assetIndexOptions);
-
-    const hyperliquidAction = buildOrderAction({
-      assetIndex,
-      isBuy: action.side === OrderSide.BUY,
-      price: action.price.toString(),
-      size: action.size.toString(),
-      reduceOnly: action.reduceOnly,
-      tif: this.options.tif ?? "Gtc",
-    });
-
-    const connectionId = createL1ActionHash({ action: hyperliquidAction, nonce: action.nonce });
+    const connectionId = await this.hasher.computeConnectionId(action);
 
     if (connectionId !== authorization.connectionId) {
       throw new Error(
@@ -55,7 +47,7 @@ export class PrivySignerGateway implements SignerGateway {
       throw new Error("Refused to sign: authorization has expired.");
     }
 
-    const typedData = buildAgentTypedData(connectionId, this.options.isTestnet);
+    const typedData = buildAgentTypedData(connectionId as `0x${string}`, this.options.isTestnet);
     const signature = await this.options.privyClient.signTypedData(this.options.walletId, typedData);
 
     return {
