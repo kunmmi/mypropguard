@@ -106,11 +106,24 @@ algorithm — pass `PlaceholderActionHasher` for the fast offline scaffold, or
 the full real path — reservation → nonce lease → real hash → real Privy
 signature — end to end.
 
-Nothing here could move funds or place a live order regardless: there
-is no funded or approved Hyperliquid agent wallet, and Hyperliquid itself
-never receives a signed action from this codebase. Getting from "valid
-signature" to "live testnet order" needs: approving this Privy wallet as a
-Hyperliquid agent (requires a funded Hyperliquid account signing an
-`approveAgent` action), and actually submitting to
-`https://api.hyperliquid-testnet.xyz/exchange` — deliberately not attempted
-here.
+Real order submission now exists (`packages/hyperliquid/src/exchangeClient.ts` +
+`submitOrder.ts`): given a `SignedAction`, it rebuilds the exact wire-format
+action that was hashed and POSTs it, with the signature split into the
+`{r, s, v}` shape Hyperliquid's `/exchange` endpoint expects, to either
+`HYPERLIQUID_MAINNET_EXCHANGE_URL` or `HYPERLIQUID_TESTNET_EXCHANGE_URL`.
+Covered by unit tests with an injected fetch (`exchangeClient.test.ts`) and
+an opt-in real integration test (`submitOrder.integration.test.ts`, gated
+behind `SUBMIT_TESTNET_ORDER=1`) that places a tiny, deep-out-of-the-money
+limit order on Hyperliquid's testnet.
+
+Nothing here can move funds or place a live order **on mainnet** regardless:
+there is no funded or approved mainnet Hyperliquid agent wallet. Testnet is
+different — it needs one manual, one-time step this codebase cannot do for
+you (it requires signing with *your own* wallet, not a key this codebase
+holds): approving this Privy agent wallet
+(`PRIVY_AGENT_WALLET_ADDRESS` in `.env`) on a funded Hyperliquid **testnet**
+account, via Hyperliquid's own testnet UI at
+`app.hyperliquid-testnet.xyz` → API tab → Approve Agent, after getting free
+test USDC from their faucet. Once that's done, the integration test above
+proves the whole pipeline — risk check → reservation → real signature → real
+venue submission — end to end, with zero real money involved.
