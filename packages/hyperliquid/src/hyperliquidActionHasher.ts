@@ -19,10 +19,16 @@ export interface HyperliquidActionHasherOptions {
 export class HyperliquidActionHasher implements ActionHasher {
   constructor(private readonly options: HyperliquidActionHasherOptions = {}) {}
 
-  async computeConnectionId(action: CanonicalOrderAction): Promise<string> {
+  /**
+   * The exact wire-format action object this hasher hashes — needed
+   * verbatim (same key order) to submit to the real /exchange endpoint
+   * alongside the signature, since the venue recomputes the same hash from
+   * the action it's given.
+   */
+  async buildAction(action: CanonicalOrderAction): Promise<Record<string, unknown>> {
     const assetIndex = await fetchAssetIndex(action.coin, this.options.assetIndexOptions);
 
-    const hyperliquidAction = buildOrderAction({
+    return buildOrderAction({
       assetIndex,
       isBuy: action.side === OrderSide.BUY,
       price: action.price.toString(),
@@ -30,7 +36,10 @@ export class HyperliquidActionHasher implements ActionHasher {
       reduceOnly: action.reduceOnly,
       tif: this.options.tif ?? "Gtc",
     });
+  }
 
+  async computeConnectionId(action: CanonicalOrderAction): Promise<string> {
+    const hyperliquidAction = await this.buildAction(action);
     return createL1ActionHash({ action: hyperliquidAction, nonce: action.nonce });
   }
 }

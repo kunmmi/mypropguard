@@ -6,3 +6,5 @@ export * from "./assetIndex.js";
 export * from "./hyperliquidActionHasher.js";
 export * from "./privyClient.js";
 export * from "./privySignerGateway.js";
+export * from "./exchangeClient.js";
+export * from "./submitOrder.js";
