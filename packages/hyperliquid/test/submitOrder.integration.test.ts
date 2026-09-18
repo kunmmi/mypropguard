@@ -7,6 +7,9 @@ import { PrivyClient } from "../src/privyClient.js";
 import { PrivySignerGateway } from "../src/privySignerGateway.js";
 import { HYPERLIQUID_TESTNET_EXCHANGE_URL } from "../src/exchangeClient.js";
 import { submitSignedOrder } from "../src/submitOrder.js";
+import { loadRootEnvIfPresent } from "./loadEnv.js";
+
+loadRootEnvIfPresent();
 
 const PRIVY_APP_ID = process.env.PRIVY_APP_ID;
 const PRIVY_APP_SECRET = process.env.PRIVY_APP_SECRET;

@@ -9,6 +9,9 @@ import { buildAgentTypedData, createL1ActionHash } from "../src/signing.js";
 import { HyperliquidActionHasher } from "../src/hyperliquidActionHasher.js";
 import { PrivyClient } from "../src/privyClient.js";
 import { PrivySignerGateway } from "../src/privySignerGateway.js";
+import { loadRootEnvIfPresent } from "./loadEnv.js";
+
+loadRootEnvIfPresent();
 
 const PRIVY_APP_ID = process.env.PRIVY_APP_ID;
 const PRIVY_APP_SECRET = process.env.PRIVY_APP_SECRET;
