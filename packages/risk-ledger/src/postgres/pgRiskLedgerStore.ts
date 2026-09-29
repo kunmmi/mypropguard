@@ -82,6 +82,13 @@ export class PgRiskLedgerStore implements RiskLedgerStore {
           );
           return rowToOrderReservation(result.rows[0]);
         },
+        releaseReservation: async (reservationId: string) => {
+          await client.query(
+            `UPDATE order_reservations SET status = $2, released_at = now()
+             WHERE id = $1 AND status = $3`,
+            [reservationId, OrderReservationStatus.RELEASED, OrderReservationStatus.HELD],
+          );
+        },
         isProtectionEnabled: async (id) => {
           const result = await client.query("SELECT protection_enabled FROM protected_accounts WHERE account_id = $1", [id]);
           return Boolean(result.rows[0]?.protection_enabled);

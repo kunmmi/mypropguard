@@ -1,4 +1,5 @@
 export * from "./reserveOrder.js";
+export * from "./releaseReservation.js";
 export * from "./reconcileAccount.js";
 export * from "./getProtectionStatus.js";
 export * from "./protectionLifecycle.js";

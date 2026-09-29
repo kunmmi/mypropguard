@@ -35,6 +35,14 @@ export interface LedgerContext {
   /** Sum of reservedAmount for all HELD reservations on this account. */
   getOutstandingReservationTotal(accountId: string): Promise<Decimal>;
   insertReservation(input: NewReservationInput): Promise<OrderReservation>;
+  /**
+   * Releases a HELD reservation (e.g. after signing fails downstream) so it
+   * stops counting against getOutstandingReservationTotal. No-op if the
+   * reservation is already CONSUMED or RELEASED - releasing is idempotent,
+   * never a hard error, since a caller retrying cleanup after a partial
+   * failure must be safe to call twice.
+   */
+  releaseReservation(reservationId: string): Promise<void>;
   isProtectionEnabled(accountId: string): Promise<boolean>;
   setProtectionEnabled(accountId: string, enabled: boolean): Promise<void>;
   recordStateCheckpoint(checkpoint: NewStateCheckpointInput): Promise<void>;

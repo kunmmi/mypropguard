@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { ZodError, z } from "zod";
 import { Decimal } from "decimal.js";
 import { DecisionOutcome, OrderSide, type ProposedOrder } from "@mypropguard/domain";
-import { reserveOrder } from "@mypropguard/risk-ledger";
+import { releaseReservation, reserveOrder } from "@mypropguard/risk-ledger";
 import { authorizeAndSignOrder, BlockedDecisionError } from "@mypropguard/execution";
 import type { AppDeps } from "../app.js";
 
@@ -87,6 +87,12 @@ export function registerExecutionRoutes(app: FastifyInstance, deps: AppDeps): vo
         },
       });
     } catch (error) {
+      // Signing failed after the reservation already committed real budget
+      // against this account - release it so a failed signature (signer
+      // refusal, network error, expired authorization) doesn't permanently
+      // count as a real trade against the daily-loss/exposure budget.
+      await releaseReservation(deps.store, body.accountId, reservation.id);
+
       if (error instanceof BlockedDecisionError) {
         return reply.status(409).send({ error: "BLOCKED" });
       }

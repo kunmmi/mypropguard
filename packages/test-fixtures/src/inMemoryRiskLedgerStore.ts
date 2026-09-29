@@ -125,6 +125,12 @@ export class InMemoryRiskLedgerStore implements RiskLedgerStore {
           this.reservations.push(reservation);
           return reservation;
         },
+        releaseReservation: async (reservationId: string) => {
+          const reservation = this.reservations.find((r) => r.id === reservationId && r.status === OrderReservationStatus.HELD);
+          if (!reservation) return;
+          reservation.status = OrderReservationStatus.RELEASED;
+          reservation.releasedAt = new Date();
+        },
         isProtectionEnabled: async (id) => this.protectionEnabled.get(id) ?? false,
         setProtectionEnabled: async (id, enabled) => {
           this.protectionEnabled.set(id, enabled);
