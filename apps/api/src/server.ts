@@ -1,5 +1,5 @@
 import type { ActionHasher, OrderCanceller, OrderLifecycleReader, OrderSubmitter, SignerGateway } from "@mypropguard/domain";
-import { createPool, PgRiskLedgerStore } from "@mypropguard/risk-ledger";
+import { createPool, PgExecutionSequencer, PgRiskLedgerStore } from "@mypropguard/risk-ledger";
 import {
   HyperliquidInfoClient,
   HyperliquidActionHasher,
@@ -7,7 +7,7 @@ import {
   PrivyClient,
   PrivySignerGateway,
 } from "@mypropguard/hyperliquid";
-import { FakeSignerGateway, InMemoryExecutionSequencer, PlaceholderActionHasher } from "@mypropguard/execution";
+import { FakeSignerGateway, PlaceholderActionHasher } from "@mypropguard/execution";
 import { buildApp } from "./app.js";
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -22,7 +22,11 @@ const store = new PgRiskLedgerStore(pool);
 // Read-only public Hyperliquid Info API client (Phase 2) — no credentials,
 // cannot place orders or move funds.
 const venueReader = new HyperliquidInfoClient();
-const executionSequencer = new InMemoryExecutionSequencer();
+// Durable: an in-memory counter loses its high-water mark on every restart,
+// which risks re-issuing a nonce Hyperliquid already saw for this account -
+// it rejects anything lower than the last one it received. Real Postgres
+// here regardless of ENABLE_REAL_SIGNER, since DATABASE_URL is required either way.
+const executionSequencer = new PgExecutionSequencer(pool);
 
 // Defaults to the offline scaffold (fake signer, placeholder hash). Set
 // ENABLE_REAL_SIGNER=true (plus Privy credentials and an agent wallet) to

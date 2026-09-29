@@ -6,4 +6,5 @@ export * from "./getProtectionStatus.js";
 export * from "./protectionLifecycle.js";
 export * from "./postgres/pool.js";
 export * from "./postgres/pgRiskLedgerStore.js";
+export * from "./postgres/pgExecutionSequencer.js";
 export * from "./postgres/mappers.js";

@@ -33,12 +33,12 @@ agent wallet exists, and venue submission needs a second explicit opt-in
 - `packages/contracts` — Zod schemas for the external `/v1` API and internal decision/authorization shapes.
 - `packages/risk-engine` — pure, deterministic risk decisions. No I/O.
 - `packages/hyperliquid` — static Hyperliquid Standard-mode capability manifest, a read-only Info API client, and the **real** signing stack: `signing.ts` (MsgPack + Keccak256 action hashing, phantom-agent EIP-712 typed data — ported from Hyperliquid's own TS SDK), `orderAction.ts`/`cancelAction.ts` (exact schema field order for order/cancel actions), `assetIndex.ts` (coin → asset index, public read), `hyperliquidActionHasher.ts` (real `ActionHasher`), `privyClient.ts` (real Privy REST wallet client), `privySignerGateway.ts` (real `SignerGateway`), `exchangeClient.ts`/`submitOrder.ts` (real order submission), and `orderLifecycle.ts` (`HyperliquidOrderLifecycle` — real submit/cancel/status against the live venue). See "Signer vendor" below.
-- `packages/execution` — the venue-agnostic orchestrator: canonical action → nonce lease → exact-hash authorization → signer, plus the offline scaffold pair `PlaceholderActionHasher`/`FakeSignerGateway`/`InMemoryExecutionSequencer` (fake key — never real). Pass it `HyperliquidActionHasher`/`PrivySignerGateway` instead for the real path.
-- `packages/risk-ledger` — Postgres-backed and in-memory `RiskLedgerStore` implementations, plus the `reserveOrder`/`getProtectionStatus`/`activateProtection`/`reconcileAccountFromVenue` orchestrators.
+- `packages/execution` — the venue-agnostic orchestrator: canonical action → nonce lease → exact-hash authorization → signer, plus the offline scaffold pair `PlaceholderActionHasher`/`FakeSignerGateway`/`InMemoryExecutionSequencer` (fake key, timestamp-based nonces — never real, but Hyperliquid-plausible). Pass it `HyperliquidActionHasher`/`PrivySignerGateway` instead for the real path.
+- `packages/risk-ledger` — Postgres-backed and in-memory `RiskLedgerStore` implementations, `PgExecutionSequencer` (durable nonce leasing), plus the `reserveOrder`/`getProtectionStatus`/`activateProtection`/`reconcileAccountFromVenue` orchestrators.
 - `packages/test-fixtures` — deterministic fixtures and the in-memory store used across test suites.
 - `apps/api` — Fastify HTTP server for the `/v1` contracts, plus the experimental `/v1/execution/dry-run` scaffold endpoint. CORS is open (`origin: true`) since this is a local dev tool, not a public service.
 - `apps/web` — a Next.js dashboard for this backend: load or provision an account, see real protection status, reconcile against Hyperliquid, and check an order against the real risk engine. Styled with the Ighodalo Labs design system (tokens/components copied into `src/design-system/`) — MyPropGuard has no finished brand of its own yet, so this uses the parent company's real, ready system rather than inventing one. Copy is scoped honestly to what this backend actually does (no MT5/Telegram/billing claims from the separate, more mature MyPropGuard MT5 product).
-- `supabase/migrations` — Phase 0/2 schema, plus `order_reservations.coin`/`venue_order_id` (added for real order lifecycle tracking).
+- `supabase/migrations` — Phase 0/2 schema, plus `order_reservations.coin`/`venue_order_id` (order lifecycle tracking) and `nonce_leases` (durable nonce leasing).
 
 ## Getting started
 
@@ -150,3 +150,26 @@ holds): approving this Privy agent wallet
 account, via Hyperliquid's own testnet UI at
 `app.hyperliquid-testnet.xyz` → API tab → Approve Agent, after getting free
 test USDC from their faucet.
+
+## Nonces: durable, and a third real bug the testnet proof caught
+
+`ExecutionSequencer.leaseNonce` originally handed out a plain 1/2/3 counter.
+Confirmed for real against testnet: Hyperliquid rejects that outright —
+`"Invalid nonce: nonce too low 1 < 1790522111031"` — because it requires the
+nonce to be a recent millisecond timestamp, strictly greater than the last
+one it saw for that account. Every real order submitted so far worked
+around this by building the canonical action by hand with `Date.now()`
+directly, bypassing the sequencer entirely; the actual `/v1/execution/dry-run`
+route (which does go through the sequencer) would have failed on this the
+moment `ENABLE_VENUE_SUBMISSION` was turned on.
+
+Fixed at the scheme level, not just the storage level:
+`InMemoryExecutionSequencer` now leases `max(Date.now(), lastNonce + 1)`
+instead of an incrementing counter — correct regardless of persistence.
+`PgExecutionSequencer` (`packages/risk-ledger/src/postgres/pgExecutionSequencer.ts`)
+makes it durable across server restarts, backed by a `nonce_leases` table,
+via a single atomic `INSERT ... ON CONFLICT DO UPDATE ... RETURNING`
+(Postgres serializes concurrent leases for the same account at the row
+level — no separate lock needed). `apps/api/src/server.ts` uses it
+unconditionally, since `DATABASE_URL` is already required there regardless
+of which signer is active.

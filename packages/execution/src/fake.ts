@@ -13,9 +13,17 @@ import type {
  * In-memory nonce sequencer for tests, mirroring InMemoryRiskLedgerStore's
  * mutex pattern: concurrent leases for the same account are serialized so
  * two concurrent callers can never receive the same nonce.
+ *
+ * Nonces are current-millisecond timestamps, not a 1/2/3 counter - Hyperliquid
+ * requires the nonce to be a recent timestamp and rejects anything lower
+ * than the last one it saw for that user. Confirmed for real against
+ * testnet: a sequential counter starting at 1 was rejected outright with
+ * "Invalid nonce: nonce too low 1 < 1790522111031". Falls back to
+ * previous+1 only when called faster than 1ms apart, so it never regresses
+ * below the venue's own high-water mark.
  */
 export class InMemoryExecutionSequencer implements ExecutionSequencer {
-  private readonly counters = new Map<string, number>();
+  private readonly lastNonce = new Map<string, number>();
   private readonly locks = new Map<string, Promise<unknown>>();
 
   async leaseNonce(accountId: string): Promise<NonceLease> {
@@ -31,8 +39,8 @@ export class InMemoryExecutionSequencer implements ExecutionSequencer {
 
     await previous;
     try {
-      const next = (this.counters.get(accountId) ?? 0) + 1;
-      this.counters.set(accountId, next);
+      const next = Math.max(Date.now(), (this.lastNonce.get(accountId) ?? 0) + 1);
+      this.lastNonce.set(accountId, next);
       return { accountId, nonce: next, leasedAt: new Date() };
     } finally {
       release();
