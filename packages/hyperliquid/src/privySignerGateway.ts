@@ -1,5 +1,6 @@
 import type { ActionAuthorization, CanonicalOrderAction, SignedAction, SignerGateway } from "@mypropguard/domain";
 import type { FetchAssetIndexOptions } from "./assetIndex.js";
+import { HYPERLIQUID_MAINNET_INFO_URL, HYPERLIQUID_TESTNET_INFO_URL } from "./infoClient.js";
 import type { TimeInForce } from "./orderAction.js";
 import { buildAgentTypedData } from "./signing.js";
 import { HyperliquidActionHasher } from "./hyperliquidActionHasher.js";
@@ -27,12 +28,24 @@ export interface PrivySignerGatewayOptions {
  * approved agent wallet, so even a correct signature here cannot move funds
  * or place a live order. Verified end-to-end (real hash -> real Privy
  * signature -> recovers to the wallet address via viem) on 2026-09-17.
+ *
+ * `isTestnet` also picks the matching Info API for asset index resolution
+ * unless `assetIndexOptions.baseUrl` is given explicitly. Mainnet and
+ * testnet do NOT share the same coin-to-index mapping — resolving "BTC" on
+ * mainnet's universe and submitting that index to testnet can silently
+ * place an order on an entirely different asset. Discovered for real:
+ * asking for BTC and getting a resting SOL order on testnet, traced to this
+ * exact mismatch.
  */
 export class PrivySignerGateway implements SignerGateway {
   private readonly hasher: HyperliquidActionHasher;
 
   constructor(private readonly options: PrivySignerGatewayOptions) {
-    this.hasher = new HyperliquidActionHasher({ tif: options.tif, assetIndexOptions: options.assetIndexOptions });
+    const defaultInfoUrl = options.isTestnet ? HYPERLIQUID_TESTNET_INFO_URL : HYPERLIQUID_MAINNET_INFO_URL;
+    this.hasher = new HyperliquidActionHasher({
+      tif: options.tif,
+      assetIndexOptions: { baseUrl: defaultInfoUrl, ...options.assetIndexOptions },
+    });
   }
 
   async signExact(authorization: ActionAuthorization, action: CanonicalOrderAction): Promise<SignedAction> {

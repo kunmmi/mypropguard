@@ -33,9 +33,18 @@ export interface SubmitActionInput {
   vaultAddress?: `0x${string}`;
 }
 
+interface OrderStatus {
+  error?: string;
+  resting?: unknown;
+  filled?: unknown;
+}
+
 interface RawExchangeResponse {
   status: "ok" | "err";
-  response: unknown;
+  response: {
+    type?: string;
+    data?: { statuses?: OrderStatus[] };
+  };
 }
 
 export interface HyperliquidExchangeClientOptions {
@@ -85,6 +94,20 @@ export class HyperliquidExchangeClient {
     if (raw.status === "err") {
       throw new Error(`Hyperliquid rejected the action: ${JSON.stringify(raw.response)}`);
     }
+
+    // A top-level "ok" only means the request was well-formed — Hyperliquid
+    // nests actual per-order rejections (invalid size, bad price, etc.)
+    // inside response.data.statuses. Without this check, a rejected order
+    // looks identical to a resting/filled one to any caller checking
+    // truthiness, which is exactly the bug that shipped here initially.
+    const statuses = raw.response.data?.statuses;
+    if (statuses) {
+      const errors = statuses.filter((status): status is Required<Pick<OrderStatus, "error">> => Boolean(status.error));
+      if (errors.length > 0) {
+        throw new Error(`Hyperliquid rejected the order: ${errors.map((e) => e.error).join("; ")}`);
+      }
+    }
+
     return raw.response;
   }
 }

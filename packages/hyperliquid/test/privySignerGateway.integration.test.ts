@@ -4,6 +4,7 @@ import { DecisionOutcome, OrderSide, ReasonCode } from "@mypropguard/domain";
 import { buildOrderReservation, buildProposedOrder } from "@mypropguard/test-fixtures";
 import { InMemoryExecutionSequencer, authorizeAndSignOrder } from "@mypropguard/execution";
 import { fetchAssetIndex } from "../src/assetIndex.js";
+import { HYPERLIQUID_TESTNET_INFO_URL } from "../src/infoClient.js";
 import { buildOrderAction } from "../src/orderAction.js";
 import { buildAgentTypedData, createL1ActionHash } from "../src/signing.js";
 import { HyperliquidActionHasher } from "../src/hyperliquidActionHasher.js";
@@ -37,7 +38,9 @@ describe.skipIf(!hasPrivyCreds)("PrivySignerGateway against the real Privy API",
 
     const proposedOrder = buildProposedOrder({ coin: "BTC", side: OrderSide.BUY });
     const nonce = Date.now();
-    const assetIndex = await fetchAssetIndex(proposedOrder.coin);
+    // gateway is isTestnet: true, which now (correctly) resolves asset
+    // indices against testnet too - must match here or connectionIds diverge.
+    const assetIndex = await fetchAssetIndex(proposedOrder.coin, { baseUrl: HYPERLIQUID_TESTNET_INFO_URL });
     const hyperliquidAction = buildOrderAction({
       assetIndex,
       isBuy: true,
@@ -127,7 +130,8 @@ describe.skipIf(!hasPrivyCreds)("PrivySignerGateway against the real Privy API",
       walletAddress: wallet.address as `0x${string}`,
       isTestnet: true,
     });
-    const hasher = new HyperliquidActionHasher();
+    // Must match gateway's isTestnet: true (see comment above).
+    const hasher = new HyperliquidActionHasher({ assetIndexOptions: { baseUrl: HYPERLIQUID_TESTNET_INFO_URL } });
     const sequencer = new InMemoryExecutionSequencer();
     const proposedOrder = buildProposedOrder({ coin: "BTC", side: OrderSide.BUY });
 

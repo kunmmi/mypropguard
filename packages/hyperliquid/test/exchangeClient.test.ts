@@ -31,9 +31,10 @@ describe("HyperliquidExchangeClient.submitAction (injected fetch, no real networ
     let capturedBody: unknown;
     const fetchImpl = (async (_url: unknown, init?: RequestInit) => {
       capturedBody = JSON.parse(init!.body as string);
-      return new Response(JSON.stringify({ status: "ok", response: { type: "order", data: { statuses: ["resting"] } } }), {
-        status: 200,
-      });
+      return new Response(
+        JSON.stringify({ status: "ok", response: { type: "order", data: { statuses: [{ resting: { oid: 1 } }] } } }),
+        { status: 200 },
+      );
     }) as typeof fetch;
 
     const client = new HyperliquidExchangeClient({ fetchImpl });
@@ -43,7 +44,7 @@ describe("HyperliquidExchangeClient.submitAction (injected fetch, no real networ
       signature,
     });
 
-    expect(result).toEqual({ type: "order", data: { statuses: ["resting"] } });
+    expect(result).toEqual({ type: "order", data: { statuses: [{ resting: { oid: 1 } }] } });
     expect(capturedBody).toMatchObject({
       action: { type: "order", orders: [], grouping: "na" },
       nonce: 123,
@@ -60,6 +61,19 @@ describe("HyperliquidExchangeClient.submitAction (injected fetch, no real networ
     await expect(
       client.submitAction({ action: { type: "order", orders: [], grouping: "na" }, nonce: 1, signature }),
     ).rejects.toThrow(/rejected the action/);
+  });
+
+  it("throws when the top-level status is ok but a per-order status carries an error (the real bug: Hyperliquid nests rejections here, not at the top level)", async () => {
+    const client = new HyperliquidExchangeClient({
+      fetchImpl: fakeFetch({
+        status: "ok",
+        response: { type: "order", data: { statuses: [{ error: "Order has invalid size." }] } },
+      }),
+    });
+
+    await expect(
+      client.submitAction({ action: { type: "order", orders: [], grouping: "na" }, nonce: 1, signature }),
+    ).rejects.toThrow(/Order has invalid size/);
   });
 
   it("throws on a non-OK HTTP response", async () => {
