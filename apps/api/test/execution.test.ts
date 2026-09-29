@@ -119,18 +119,29 @@ describe("POST /v1/execution/dry-run", () => {
     expect(reservations[0]!.releasedAt).not.toBeNull();
   });
 
-  it("submits to the venue and records the venue order id when an order submitter is configured", async () => {
+  it("NEVER submits to the venue, even when an order submitter is configured on the server", async () => {
+    // This is the regression test for the actual safety bug: dry-run used
+    // to submit whenever the server had ENABLE_VENUE_SUBMISSION on, making
+    // a "Check order" UI button silently place a real trade. It must never
+    // do that regardless of server config - submission lives only behind
+    // the separately-named /v1/execution/submit route.
     const store = new InMemoryRiskLedgerStore();
     store.seedAccountRiskHead(buildAccountRiskHead({ accountId: "acct_exec_4" }));
     store.seedRules("acct_exec_4", [buildRuleVersion(RuleType.MAX_POSITION_SIZE, 100_000)]);
 
+    let submitCalled = false;
     const hasher = new PlaceholderActionHasher();
     const app = buildApp({
       store,
       executionSequencer: new InMemoryExecutionSequencer(),
       hasher,
       signer: new FakeSignerGateway(hasher),
-      orderSubmitter: fakeOrderSubmitter("venue_oid_123"),
+      orderSubmitter: {
+        submit: async () => {
+          submitCalled = true;
+          return { venueOrderId: "should_never_happen" };
+        },
+      },
     });
 
     const response = await app.inject({
@@ -147,18 +158,96 @@ describe("POST /v1/execution/dry-run", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    const body = response.json();
-    expect(body.mock).toBe(false);
-    expect(body.venueOrderId).toBe("venue_oid_123");
+    expect(response.json().mock).toBe(true);
+    expect(submitCalled).toBe(false);
 
     const reservation = store.getReservations().find((r) => r.accountId === "acct_exec_4");
+    expect(reservation?.venueOrderId).toBeNull();
+  });
+
+  it("returns 501 when no fake signer is configured", async () => {
+    const store = new InMemoryRiskLedgerStore();
+    const app = buildApp({ store });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/execution/dry-run",
+      payload: { clientIntentId: "x", accountId: "acct_none", coin: "BTC", side: "BUY", size: "1", price: "1" },
+    });
+
+    expect(response.statusCode).toBe(501);
+  });
+});
+
+describe("POST /v1/execution/submit", () => {
+  it("submits to the venue and records the venue order id when an order submitter is configured", async () => {
+    const store = new InMemoryRiskLedgerStore();
+    store.seedAccountRiskHead(buildAccountRiskHead({ accountId: "acct_submit_1" }));
+    store.seedRules("acct_submit_1", [buildRuleVersion(RuleType.MAX_POSITION_SIZE, 100_000)]);
+
+    const hasher = new PlaceholderActionHasher();
+    const app = buildApp({
+      store,
+      executionSequencer: new InMemoryExecutionSequencer(),
+      hasher,
+      signer: new FakeSignerGateway(hasher),
+      orderSubmitter: fakeOrderSubmitter("venue_oid_123"),
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/execution/submit",
+      payload: {
+        clientIntentId: "submit_intent_1",
+        accountId: "acct_submit_1",
+        coin: "BTC",
+        side: "BUY",
+        size: "1",
+        price: "50000",
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.submitted).toBe(true);
+    expect(body.venueOrderId).toBe("venue_oid_123");
+
+    const reservation = store.getReservations().find((r) => r.accountId === "acct_submit_1");
     expect(reservation?.venueOrderId).toBe("venue_oid_123");
+  });
+
+  it("signs but does not report submitted when no order submitter is configured", async () => {
+    const store = new InMemoryRiskLedgerStore();
+    store.seedAccountRiskHead(buildAccountRiskHead({ accountId: "acct_submit_2" }));
+    store.seedRules("acct_submit_2", [buildRuleVersion(RuleType.MAX_POSITION_SIZE, 100_000)]);
+
+    const hasher = new PlaceholderActionHasher();
+    const app = buildApp({ store, executionSequencer: new InMemoryExecutionSequencer(), hasher, signer: new FakeSignerGateway(hasher) });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/execution/submit",
+      payload: {
+        clientIntentId: "submit_intent_2",
+        accountId: "acct_submit_2",
+        coin: "BTC",
+        side: "BUY",
+        size: "1",
+        price: "50000",
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.submitted).toBe(false);
+    expect(body.venueOrderId).toBeNull();
+    expect(body.signedAction).not.toBeNull();
   });
 
   it("releases the reservation when the venue rejects the submission", async () => {
     const store = new InMemoryRiskLedgerStore();
-    store.seedAccountRiskHead(buildAccountRiskHead({ accountId: "acct_exec_5" }));
-    store.seedRules("acct_exec_5", [buildRuleVersion(RuleType.MAX_POSITION_SIZE, 100_000)]);
+    store.seedAccountRiskHead(buildAccountRiskHead({ accountId: "acct_submit_3" }));
+    store.seedRules("acct_submit_3", [buildRuleVersion(RuleType.MAX_POSITION_SIZE, 100_000)]);
 
     const hasher = new PlaceholderActionHasher();
     const app = buildApp({
@@ -171,10 +260,10 @@ describe("POST /v1/execution/dry-run", () => {
 
     const response = await app.inject({
       method: "POST",
-      url: "/v1/execution/dry-run",
+      url: "/v1/execution/submit",
       payload: {
-        clientIntentId: "exec_intent_5",
-        accountId: "acct_exec_5",
+        clientIntentId: "submit_intent_3",
+        accountId: "acct_submit_3",
         coin: "BTC",
         side: "BUY",
         size: "1",
@@ -183,18 +272,18 @@ describe("POST /v1/execution/dry-run", () => {
     });
 
     expect(response.statusCode).toBe(500);
-    const reservation = store.getReservations().find((r) => r.accountId === "acct_exec_5");
+    const reservation = store.getReservations().find((r) => r.accountId === "acct_submit_3");
     expect(reservation?.status).toBe(OrderReservationStatus.RELEASED);
     expect(reservation?.venueOrderId).toBeNull();
   });
 
-  it("returns 501 when no fake signer is configured", async () => {
+  it("returns 501 when no signer is configured", async () => {
     const store = new InMemoryRiskLedgerStore();
     const app = buildApp({ store });
 
     const response = await app.inject({
       method: "POST",
-      url: "/v1/execution/dry-run",
+      url: "/v1/execution/submit",
       payload: { clientIntentId: "x", accountId: "acct_none", coin: "BTC", side: "BUY", size: "1", price: "1" },
     });
 

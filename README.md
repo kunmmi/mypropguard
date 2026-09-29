@@ -79,8 +79,9 @@ be offline.
 - `POST /v1/orders` runs the real deterministic risk engine and atomic reservation logic against whatever account/rule state is in Postgres.
 - `POST /v1/accounts/:accountId/reconcile` fetches an account's live equity/exposure from Hyperliquid's public Info API (read-only, any address, no auth) and folds it into `account_risk_heads`, recording a `VERIFIED` state checkpoint.
 - `GET /v1/protection` only reports `botCanOpenNewTrades: true` once a **fresh** (< 5 minutes) `VERIFIED` checkpoint exists for that account — before the first reconcile, or once one goes stale, it correctly reports `walletNeedsAttention: true` instead. Per the blueprint: never show green protection when state continuity is unverified.
-- `POST /v1/execution/dry-run` runs the real reservation flow and, if not BLOCKed, the real nonce-lease/exact-hash-authorization pipeline. Defaults to the offline fake signer; set `ENABLE_REAL_SIGNER=true` (plus Privy credentials and an agent wallet — see below) to switch it to real Hyperliquid hashing + real Privy signing. Response fields are named `mock*` in the fake case (`mock: false` once real submission is also on). Set `ENABLE_VENUE_SUBMISSION=true` alongside `ENABLE_REAL_SIGNER` to actually submit to Hyperliquid and record the real `venueOrderId` on the reservation — if signing **or** submission fails, the reservation is released, not left permanently spending budget.
-- `GET /v1/orders/:id` — real. A reservation that was never submitted (the common case — `/v1/orders` itself never signs/submits) reports `result: "PENDING"`, `venueOrderId: null`. One that was submitted via the dry-run route above reports its real `venueOrderId`; pass `?venueAddress=0x...` to also get a live `result: "COMMITTED"`/`"OUTCOME_UNKNOWN"` read from Hyperliquid's Info API (needs `orderLifecycleReader` configured, i.e. both flags above).
+- `POST /v1/execution/dry-run` — **always** a true dry run, regardless of server config. Runs the real reservation flow and, if not BLOCKed, the real nonce-lease/exact-hash-authorization/sign pipeline. Defaults to the offline fake signer; set `ENABLE_REAL_SIGNER=true` (plus Privy credentials and an agent wallet — see below) for real Hyperliquid hashing + real Privy signing. Never calls the order submitter even if the server has one configured — this route's name is a promise, not just a description. (An earlier version of this route *did* submit when configured, meaning a UI's "Check order" button could silently place a real trade purely based on server-side env vars the caller couldn't see. Fixed by splitting submission into its own route below — this one is now safe to wire up to any "check"/"preview" UI unconditionally.)
+- `POST /v1/execution/submit` — the endpoint that can actually reach a venue. Same risk-check → reservation → sign pipeline as dry-run; additionally submits and records the real `venueOrderId` when `ENABLE_VENUE_SUBMISSION=true` (alongside `ENABLE_REAL_SIGNER`) — if signing **or** submission fails, the reservation is released, not left permanently spending budget. Any UI wiring this up needs to make unmistakably clear to whoever clicks it that this one can move real money.
+- `GET /v1/orders/:id` — real. A reservation that was never submitted (the common case — `/v1/orders` itself never signs/submits, and neither does `/v1/execution/dry-run` anymore) reports `result: "PENDING"`, `venueOrderId: null`. One that was submitted via `/v1/execution/submit` reports its real `venueOrderId`; pass `?venueAddress=0x...` to also get a live `result: "COMMITTED"`/`"OUTCOME_UNKNOWN"` read from Hyperliquid's Info API (needs `orderLifecycleReader` configured, i.e. both flags above).
 - `POST /v1/orders/:id/cancel` — real. A reservation that never reached the venue is just released locally (`reasonCode: "NEVER_SUBMITTED"`, no venue call needed). One with a real `venueOrderId` gets a real `cancel` action built, signed, and submitted to Hyperliquid before the reservation is released — needs `ENABLE_VENUE_SUBMISSION`, else `501`.
 
 ## Signer vendor: Privy (real)
@@ -141,15 +142,22 @@ real bugs, both fixed and covered by regression tests:
    picks the matching Info API by default (`assetIndexOptions.baseUrl`
    still overrides it explicitly).
 
-Nothing here can move funds or place a live order **on mainnet** regardless:
-there is no funded or approved mainnet Hyperliquid agent wallet. Testnet is
-different — it needs one manual, one-time step this codebase cannot do for
-you (it requires signing with *your own* wallet, not a key this codebase
-holds): approving this Privy agent wallet
-(`PRIVY_AGENT_WALLET_ADDRESS` in `.env`) on a funded Hyperliquid **testnet**
-account, via Hyperliquid's own testnet UI at
+Nothing here moves funds or places a live order **automatically**: there is
+no code path that submits to mainnet without a human explicitly running it.
+Testnet needs one manual, one-time step this codebase cannot do for you (it
+requires signing with *your own* wallet, not a key this codebase holds):
+approving this Privy agent wallet (`PRIVY_AGENT_WALLET_ADDRESS` in `.env`) on
+a funded Hyperliquid **testnet** account, via Hyperliquid's own testnet UI at
 `app.hyperliquid-testnet.xyz` → API tab → Approve Agent, after getting free
 test USDC from their faucet.
+
+**Proven for real on mainnet too, on 2026-09-30**, once the account owner
+funded a real account and approved the agent on `app.hyperliquid.xyz`
+themselves: a real BTC resting order, placed with real money, confirmed
+independently against the live mainnet order book
+(`packages/hyperliquid/test/submitOrder.mainnet.test.ts`, gated behind
+`SUBMIT_MAINNET_ORDER=1` — deliberately never run automatically, only by a
+human who explicitly sets that flag knowing it moves real funds).
 
 ## Nonces: durable, and a third real bug the testnet proof caught
 
