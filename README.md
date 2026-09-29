@@ -11,14 +11,20 @@ Phase 3 (real Hyperliquid/Privy signing, now wired into the generic
 orchestrator)**, per that research's own ADR-009/build sequence. There is a
 real deterministic risk engine, real account/rule provisioning, a real
 (read-only) Hyperliquid state feed, and a canonicalize → nonce-lease →
-exact-hash-authorization → sign pipeline that runs against either a fast
-offline fake signer (`PlaceholderActionHasher` + `FakeSignerGateway`) or the
-real one (`HyperliquidActionHasher` + `PrivySignerGateway`) — same
-orchestrator either way, selected by which hasher/signer pair you inject.
-Nothing in this repo can place a real order or move money: no
-funded/approved agent wallet exists, and nothing submits to Hyperliquid's
-exchange endpoint. See "Signer vendor" below and `apps/api`'s 501 responses
-on `/v1/orders/:id` for exactly where the line is drawn today.
+exact-hash-authorization → sign → **submit** pipeline that runs against
+either a fast offline fake signer (`PlaceholderActionHasher` +
+`FakeSignerGateway`) or the real one (`HyperliquidActionHasher` +
+`PrivySignerGateway`) — same orchestrator either way, selected by which
+hasher/signer pair you inject.
+
+**Verified end to end on Hyperliquid's testnet on 2026-09-29**: a real risk
+check, a real reservation, a real signature, and a real order that actually
+rests on the venue (`packages/hyperliquid/test/submitOrder.integration.test.ts`).
+Two real bugs were caught and fixed in the process of getting this to work
+for real — see "Signer vendor" below. Nothing here can move funds or place a
+live order **on mainnet**: no funded/approved mainnet agent wallet exists.
+See `apps/api`'s 501 responses on `/v1/orders/:id` for exactly where the
+line is drawn today.
 
 ## Layout
 
@@ -72,7 +78,7 @@ be offline.
 - `POST /v1/orders` runs the real deterministic risk engine and atomic reservation logic against whatever account/rule state is in Postgres.
 - `POST /v1/accounts/:accountId/reconcile` fetches an account's live equity/exposure from Hyperliquid's public Info API (read-only, any address, no auth) and folds it into `account_risk_heads`, recording a `VERIFIED` state checkpoint.
 - `GET /v1/protection` only reports `botCanOpenNewTrades: true` once a **fresh** (< 5 minutes) `VERIFIED` checkpoint exists for that account — before the first reconcile, or once one goes stale, it correctly reports `walletNeedsAttention: true` instead. Per the blueprint: never show green protection when state continuity is unverified.
-- `POST /v1/execution/dry-run` runs the real reservation flow and, if not BLOCKed, the real nonce-lease/exact-hash-authorization pipeline. Defaults to the offline fake signer; set `ENABLE_REAL_SIGNER=true` (plus Privy credentials and an agent wallet — see below) to switch it to real Hyperliquid hashing + real Privy signing. Response fields are named `mock*` in the fake case; still no venue submission either way.
+- `POST /v1/execution/dry-run` runs the real reservation flow and, if not BLOCKed, the real nonce-lease/exact-hash-authorization pipeline. Defaults to the offline fake signer; set `ENABLE_REAL_SIGNER=true` (plus Privy credentials and an agent wallet — see below) to switch it to real Hyperliquid hashing + real Privy signing. Response fields are named `mock*` in the fake case. Still doesn't submit to the venue — that's proven separately (see "Signer vendor" below), not yet wired into this route.
 - `POST /v1/orders/:id/cancel` and `GET /v1/orders/:id` return `501` — they require live venue execution, which needs a real signer and venue submission.
 
 ## Signer vendor: Privy (real)
@@ -106,15 +112,32 @@ algorithm — pass `PlaceholderActionHasher` for the fast offline scaffold, or
 the full real path — reservation → nonce lease → real hash → real Privy
 signature — end to end.
 
-Real order submission now exists (`packages/hyperliquid/src/exchangeClient.ts` +
+Real order submission exists (`packages/hyperliquid/src/exchangeClient.ts` +
 `submitOrder.ts`): given a `SignedAction`, it rebuilds the exact wire-format
 action that was hashed and POSTs it, with the signature split into the
 `{r, s, v}` shape Hyperliquid's `/exchange` endpoint expects, to either
 `HYPERLIQUID_MAINNET_EXCHANGE_URL` or `HYPERLIQUID_TESTNET_EXCHANGE_URL`.
-Covered by unit tests with an injected fetch (`exchangeClient.test.ts`) and
-an opt-in real integration test (`submitOrder.integration.test.ts`, gated
-behind `SUBMIT_TESTNET_ORDER=1`) that places a tiny, deep-out-of-the-money
-limit order on Hyperliquid's testnet.
+
+**Proven against the live testnet on 2026-09-29**
+(`submitOrder.integration.test.ts`, gated behind `SUBMIT_TESTNET_ORDER=1`,
+requires the manual agent-approval step below): a real BTC buy order
+actually rests on Hyperliquid's testnet order book. Getting there caught two
+real bugs, both fixed and covered by regression tests:
+
+1. `exchangeClient.submitAction` only checked the top-level
+   `status: "ok"/"err"` wrapper. Hyperliquid nests per-order rejections
+   (invalid size, price too far from reference, etc.) inside
+   `response.data.statuses` — a rejected order was silently
+   indistinguishable from a resting one to any caller checking truthiness.
+   First real order attempt (0.001 BTC at $100) got rejected as
+   "Order has invalid size" and the bug let it through as a false success.
+2. `PrivySignerGateway` always resolved the coin-to-asset-index mapping
+   against **mainnet's** Info API regardless of `isTestnet`, because that
+   flag only controlled the EIP-712 domain's `source` field. Mainnet and
+   testnet do not share the same asset ordering — this silently placed a
+   real testnet BTC request as a **SOL** order instead. `isTestnet` now also
+   picks the matching Info API by default (`assetIndexOptions.baseUrl`
+   still overrides it explicitly).
 
 Nothing here can move funds or place a live order **on mainnet** regardless:
 there is no funded or approved mainnet Hyperliquid agent wallet. Testnet is
@@ -124,6 +147,4 @@ holds): approving this Privy agent wallet
 (`PRIVY_AGENT_WALLET_ADDRESS` in `.env`) on a funded Hyperliquid **testnet**
 account, via Hyperliquid's own testnet UI at
 `app.hyperliquid-testnet.xyz` → API tab → Approve Agent, after getting free
-test USDC from their faucet. Once that's done, the integration test above
-proves the whole pipeline — risk check → reservation → real signature → real
-venue submission — end to end, with zero real money involved.
+test USDC from their faucet.
