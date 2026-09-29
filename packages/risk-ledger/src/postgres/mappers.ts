@@ -35,10 +35,12 @@ export function rowToOrderReservation(row: Record<string, unknown>): OrderReserv
     id: row.id as string,
     accountId: row.account_id as string,
     clientIntentId: row.client_intent_id as string,
+    coin: row.coin as string,
     reservedAmount: new Decimal(row.reserved_amount as string),
     status: row.status as OrderReservationStatus,
     createdAt: new Date(row.created_at as string),
     releasedAt: row.released_at ? new Date(row.released_at as string) : null,
+    venueOrderId: (row.venue_order_id as string | null) ?? null,
   };
 }
 

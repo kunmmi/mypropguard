@@ -8,3 +8,6 @@ export * from "./privyClient.js";
 export * from "./privySignerGateway.js";
 export * from "./exchangeClient.js";
 export * from "./submitOrder.js";
+export * from "./cancelAction.js";
+export * from "./orderStatus.js";
+export * from "./orderLifecycle.js";

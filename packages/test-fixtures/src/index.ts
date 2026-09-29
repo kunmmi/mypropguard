@@ -65,10 +65,12 @@ export function buildOrderReservation(overrides: Partial<OrderReservation> = {})
     id: "resv_test_1",
     accountId: "acct_test_1",
     clientIntentId: "intent_1",
+    coin: "BTC",
     reservedAmount: new Decimal(50_000),
     status: OrderReservationStatus.HELD,
     createdAt: new Date("2026-01-01T00:00:00Z"),
     releasedAt: null,
+    venueOrderId: null,
     ...overrides,
   };
 }

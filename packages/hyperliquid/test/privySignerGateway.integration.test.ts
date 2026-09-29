@@ -135,7 +135,7 @@ describe.skipIf(!hasPrivyCreds)("PrivySignerGateway against the real Privy API",
     const sequencer = new InMemoryExecutionSequencer();
     const proposedOrder = buildProposedOrder({ coin: "BTC", side: OrderSide.BUY });
 
-    const signed = await authorizeAndSignOrder(sequencer, hasher, gateway, {
+    const { signed } = await authorizeAndSignOrder(sequencer, hasher, gateway, {
       accountId: "acct_privy_orchestrated",
       proposedOrder,
       decision: {

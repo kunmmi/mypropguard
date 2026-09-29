@@ -14,7 +14,7 @@ describe("authorizeAndSignOrder", () => {
     const reservation = buildOrderReservation();
     const proposedOrder = buildProposedOrder();
 
-    const signed = await authorizeAndSignOrder(sequencer, hasher, signer, {
+    const { signed } = await authorizeAndSignOrder(sequencer, hasher, signer, {
       accountId: "acct_test_1",
       proposedOrder,
       decision: {
@@ -40,7 +40,7 @@ describe("authorizeAndSignOrder", () => {
     const reservation = buildOrderReservation();
     const proposedOrder = buildProposedOrder({ size: new Decimal(5) });
 
-    const signed = await authorizeAndSignOrder(sequencer, hasher, signer, {
+    const { signed } = await authorizeAndSignOrder(sequencer, hasher, signer, {
       accountId: "acct_test_1",
       proposedOrder,
       decision: {
@@ -110,7 +110,7 @@ describe("authorizeAndSignOrder", () => {
       }),
     ]);
 
-    expect(a.authorization.connectionId).not.toBe(b.authorization.connectionId);
+    expect(a.signed.authorization.connectionId).not.toBe(b.signed.authorization.connectionId);
   });
 
   it("the signer independently refuses a mismatched connectionId (default-deny)", async () => {

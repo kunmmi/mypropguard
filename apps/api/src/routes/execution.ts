@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { ZodError, z } from "zod";
 import { Decimal } from "decimal.js";
 import { DecisionOutcome, OrderSide, type ProposedOrder } from "@mypropguard/domain";
-import { releaseReservation, reserveOrder } from "@mypropguard/risk-ledger";
+import { recordVenueOrderId, releaseReservation, reserveOrder } from "@mypropguard/risk-ledger";
 import { authorizeAndSignOrder, BlockedDecisionError } from "@mypropguard/execution";
 import type { AppDeps } from "../app.js";
 
@@ -69,15 +69,26 @@ export function registerExecutionRoutes(app: FastifyInstance, deps: AppDeps): vo
     }
 
     try {
-      const signed = await authorizeAndSignOrder(deps.executionSequencer, deps.hasher, deps.signer, {
+      const { signed, action } = await authorizeAndSignOrder(deps.executionSequencer, deps.hasher, deps.signer, {
         accountId: body.accountId,
         proposedOrder,
         decision,
         reservation,
       });
 
+      // Actual venue submission, when configured - the one remaining gap
+      // this route's name still implies ("dry-run") even though real
+      // signing has worked since Phase 3. Left unconfigured (offline
+      // scaffold), this stays a true dry run: signed, never sent anywhere.
+      let venueOrderId: string | null = null;
+      if (deps.orderSubmitter) {
+        const submitted = await deps.orderSubmitter.submit(signed, action);
+        venueOrderId = submitted.venueOrderId;
+        await recordVenueOrderId(deps.store, body.accountId, reservation.id, venueOrderId);
+      }
+
       return reply.send({
-        mock: true,
+        mock: !deps.orderSubmitter,
         decision: { outcome: decision.outcome, reasonCode: decision.reasonCode, message: decision.message },
         mockSignedAction: {
           connectionId: signed.authorization.connectionId,
@@ -85,11 +96,14 @@ export function registerExecutionRoutes(app: FastifyInstance, deps: AppDeps): vo
           mockSignerAddress: signed.signerAddress,
           expiresAt: signed.authorization.expiresAt.toISOString(),
         },
+        orderId: reservation.id,
+        venueOrderId,
       });
     } catch (error) {
-      // Signing failed after the reservation already committed real budget
-      // against this account - release it so a failed signature (signer
-      // refusal, network error, expired authorization) doesn't permanently
+      // Signing or submission failed after the reservation already
+      // committed real budget against this account - release it so a
+      // failed signature or a rejected submission (signer refusal, network
+      // error, expired authorization, venue rejection) doesn't permanently
       // count as a real trade against the daily-loss/exposure budget.
       await releaseReservation(deps.store, body.accountId, reservation.id);
 

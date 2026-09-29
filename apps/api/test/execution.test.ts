@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { Decimal } from "decimal.js";
-import { OrderReservationStatus, RuleType, type SignerGateway } from "@mypropguard/domain";
+import { OrderReservationStatus, RuleType, type OrderSubmitter, type SignerGateway } from "@mypropguard/domain";
 import { FakeSignerGateway, InMemoryExecutionSequencer, PlaceholderActionHasher } from "@mypropguard/execution";
 import { InMemoryRiskLedgerStore, buildAccountRiskHead, buildRuleVersion } from "@mypropguard/test-fixtures";
 import { buildApp } from "../src/app.js";
@@ -9,6 +9,20 @@ function throwingSigner(): SignerGateway {
   return {
     signExact: async () => {
       throw new Error("signer unavailable");
+    },
+  };
+}
+
+function fakeOrderSubmitter(venueOrderId: string): OrderSubmitter {
+  return {
+    submit: async () => ({ venueOrderId }),
+  };
+}
+
+function throwingOrderSubmitter(): OrderSubmitter {
+  return {
+    submit: async () => {
+      throw new Error("venue rejected the order");
     },
   };
 }
@@ -103,6 +117,75 @@ describe("POST /v1/execution/dry-run", () => {
     expect(reservations).toHaveLength(1);
     expect(reservations[0]!.status).toBe(OrderReservationStatus.RELEASED);
     expect(reservations[0]!.releasedAt).not.toBeNull();
+  });
+
+  it("submits to the venue and records the venue order id when an order submitter is configured", async () => {
+    const store = new InMemoryRiskLedgerStore();
+    store.seedAccountRiskHead(buildAccountRiskHead({ accountId: "acct_exec_4" }));
+    store.seedRules("acct_exec_4", [buildRuleVersion(RuleType.MAX_POSITION_SIZE, 100_000)]);
+
+    const hasher = new PlaceholderActionHasher();
+    const app = buildApp({
+      store,
+      executionSequencer: new InMemoryExecutionSequencer(),
+      hasher,
+      signer: new FakeSignerGateway(hasher),
+      orderSubmitter: fakeOrderSubmitter("venue_oid_123"),
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/execution/dry-run",
+      payload: {
+        clientIntentId: "exec_intent_4",
+        accountId: "acct_exec_4",
+        coin: "BTC",
+        side: "BUY",
+        size: "1",
+        price: "50000",
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.mock).toBe(false);
+    expect(body.venueOrderId).toBe("venue_oid_123");
+
+    const reservation = store.getReservations().find((r) => r.accountId === "acct_exec_4");
+    expect(reservation?.venueOrderId).toBe("venue_oid_123");
+  });
+
+  it("releases the reservation when the venue rejects the submission", async () => {
+    const store = new InMemoryRiskLedgerStore();
+    store.seedAccountRiskHead(buildAccountRiskHead({ accountId: "acct_exec_5" }));
+    store.seedRules("acct_exec_5", [buildRuleVersion(RuleType.MAX_POSITION_SIZE, 100_000)]);
+
+    const hasher = new PlaceholderActionHasher();
+    const app = buildApp({
+      store,
+      executionSequencer: new InMemoryExecutionSequencer(),
+      hasher,
+      signer: new FakeSignerGateway(hasher),
+      orderSubmitter: throwingOrderSubmitter(),
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/execution/dry-run",
+      payload: {
+        clientIntentId: "exec_intent_5",
+        accountId: "acct_exec_5",
+        coin: "BTC",
+        side: "BUY",
+        size: "1",
+        price: "50000",
+      },
+    });
+
+    expect(response.statusCode).toBe(500);
+    const reservation = store.getReservations().find((r) => r.accountId === "acct_exec_5");
+    expect(reservation?.status).toBe(OrderReservationStatus.RELEASED);
+    expect(reservation?.venueOrderId).toBeNull();
   });
 
   it("returns 501 when no fake signer is configured", async () => {

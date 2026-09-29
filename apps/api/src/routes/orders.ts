@@ -1,14 +1,18 @@
 import type { FastifyInstance } from "fastify";
-import { ZodError } from "zod";
+import { ZodError, z } from "zod";
 import { Decimal } from "decimal.js";
 import {
   cancelOrderRequestSchema,
+  cancelOrderResponseSchema,
   createOrderRequestSchema,
   createOrderResponseSchema,
+  getOrderResponseSchema,
+  type CancelOrderResponse,
   type CreateOrderResponse,
+  type GetOrderResponse,
 } from "@mypropguard/contracts";
-import { DecisionOutcome, type ProposedOrder } from "@mypropguard/domain";
-import { reserveOrder } from "@mypropguard/risk-ledger";
+import { DecisionOutcome, OrderReservationStatus, type ProposedOrder } from "@mypropguard/domain";
+import { releaseReservation, reserveOrder } from "@mypropguard/risk-ledger";
 import type { AppDeps } from "../app.js";
 
 function outcomeToStatus(outcome: string): CreateOrderResponse["status"] {
@@ -65,19 +69,89 @@ export function registerOrderRoutes(app: FastifyInstance, deps: AppDeps): void {
   });
 
   app.post("/v1/orders/:orderId/cancel", async (request, reply) => {
-    cancelOrderRequestSchema.parse({ orderId: (request.params as { orderId: string }).orderId });
-    // Cancelling a live venue order requires Phase 2/3 execution/reconciliation.
-    return reply.status(501).send({
-      error: "NOT_IMPLEMENTED",
-      message: "Order cancellation requires live venue execution (Phase 2/3), not yet built.",
-    });
+    const { orderId } = cancelOrderRequestSchema.parse({ orderId: (request.params as { orderId: string }).orderId });
+
+    const reservation = await deps.store.findReservationById(orderId);
+    if (!reservation) {
+      const response: CancelOrderResponse = { orderId, status: "NOT_FOUND", reasonCode: "RESERVATION_NOT_FOUND" };
+      return reply.status(404).send(cancelOrderResponseSchema.parse(response));
+    }
+
+    if (reservation.status !== OrderReservationStatus.HELD) {
+      const response: CancelOrderResponse = {
+        orderId,
+        status: "REJECTED",
+        reasonCode: `ALREADY_${reservation.status}`,
+      };
+      return reply.status(409).send(cancelOrderResponseSchema.parse(response));
+    }
+
+    // Never reached a venue (blocked before submission, or the offline
+    // scaffold) - nothing to cancel on-chain, just release the local hold.
+    if (!reservation.venueOrderId) {
+      await releaseReservation(deps.store, reservation.accountId, reservation.id);
+      const response: CancelOrderResponse = { orderId, status: "CANCELED", reasonCode: "NEVER_SUBMITTED" };
+      return reply.send(cancelOrderResponseSchema.parse(response));
+    }
+
+    if (!deps.orderCanceller) {
+      return reply.status(501).send({
+        error: "NOT_IMPLEMENTED",
+        message: "No order canceller configured for this server (ENABLE_REAL_SIGNER not set).",
+      });
+    }
+
+    try {
+      await deps.orderCanceller.cancelOrder(reservation.coin, reservation.venueOrderId);
+    } catch {
+      const response: CancelOrderResponse = { orderId, status: "REJECTED", reasonCode: "VENUE_REJECTED_CANCEL" };
+      return reply.status(502).send(cancelOrderResponseSchema.parse(response));
+    }
+
+    await releaseReservation(deps.store, reservation.accountId, reservation.id);
+    const response: CancelOrderResponse = { orderId, status: "CANCELED", reasonCode: "CANCELED_ON_VENUE" };
+    return reply.send(cancelOrderResponseSchema.parse(response));
   });
 
-  app.get("/v1/orders/:orderId", async (_request, reply) => {
-    // Order lifecycle/venue state tracking requires Phase 2/3 execution.
-    return reply.status(501).send({
-      error: "NOT_IMPLEMENTED",
-      message: "Order status tracking requires live venue execution (Phase 2/3), not yet built.",
-    });
+  const getOrderQuerySchema = z.object({ venueAddress: z.string().min(1).optional() });
+
+  app.get("/v1/orders/:orderId", async (request, reply) => {
+    const { orderId } = request.params as { orderId: string };
+    const { venueAddress } = getOrderQuerySchema.parse(request.query);
+
+    const reservation = await deps.store.findReservationById(orderId);
+    if (!reservation) {
+      return reply.status(404).send({ error: "NOT_FOUND", message: `No order found for id ${orderId}` });
+    }
+
+    // Every reservation that exists was created from an ALLOW/RESIZE
+    // decision (reserveOrder never reserves for a BLOCK) - which of the two
+    // isn't tracked post-creation, so "ACCEPTED" is the most specific
+    // honest answer available from stored state alone.
+    const base = { orderId: reservation.id, status: "ACCEPTED" as const, createdAt: reservation.createdAt.toISOString() };
+
+    if (!reservation.venueOrderId) {
+      const response: GetOrderResponse = { ...base, venueOrderId: null, venueClientOrderId: null, result: "PENDING" };
+      return reply.send(getOrderResponseSchema.parse(response));
+    }
+
+    if (!deps.orderLifecycleReader || !venueAddress) {
+      const response: GetOrderResponse = {
+        ...base,
+        venueOrderId: reservation.venueOrderId,
+        venueClientOrderId: reservation.clientIntentId,
+        result: "OUTCOME_UNKNOWN",
+      };
+      return reply.send(getOrderResponseSchema.parse(response));
+    }
+
+    const liveStatus = await deps.orderLifecycleReader.getOrderStatus(venueAddress, reservation.venueOrderId);
+    const response: GetOrderResponse = {
+      ...base,
+      venueOrderId: reservation.venueOrderId,
+      venueClientOrderId: reservation.clientIntentId,
+      result: liveStatus.status === "UNKNOWN" ? "OUTCOME_UNKNOWN" : "COMMITTED",
+    };
+    return reply.send(getOrderResponseSchema.parse(response));
   });
 }

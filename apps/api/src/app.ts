@@ -1,6 +1,15 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
-import type { ActionHasher, ExecutionSequencer, RiskLedgerStore, SignerGateway, VenueStateReader } from "@mypropguard/domain";
+import type {
+  ActionHasher,
+  ExecutionSequencer,
+  OrderCanceller,
+  OrderLifecycleReader,
+  OrderSubmitter,
+  RiskLedgerStore,
+  SignerGateway,
+  VenueStateReader,
+} from "@mypropguard/domain";
 import { registerAccountRoutes } from "./routes/accounts.js";
 import { registerOrderRoutes } from "./routes/orders.js";
 import { registerProtectionRoutes } from "./routes/protection.js";
@@ -15,6 +24,10 @@ export interface AppDeps {
   executionSequencer?: ExecutionSequencer;
   hasher?: ActionHasher;
   signer?: SignerGateway;
+  /** Optional: only present once real submission is configured (ENABLE_REAL_SIGNER). Lets dry-run actually reach the venue and lets order status/cancel act on the result. */
+  orderSubmitter?: OrderSubmitter;
+  orderCanceller?: OrderCanceller;
+  orderLifecycleReader?: OrderLifecycleReader;
 }
 
 export function buildApp(deps: AppDeps): FastifyInstance {

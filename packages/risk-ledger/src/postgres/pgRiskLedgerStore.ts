@@ -7,6 +7,7 @@ import {
   type NewAccountInput,
   type NewReservationInput,
   type NewStateCheckpointInput,
+  type OrderReservation,
   type RiskLedgerStore,
 } from "@mypropguard/domain";
 import { rowToAccountRiskHead, rowToOrderReservation, rowToRuleVersion, rowToStateCheckpoint } from "./mappers.js";
@@ -75,10 +76,10 @@ export class PgRiskLedgerStore implements RiskLedgerStore {
         },
         insertReservation: async (input: NewReservationInput) => {
           const result = await client.query(
-            `INSERT INTO order_reservations (account_id, client_intent_id, reserved_amount, status)
-             VALUES ($1, $2, $3, $4)
+            `INSERT INTO order_reservations (account_id, client_intent_id, coin, reserved_amount, status)
+             VALUES ($1, $2, $3, $4, $5)
              RETURNING *`,
-            [input.accountId, input.clientIntentId, input.reservedAmount.toString(), OrderReservationStatus.HELD],
+            [input.accountId, input.clientIntentId, input.coin, input.reservedAmount.toString(), OrderReservationStatus.HELD],
           );
           return rowToOrderReservation(result.rows[0]);
         },
@@ -88,6 +89,12 @@ export class PgRiskLedgerStore implements RiskLedgerStore {
              WHERE id = $1 AND status = $3`,
             [reservationId, OrderReservationStatus.RELEASED, OrderReservationStatus.HELD],
           );
+        },
+        recordVenueOrderId: async (reservationId: string, venueOrderId: string) => {
+          await client.query("UPDATE order_reservations SET venue_order_id = $2 WHERE id = $1", [
+            reservationId,
+            venueOrderId,
+          ]);
         },
         isProtectionEnabled: async (id) => {
           const result = await client.query("SELECT protection_enabled FROM protected_accounts WHERE account_id = $1", [id]);
@@ -120,6 +127,11 @@ export class PgRiskLedgerStore implements RiskLedgerStore {
     } finally {
       client.release();
     }
+  }
+
+  async findReservationById(reservationId: string): Promise<OrderReservation | null> {
+    const result = await this.pool.query("SELECT * FROM order_reservations WHERE id = $1", [reservationId]);
+    return result.rows[0] ? rowToOrderReservation(result.rows[0]) : null;
   }
 
   async createAccount(input: NewAccountInput): Promise<void> {

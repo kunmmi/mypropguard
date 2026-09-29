@@ -52,11 +52,14 @@ export interface OrderReservation {
   id: string;
   accountId: string;
   clientIntentId: string;
+  coin: string;
   /** Portion of the daily-loss/exposure budget this reservation holds. */
   reservedAmount: Decimal;
   status: OrderReservationStatus;
   createdAt: Date;
   releasedAt: Date | null;
+  /** Set once the authorized action is actually submitted to a venue and accepted. Null until then. */
+  venueOrderId: string | null;
 }
 
 export interface ProposedOrder {

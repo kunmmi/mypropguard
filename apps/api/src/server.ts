@@ -1,6 +1,12 @@
-import type { ActionHasher, SignerGateway } from "@mypropguard/domain";
+import type { ActionHasher, OrderCanceller, OrderLifecycleReader, OrderSubmitter, SignerGateway } from "@mypropguard/domain";
 import { createPool, PgRiskLedgerStore } from "@mypropguard/risk-ledger";
-import { HyperliquidInfoClient, HyperliquidActionHasher, PrivyClient, PrivySignerGateway } from "@mypropguard/hyperliquid";
+import {
+  HyperliquidInfoClient,
+  HyperliquidActionHasher,
+  HyperliquidOrderLifecycle,
+  PrivyClient,
+  PrivySignerGateway,
+} from "@mypropguard/hyperliquid";
 import { FakeSignerGateway, InMemoryExecutionSequencer, PlaceholderActionHasher } from "@mypropguard/execution";
 import { buildApp } from "./app.js";
 
@@ -24,6 +30,9 @@ const executionSequencer = new InMemoryExecutionSequencer();
 // signing instead — still no venue submission either way.
 let hasher: ActionHasher = new PlaceholderActionHasher();
 let signer: SignerGateway = new FakeSignerGateway(hasher);
+let orderSubmitter: OrderSubmitter | undefined;
+let orderCanceller: OrderCanceller | undefined;
+let orderLifecycleReader: OrderLifecycleReader | undefined;
 
 if (process.env.ENABLE_REAL_SIGNER === "true") {
   const { PRIVY_APP_ID, PRIVY_APP_SECRET, PRIVY_AGENT_WALLET_ID, PRIVY_AGENT_WALLET_ADDRESS } = process.env;
@@ -41,10 +50,26 @@ if (process.env.ENABLE_REAL_SIGNER === "true") {
     isTestnet: true,
   });
   // eslint-disable-next-line no-console
-  console.log("Real signer enabled: HyperliquidActionHasher + PrivySignerGateway. Still no venue submission.");
+  console.log("Real signer enabled: HyperliquidActionHasher + PrivySignerGateway.");
+
+  // Separate, more cautious gate: real signing alone can never move
+  // anything; this is the flag that actually lets /v1/execution/dry-run
+  // reach a real venue, and lets order status/cancel act on the result.
+  if (process.env.ENABLE_VENUE_SUBMISSION === "true") {
+    const lifecycle = new HyperliquidOrderLifecycle({
+      privyClient,
+      walletId: PRIVY_AGENT_WALLET_ID,
+      isTestnet: true,
+    });
+    orderSubmitter = lifecycle;
+    orderCanceller = lifecycle;
+    orderLifecycleReader = lifecycle;
+    // eslint-disable-next-line no-console
+    console.log("Venue submission enabled: orders placed via /v1/execution/dry-run now actually reach Hyperliquid.");
+  }
 }
 
-const app = buildApp({ store, venueReader, executionSequencer, hasher, signer });
+const app = buildApp({ store, venueReader, executionSequencer, hasher, signer, orderSubmitter, orderCanceller, orderLifecycleReader });
 
 const port = Number(process.env.PORT ?? 3000);
 app

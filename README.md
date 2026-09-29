@@ -21,23 +21,24 @@ hasher/signer pair you inject.
 check, a real reservation, a real signature, and a real order that actually
 rests on the venue (`packages/hyperliquid/test/submitOrder.integration.test.ts`).
 Two real bugs were caught and fixed in the process of getting this to work
-for real — see "Signer vendor" below. Nothing here can move funds or place a
-live order **on mainnet**: no funded/approved mainnet agent wallet exists.
-See `apps/api`'s 501 responses on `/v1/orders/:id` for exactly where the
-line is drawn today.
+for real — see "Signer vendor" below. Order lifecycle (submit, cancel,
+status) is now real too — see "What's real right now". Nothing here can
+move funds or place a live order **on mainnet**: no funded/approved mainnet
+agent wallet exists, and venue submission needs a second explicit opt-in
+(`ENABLE_VENUE_SUBMISSION`) beyond real signing.
 
 ## Layout
 
 - `packages/domain` — types, enums, reason codes, and the `RiskLedgerStore`/`LedgerContext`/`VenueStateReader`/`SignerGateway`/`ExecutionSequencer` ports.
 - `packages/contracts` — Zod schemas for the external `/v1` API and internal decision/authorization shapes.
 - `packages/risk-engine` — pure, deterministic risk decisions. No I/O.
-- `packages/hyperliquid` — static Hyperliquid Standard-mode capability manifest, a read-only Info API client, and the **real** signing stack: `signing.ts` (MsgPack + Keccak256 action hashing, phantom-agent EIP-712 typed data — ported from Hyperliquid's own TS SDK), `orderAction.ts` (exact schema field order), `assetIndex.ts` (coin → asset index, public read), `hyperliquidActionHasher.ts` (real `ActionHasher`), `privyClient.ts` (real Privy REST wallet client), and `privySignerGateway.ts` — a real `SignerGateway` that independently recomputes the Hyperliquid hash, refuses anything that doesn't match, and signs via a real Privy-managed key. See "Signer vendor" below.
+- `packages/hyperliquid` — static Hyperliquid Standard-mode capability manifest, a read-only Info API client, and the **real** signing stack: `signing.ts` (MsgPack + Keccak256 action hashing, phantom-agent EIP-712 typed data — ported from Hyperliquid's own TS SDK), `orderAction.ts`/`cancelAction.ts` (exact schema field order for order/cancel actions), `assetIndex.ts` (coin → asset index, public read), `hyperliquidActionHasher.ts` (real `ActionHasher`), `privyClient.ts` (real Privy REST wallet client), `privySignerGateway.ts` (real `SignerGateway`), `exchangeClient.ts`/`submitOrder.ts` (real order submission), and `orderLifecycle.ts` (`HyperliquidOrderLifecycle` — real submit/cancel/status against the live venue). See "Signer vendor" below.
 - `packages/execution` — the venue-agnostic orchestrator: canonical action → nonce lease → exact-hash authorization → signer, plus the offline scaffold pair `PlaceholderActionHasher`/`FakeSignerGateway`/`InMemoryExecutionSequencer` (fake key — never real). Pass it `HyperliquidActionHasher`/`PrivySignerGateway` instead for the real path.
 - `packages/risk-ledger` — Postgres-backed and in-memory `RiskLedgerStore` implementations, plus the `reserveOrder`/`getProtectionStatus`/`activateProtection`/`reconcileAccountFromVenue` orchestrators.
 - `packages/test-fixtures` — deterministic fixtures and the in-memory store used across test suites.
 - `apps/api` — Fastify HTTP server for the `/v1` contracts, plus the experimental `/v1/execution/dry-run` scaffold endpoint. CORS is open (`origin: true`) since this is a local dev tool, not a public service.
 - `apps/web` — a Next.js dashboard for this backend: load or provision an account, see real protection status, reconcile against Hyperliquid, and check an order against the real risk engine. Styled with the Ighodalo Labs design system (tokens/components copied into `src/design-system/`) — MyPropGuard has no finished brand of its own yet, so this uses the parent company's real, ready system rather than inventing one. Copy is scoped honestly to what this backend actually does (no MT5/Telegram/billing claims from the separate, more mature MyPropGuard MT5 product).
-- `supabase/migrations` — Phase 0/2 schema.
+- `supabase/migrations` — Phase 0/2 schema, plus `order_reservations.coin`/`venue_order_id` (added for real order lifecycle tracking).
 
 ## Getting started
 
@@ -78,8 +79,9 @@ be offline.
 - `POST /v1/orders` runs the real deterministic risk engine and atomic reservation logic against whatever account/rule state is in Postgres.
 - `POST /v1/accounts/:accountId/reconcile` fetches an account's live equity/exposure from Hyperliquid's public Info API (read-only, any address, no auth) and folds it into `account_risk_heads`, recording a `VERIFIED` state checkpoint.
 - `GET /v1/protection` only reports `botCanOpenNewTrades: true` once a **fresh** (< 5 minutes) `VERIFIED` checkpoint exists for that account — before the first reconcile, or once one goes stale, it correctly reports `walletNeedsAttention: true` instead. Per the blueprint: never show green protection when state continuity is unverified.
-- `POST /v1/execution/dry-run` runs the real reservation flow and, if not BLOCKed, the real nonce-lease/exact-hash-authorization pipeline. Defaults to the offline fake signer; set `ENABLE_REAL_SIGNER=true` (plus Privy credentials and an agent wallet — see below) to switch it to real Hyperliquid hashing + real Privy signing. Response fields are named `mock*` in the fake case. Still doesn't submit to the venue — that's proven separately (see "Signer vendor" below), not yet wired into this route.
-- `POST /v1/orders/:id/cancel` and `GET /v1/orders/:id` return `501` — they require live venue execution, which needs a real signer and venue submission.
+- `POST /v1/execution/dry-run` runs the real reservation flow and, if not BLOCKed, the real nonce-lease/exact-hash-authorization pipeline. Defaults to the offline fake signer; set `ENABLE_REAL_SIGNER=true` (plus Privy credentials and an agent wallet — see below) to switch it to real Hyperliquid hashing + real Privy signing. Response fields are named `mock*` in the fake case (`mock: false` once real submission is also on). Set `ENABLE_VENUE_SUBMISSION=true` alongside `ENABLE_REAL_SIGNER` to actually submit to Hyperliquid and record the real `venueOrderId` on the reservation — if signing **or** submission fails, the reservation is released, not left permanently spending budget.
+- `GET /v1/orders/:id` — real. A reservation that was never submitted (the common case — `/v1/orders` itself never signs/submits) reports `result: "PENDING"`, `venueOrderId: null`. One that was submitted via the dry-run route above reports its real `venueOrderId`; pass `?venueAddress=0x...` to also get a live `result: "COMMITTED"`/`"OUTCOME_UNKNOWN"` read from Hyperliquid's Info API (needs `orderLifecycleReader` configured, i.e. both flags above).
+- `POST /v1/orders/:id/cancel` — real. A reservation that never reached the venue is just released locally (`reasonCode: "NEVER_SUBMITTED"`, no venue call needed). One with a real `venueOrderId` gets a real `cancel` action built, signed, and submitted to Hyperliquid before the reservation is released — needs `ENABLE_VENUE_SUBMISSION`, else `501`.
 
 ## Signer vendor: Privy (real)
 

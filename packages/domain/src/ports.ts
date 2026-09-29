@@ -5,6 +5,7 @@ import type { OrderSide, RuleType, StateConfidence } from "./enums.js";
 export interface NewReservationInput {
   accountId: string;
   clientIntentId: string;
+  coin: string;
   reservedAmount: Decimal;
 }
 
@@ -43,6 +44,8 @@ export interface LedgerContext {
    * failure must be safe to call twice.
    */
   releaseReservation(reservationId: string): Promise<void>;
+  /** Records the venue's own order id once a reservation's authorized action is actually submitted and accepted. */
+  recordVenueOrderId(reservationId: string, venueOrderId: string): Promise<void>;
   isProtectionEnabled(accountId: string): Promise<boolean>;
   setProtectionEnabled(accountId: string, enabled: boolean): Promise<void>;
   recordStateCheckpoint(checkpoint: NewStateCheckpointInput): Promise<void>;
@@ -100,6 +103,13 @@ export interface RiskLedgerStore {
   runExclusive<T>(accountId: string, fn: (ctx: LedgerContext) => Promise<T>): Promise<T>;
   /** Provisions a brand-new account. Throws AccountAlreadyExistsError on a duplicate accountId. */
   createAccount(input: NewAccountInput): Promise<void>;
+  /**
+   * Cross-account lookup by reservation id, for routes that only receive an
+   * orderId (e.g. GET /v1/orders/:id) and don't yet know which account it
+   * belongs to. Read-only - doesn't need the per-account exclusive lock.
+   * Returns null if no reservation with that id exists.
+   */
+  findReservationById(reservationId: string): Promise<OrderReservation | null>;
 }
 
 export class AccountAlreadyExistsError extends Error {
@@ -177,6 +187,37 @@ export interface SignerGateway {
  */
 export interface ActionHasher {
   computeConnectionId(action: CanonicalOrderAction): Promise<string>;
+}
+
+export interface SubmittedOrder {
+  /** The venue's own identifier for this order - opaque, venue-specific format. */
+  venueOrderId: string;
+}
+
+/**
+ * Submits an already-signed action to a venue and reports back its order
+ * id. Separate from SignerGateway: signing produces a signature that's
+ * valid regardless of whether it's ever sent anywhere; submitting is the
+ * step that actually reaches the venue and can fail for reasons signing
+ * can't (rejected order, network error, venue downtime).
+ */
+export interface OrderSubmitter {
+  submit(signed: SignedAction, action: CanonicalOrderAction): Promise<SubmittedOrder>;
+}
+
+export type VenueOrderLifecycleStatus = "OPEN" | "FILLED" | "CANCELED" | "UNKNOWN";
+
+export interface VenueOrderStatus {
+  status: VenueOrderLifecycleStatus;
+}
+
+/** Reads live order status and cancels a resting order on a venue, given its venue order id. */
+export interface OrderLifecycleReader {
+  getOrderStatus(address: string, venueOrderId: string): Promise<VenueOrderStatus>;
+}
+
+export interface OrderCanceller {
+  cancelOrder(coin: string, venueOrderId: string): Promise<void>;
 }
 
 export interface NonceLease {

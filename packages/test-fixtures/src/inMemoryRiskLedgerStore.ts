@@ -48,6 +48,10 @@ export class InMemoryRiskLedgerStore implements RiskLedgerStore {
     return this.reservations;
   }
 
+  async findReservationById(reservationId: string): Promise<OrderReservation | null> {
+    return this.reservations.find((r) => r.id === reservationId) ?? null;
+  }
+
   async createAccount(input: NewAccountInput): Promise<void> {
     if (this.heads.has(input.accountId)) {
       throw new AccountAlreadyExistsError(input.accountId);
@@ -117,10 +121,12 @@ export class InMemoryRiskLedgerStore implements RiskLedgerStore {
             id: `resv_${reservationSequence}`,
             accountId: input.accountId,
             clientIntentId: input.clientIntentId,
+            coin: input.coin,
             reservedAmount: input.reservedAmount,
             status: OrderReservationStatus.HELD,
             createdAt: new Date(),
             releasedAt: null,
+            venueOrderId: null,
           };
           this.reservations.push(reservation);
           return reservation;
@@ -130,6 +136,11 @@ export class InMemoryRiskLedgerStore implements RiskLedgerStore {
           if (!reservation) return;
           reservation.status = OrderReservationStatus.RELEASED;
           reservation.releasedAt = new Date();
+        },
+        recordVenueOrderId: async (reservationId: string, venueOrderId: string) => {
+          const reservation = this.reservations.find((r) => r.id === reservationId);
+          if (!reservation) return;
+          reservation.venueOrderId = venueOrderId;
         },
         isProtectionEnabled: async (id) => this.protectionEnabled.get(id) ?? false,
         setProtectionEnabled: async (id, enabled) => {

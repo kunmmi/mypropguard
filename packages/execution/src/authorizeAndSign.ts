@@ -2,6 +2,7 @@ import {
   DecisionOutcome,
   type ActionAuthorization,
   type ActionHasher,
+  type CanonicalOrderAction,
   type DecisionArtifact,
   type ExecutionSequencer,
   type OrderReservation,
@@ -28,6 +29,12 @@ export interface AuthorizeAndSignInput {
   ttlMs?: number;
 }
 
+export interface AuthorizeAndSignResult {
+  signed: SignedAction;
+  /** The exact action that was authorized and signed - needed verbatim to submit it to a venue. */
+  action: CanonicalOrderAction;
+}
+
 /**
  * Reservation -> nonce lease -> canonical action -> exact-hash authorization
  * -> signer. Requires an ALLOW/RESIZE decision and its reservation (from
@@ -48,7 +55,7 @@ export async function authorizeAndSignOrder(
   hasher: ActionHasher,
   signer: SignerGateway,
   input: AuthorizeAndSignInput,
-): Promise<SignedAction> {
+): Promise<AuthorizeAndSignResult> {
   if (input.decision.outcome === DecisionOutcome.BLOCK) {
     throw new BlockedDecisionError();
   }
@@ -77,5 +84,6 @@ export async function authorizeAndSignOrder(
     expiresAt: action.expiresAt,
   };
 
-  return signer.signExact(authorization, action);
+  const signed = await signer.signExact(authorization, action);
+  return { signed, action };
 }

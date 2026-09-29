@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { Decimal } from "decimal.js";
-import { RuleType } from "@mypropguard/domain";
+import { OrderReservationStatus, RuleType, type OrderCanceller, type OrderLifecycleReader } from "@mypropguard/domain";
 import { InMemoryRiskLedgerStore, buildAccountRiskHead, buildRuleVersion } from "@mypropguard/test-fixtures";
 import { buildApp } from "../src/app.js";
 
@@ -76,14 +76,169 @@ describe("POST /v1/orders", () => {
     expect(response.statusCode).toBe(400);
   });
 
-  it("returns 501 for cancel/get-order until Phase 2/3 execution exists", async () => {
+  it("returns 404 for an unknown order id on both GET and cancel", async () => {
     const store = makeStoreWithAccount("acct_api_4");
     const app = buildApp({ store });
 
-    const cancel = await app.inject({ method: "POST", url: "/v1/orders/some-id/cancel" });
-    expect(cancel.statusCode).toBe(501);
+    const get = await app.inject({ method: "GET", url: "/v1/orders/does-not-exist" });
+    expect(get.statusCode).toBe(404);
 
-    const get = await app.inject({ method: "GET", url: "/v1/orders/some-id" });
-    expect(get.statusCode).toBe(501);
+    const cancel = await app.inject({ method: "POST", url: "/v1/orders/does-not-exist/cancel" });
+    expect(cancel.statusCode).toBe(404);
+    expect(cancel.json().status).toBe("NOT_FOUND");
+  });
+
+  it("reports a real order as PENDING (never submitted, since /v1/orders never signs/submits)", async () => {
+    const store = makeStoreWithAccount("acct_api_5");
+    const app = buildApp({ store });
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/v1/orders",
+      payload: {
+        clientIntentId: "intent_5",
+        accountId: "acct_api_5",
+        coin: "BTC",
+        side: "BUY",
+        size: "1",
+        price: "50000",
+        orderStyle: "MARKET",
+        reduceOnly: false,
+      },
+    });
+    const orderId = created.json().orderId;
+
+    const get = await app.inject({ method: "GET", url: `/v1/orders/${orderId}` });
+    expect(get.statusCode).toBe(200);
+    const body = get.json();
+    expect(body.venueOrderId).toBeNull();
+    expect(body.result).toBe("PENDING");
+  });
+
+  it("cancelling a never-submitted order just releases the local hold - no venue canceller needed", async () => {
+    const store = makeStoreWithAccount("acct_api_6");
+    const app = buildApp({ store });
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/v1/orders",
+      payload: {
+        clientIntentId: "intent_6",
+        accountId: "acct_api_6",
+        coin: "BTC",
+        side: "BUY",
+        size: "1",
+        price: "50000",
+        orderStyle: "MARKET",
+        reduceOnly: false,
+      },
+    });
+    const orderId = created.json().orderId;
+
+    const cancel = await app.inject({ method: "POST", url: `/v1/orders/${orderId}/cancel` });
+    expect(cancel.statusCode).toBe(200);
+    const cancelBody = cancel.json();
+    expect(cancelBody.status).toBe("CANCELED");
+    expect(cancelBody.reasonCode).toBe("NEVER_SUBMITTED");
+
+    // Cancelling twice must not double-release or silently succeed again.
+    const secondCancel = await app.inject({ method: "POST", url: `/v1/orders/${orderId}/cancel` });
+    expect(secondCancel.statusCode).toBe(409);
+    expect(secondCancel.json().status).toBe("REJECTED");
+  });
+
+  it("reports a real live status once a reservation has a venue order id and a lifecycle reader is configured", async () => {
+    const store = makeStoreWithAccount("acct_api_7");
+    const orderLifecycleReader: OrderLifecycleReader = {
+      getOrderStatus: async () => ({ status: "OPEN" }),
+    };
+    const app = buildApp({ store, orderLifecycleReader });
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/v1/orders",
+      payload: {
+        clientIntentId: "intent_7",
+        accountId: "acct_api_7",
+        coin: "BTC",
+        side: "BUY",
+        size: "1",
+        price: "50000",
+        orderStyle: "MARKET",
+        reduceOnly: false,
+      },
+    });
+    const orderId = created.json().orderId;
+
+    // Simulates what /v1/execution/dry-run does once real submission is
+    // configured - reservation gets a real venue order id.
+    await store.runExclusive("acct_api_7", (ctx) => ctx.recordVenueOrderId(orderId, "venue_oid_1"));
+
+    const get = await app.inject({ method: "GET", url: `/v1/orders/${orderId}?venueAddress=0xabc` });
+    expect(get.statusCode).toBe(200);
+    const body = get.json();
+    expect(body.venueOrderId).toBe("venue_oid_1");
+    expect(body.result).toBe("COMMITTED");
+  });
+
+  it("cancels a submitted order on the venue and releases the reservation", async () => {
+    const store = makeStoreWithAccount("acct_api_8");
+    let cancelledArgs: [string, string] | null = null;
+    const orderCanceller: OrderCanceller = {
+      cancelOrder: async (coin, venueOrderId) => {
+        cancelledArgs = [coin, venueOrderId];
+      },
+    };
+    const app = buildApp({ store, orderCanceller });
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/v1/orders",
+      payload: {
+        clientIntentId: "intent_8",
+        accountId: "acct_api_8",
+        coin: "BTC",
+        side: "BUY",
+        size: "1",
+        price: "50000",
+        orderStyle: "MARKET",
+        reduceOnly: false,
+      },
+    });
+    const orderId = created.json().orderId;
+    await store.runExclusive("acct_api_8", (ctx) => ctx.recordVenueOrderId(orderId, "venue_oid_2"));
+
+    const cancel = await app.inject({ method: "POST", url: `/v1/orders/${orderId}/cancel` });
+    expect(cancel.statusCode).toBe(200);
+    expect(cancel.json().reasonCode).toBe("CANCELED_ON_VENUE");
+    expect(cancelledArgs).toEqual(["BTC", "venue_oid_2"]);
+
+    const reservation = store.getReservations().find((r) => r.id === orderId);
+    expect(reservation?.status).toBe(OrderReservationStatus.RELEASED);
+  });
+
+  it("returns 501 for cancel when a venue order id exists but no canceller is configured", async () => {
+    const store = makeStoreWithAccount("acct_api_9");
+    const app = buildApp({ store });
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/v1/orders",
+      payload: {
+        clientIntentId: "intent_9",
+        accountId: "acct_api_9",
+        coin: "BTC",
+        side: "BUY",
+        size: "1",
+        price: "50000",
+        orderStyle: "MARKET",
+        reduceOnly: false,
+      },
+    });
+    const orderId = created.json().orderId;
+    await store.runExclusive("acct_api_9", (ctx) => ctx.recordVenueOrderId(orderId, "venue_oid_3"));
+
+    const cancel = await app.inject({ method: "POST", url: `/v1/orders/${orderId}/cancel` });
+    expect(cancel.statusCode).toBe(501);
   });
 });

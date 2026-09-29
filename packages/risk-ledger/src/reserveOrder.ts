@@ -65,6 +65,7 @@ export async function reserveOrder(store: RiskLedgerStore, input: ReserveOrderIn
     const reservation = await ctx.insertReservation({
       accountId: input.accountId,
       clientIntentId: input.proposedOrder.clientIntentId,
+      coin: input.proposedOrder.coin,
       reservedAmount,
     });
 
