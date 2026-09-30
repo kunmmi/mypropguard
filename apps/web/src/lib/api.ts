@@ -92,6 +92,19 @@ export interface DryRunOrderResult {
   } | null;
 }
 
+export interface SubmitOrderResult {
+  submitted: boolean;
+  decision: { outcome: "ALLOW" | "RESIZE" | "BLOCK"; reasonCode: string; message: string };
+  signedAction: {
+    connectionId: string;
+    signature: string;
+    signerAddress: string;
+    expiresAt: string;
+  } | null;
+  orderId: string;
+  venueOrderId: string | null;
+}
+
 export const api = {
   createAccount: (input: CreateAccountInput) =>
     request<{ accountId: string; protectionOn: boolean; agentWalletAddress: string | null }>("/v1/accounts", {
@@ -121,6 +134,16 @@ export const api = {
 
   dryRunOrder: (input: DryRunOrderInput) =>
     request<DryRunOrderResult>("/v1/execution/dry-run", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+
+  // The only call in this client that can move real money. Reaches
+  // Hyperliquid when the API server has ENABLE_REAL_SIGNER and
+  // ENABLE_VENUE_SUBMISSION on - it's still risk-checked and reserved first,
+  // same as dry-run, but a real venue order id back means it actually happened.
+  submitOrder: (input: DryRunOrderInput) =>
+    request<SubmitOrderResult>("/v1/execution/submit", {
       method: "POST",
       body: JSON.stringify(input),
     }),

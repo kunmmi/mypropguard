@@ -16,6 +16,7 @@ import {
   type ProtectionStatus,
   type ReconcileResult,
   type RuleVersion,
+  type SubmitOrderResult,
 } from "@/lib/api";
 
 const STORAGE_KEY = "mypropguard.accountId";
@@ -162,6 +163,9 @@ function Dashboard({ session }: { session: Session }) {
   const [size, setSize] = useState("1");
   const [price, setPrice] = useState("50000");
   const [orderResult, setOrderResult] = useState<DryRunOrderResult | null>(null);
+  const [confirmSubmit, setConfirmSubmit] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitResult, setSubmitResult] = useState<SubmitOrderResult | null>(null);
 
   const [accounts, setAccounts] = useState<ProtectedAccountSummary[]>([]);
   const [accountsLoading, setAccountsLoading] = useState(false);
@@ -294,6 +298,7 @@ function Dashboard({ session }: { session: Session }) {
   async function handleCheckOrder() {
     if (!accountId) return;
     setError(null);
+    setSubmitResult(null);
     try {
       const result = await api.dryRunOrder({
         clientIntentId: `web_${Date.now()}`,
@@ -307,6 +312,29 @@ function Dashboard({ session }: { session: Session }) {
     } catch (err) {
       setOrderResult(null);
       setError(err instanceof Error ? err.message : "Order check failed");
+    }
+  }
+
+  async function handleSubmitOrder() {
+    if (!accountId || !confirmSubmit) return;
+    setError(null);
+    setSubmitting(true);
+    try {
+      const result = await api.submitOrder({
+        clientIntentId: `web_submit_${Date.now()}`,
+        accountId,
+        coin,
+        side,
+        size,
+        price,
+      });
+      setSubmitResult(result);
+      setConfirmSubmit(false);
+    } catch (err) {
+      setSubmitResult(null);
+      setError(err instanceof Error ? err.message : "Order submission failed");
+    } finally {
+      setSubmitting(false);
     }
   }
 
@@ -629,6 +657,56 @@ function Dashboard({ session }: { session: Session }) {
                 )}
               </div>
             )}
+
+            <div
+              style={{
+                marginTop: "var(--space-5)",
+                paddingTop: "var(--space-5)",
+                borderTop: "1px solid var(--border-default)",
+              }}
+            >
+              <div
+                style={{
+                  background: "var(--surface-sunken)",
+                  padding: "var(--space-3) var(--space-4)",
+                  borderRadius: "var(--radius-md)",
+                  marginBottom: "var(--space-4)",
+                }}
+              >
+                <h4 style={{ fontSize: "var(--text-body-md)", fontWeight: 600, marginTop: 0, marginBottom: "var(--space-2)" }}>
+                  Submit for real
+                </h4>
+                <p style={{ fontSize: 13, color: "var(--text-muted)", marginTop: 0, marginBottom: "var(--space-3)" }}>
+                  This can place a real order on Hyperliquid using the exact coin/side/size/price above, if the API
+                  server has real submission enabled. Unlike &quot;Check order&quot; above, this is not a preview.
+                </p>
+                <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, marginBottom: "var(--space-3)" }}>
+                  <input
+                    type="checkbox"
+                    checked={confirmSubmit}
+                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => setConfirmSubmit(e.target.checked)}
+                  />
+                  I understand this may place a real trade and move real funds.
+                </label>
+                <Button variant="primary" onClick={handleSubmitOrder} disabled={!confirmSubmit || submitting}>
+                  {submitting ? "Submitting…" : "Submit real order"}
+                </Button>
+              </div>
+
+              {submitResult && (
+                <div>
+                  <StatusBadge tone={submitResult.submitted ? "success" : "neutral"}>
+                    {submitResult.submitted ? "Submitted to venue" : "Not submitted"}
+                  </StatusBadge>
+                  <p style={{ fontSize: 14, marginTop: "var(--space-2)" }}>{submitResult.decision.message}</p>
+                  {submitResult.venueOrderId && (
+                    <div style={{ fontSize: 12, color: "var(--text-muted)", fontFamily: "var(--font-accent)", wordBreak: "break-all" }}>
+                      venueOrderId: {submitResult.venueOrderId}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
           </Panel>
         )}
       </div>
