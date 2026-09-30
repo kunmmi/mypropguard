@@ -20,6 +20,52 @@ import {
 } from "@/lib/api";
 
 const STORAGE_KEY = "mypropguard.accountId";
+const GUIDE_DISMISSED_KEY = "mypropguard.guideDismissed";
+
+const GUIDE_STEPS = [
+  {
+    title: "1. Provision an account",
+    body: "In \"Account\", pick an account id (any name you choose, e.g. acct_my_bot) and click \"Create account\". This sets a starting equity and one initial risk rule for it.",
+  },
+  {
+    title: "2. Approve the wallet on Hyperliquid",
+    body: "Creating an account provisions a dedicated signing wallet for it. Copy the address shown and approve it as an agent on Hyperliquid's site (API tab → Approve Agent) - this lets THIS account trade under YOUR risk rules, not through a shared key.",
+  },
+  {
+    title: "3. Set your risk rules",
+    body: "In \"Risk rules\", add limits like max daily loss or max position size. These are the mandate every order gets checked against - add or deactivate them any time, changes apply to the very next order.",
+  },
+  {
+    title: "4. Activate protection",
+    body: "In \"Protection status\", click Activate once you've reconciled real equity from Hyperliquid at least once. \"Bot can trade\" only shows green when your account's state has been freshly verified.",
+  },
+  {
+    title: "5. Check an order vs. Submit for real",
+    body: "\"Check order\" always just previews what the risk engine would decide - it never moves money. \"Submit for real\" (below it) is the only button that can actually place a trade on Hyperliquid, and needs an explicit confirmation checkbox first.",
+  },
+];
+
+function GettingStartedGuide({ onDismiss }: { onDismiss: () => void }) {
+  return (
+    <Panel title="Getting started">
+      <p style={{ marginTop: 0, fontSize: 13, color: "var(--text-muted)" }}>
+        MyPropGuard sits between you and Hyperliquid and enforces the risk rules you set - it never signals trades or
+        manages your account for you. Here's the order things happen in:
+      </p>
+      <div style={{ display: "grid", gap: "var(--space-3)", marginBottom: "var(--space-4)" }}>
+        {GUIDE_STEPS.map((step) => (
+          <div key={step.title}>
+            <div style={{ fontSize: 14, fontWeight: 600 }}>{step.title}</div>
+            <div style={{ fontSize: 13, color: "var(--text-muted)" }}>{step.body}</div>
+          </div>
+        ))}
+      </div>
+      <Button variant="subtle" size="sm" onClick={onDismiss}>
+        Got it, hide this
+      </Button>
+    </Panel>
+  );
+}
 
 const RULE_TYPE_OPTIONS = [
   { value: "MAX_DAILY_LOSS", label: "Max daily loss ($)" },
@@ -176,6 +222,8 @@ function Dashboard({ session }: { session: Session }) {
   const [newRuleParam, setNewRuleParam] = useState("");
   const [addingRule, setAddingRule] = useState(false);
 
+  const [showGuide, setShowGuide] = useState(false);
+
   useEffect(() => {
     const saved = window.localStorage.getItem(STORAGE_KEY);
     if (saved) {
@@ -183,8 +231,22 @@ function Dashboard({ session }: { session: Session }) {
       void loadAccount(saved);
     }
     void loadAccounts();
+    try {
+      setShowGuide(window.localStorage.getItem(GUIDE_DISMISSED_KEY) !== "true");
+    } catch {
+      setShowGuide(true);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  function dismissGuide() {
+    setShowGuide(false);
+    try {
+      window.localStorage.setItem(GUIDE_DISMISSED_KEY, "true");
+    } catch {
+      // per-viewer convenience only - fine if this browser blocks storage
+    }
+  }
 
   async function loadAccount(id: string) {
     if (!id) return;
@@ -395,6 +457,8 @@ function Dashboard({ session }: { session: Session }) {
       )}
 
       <div style={{ display: "grid", gap: "var(--space-6)" }}>
+        {showGuide && <GettingStartedGuide onDismiss={dismissGuide} />}
+
         <Panel title="Your accounts">
           <p style={{ marginTop: 0, fontSize: 13, color: "var(--text-muted)" }}>
             Every account you own, as {session.user.email}.
