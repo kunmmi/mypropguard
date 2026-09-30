@@ -11,3 +11,4 @@ export * from "./submitOrder.js";
 export * from "./cancelAction.js";
 export * from "./orderStatus.js";
 export * from "./orderLifecycle.js";
+export * from "./agentWalletProvisioner.js";

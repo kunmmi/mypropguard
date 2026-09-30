@@ -23,4 +23,36 @@ describe("listAccounts", () => {
     const store = new InMemoryRiskLedgerStore();
     expect(await listAccounts(store, "nobody")).toEqual([]);
   });
+
+  it("round-trips a provisioned agent wallet", async () => {
+    const store = new InMemoryRiskLedgerStore();
+    await store.createAccount({
+      accountId: "acct_with_wallet",
+      ownerUserId: "owner_wallet",
+      venue: "hyperliquid",
+      initialEquity: new Decimal(1_000),
+      initialRules: [],
+      agentWalletId: "wallet_1",
+      agentWalletAddress: "0xabc",
+    });
+
+    const accounts = await listAccounts(store, "owner_wallet");
+    expect(accounts[0]!.agentWalletId).toBe("wallet_1");
+    expect(accounts[0]!.agentWalletAddress).toBe("0xabc");
+  });
+
+  it("leaves agent wallet fields null when not provided (offline scaffold)", async () => {
+    const store = new InMemoryRiskLedgerStore();
+    await store.createAccount({
+      accountId: "acct_no_wallet",
+      ownerUserId: "owner_no_wallet",
+      venue: "hyperliquid",
+      initialEquity: new Decimal(1_000),
+      initialRules: [],
+    });
+
+    const accounts = await listAccounts(store, "owner_no_wallet");
+    expect(accounts[0]!.agentWalletId).toBeNull();
+    expect(accounts[0]!.agentWalletAddress).toBeNull();
+  });
 });

@@ -166,8 +166,9 @@ export class PgRiskLedgerStore implements RiskLedgerStore {
       await client.query("BEGIN");
       try {
         await client.query(
-          "INSERT INTO protected_accounts (account_id, owner_user_id, venue, protection_enabled) VALUES ($1, $2, $3, false)",
-          [input.accountId, input.ownerUserId, input.venue],
+          `INSERT INTO protected_accounts (account_id, owner_user_id, venue, protection_enabled, agent_wallet_id, agent_wallet_address)
+           VALUES ($1, $2, $3, false, $4, $5)`,
+          [input.accountId, input.ownerUserId, input.venue, input.agentWalletId ?? null, input.agentWalletAddress ?? null],
         );
       } catch (error) {
         if (isUniqueViolation(error)) {

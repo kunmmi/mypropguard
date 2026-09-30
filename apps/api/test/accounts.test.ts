@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { RuleType } from "@mypropguard/domain";
+import { RuleType, type AgentWalletProvisioner } from "@mypropguard/domain";
 import { InMemoryRiskLedgerStore } from "@mypropguard/test-fixtures";
 import { buildApp } from "../src/app.js";
+
+function fakeAgentWalletProvisioner(walletId: string, walletAddress: string): AgentWalletProvisioner {
+  return {
+    provisionWallet: async () => ({ walletId, walletAddress }),
+  };
+}
 
 describe("POST /v1/accounts", () => {
   it("provisions a new account with initial rules and protection off", async () => {
@@ -20,10 +26,40 @@ describe("POST /v1/accounts", () => {
     });
 
     expect(response.statusCode).toBe(201);
-    expect(response.json()).toEqual({ accountId: "acct_new_1", protectionOn: false });
+    expect(response.json()).toEqual({ accountId: "acct_new_1", protectionOn: false, agentWalletAddress: null });
 
     const protectionResponse = await app.inject({ method: "GET", url: "/v1/protection/acct_new_1" });
     expect(protectionResponse.json().maxLossToday).toBe("500");
+  });
+
+  it("provisions a real signing wallet when an agent wallet provisioner is configured", async () => {
+    const store = new InMemoryRiskLedgerStore();
+    const app = buildApp({ store, agentWalletProvisioner: fakeAgentWalletProvisioner("wallet_1", "0xabc") });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/accounts",
+      payload: { accountId: "acct_wallet_1", ownerUserId: "user_wallet", initialEquity: "1000" },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(response.json().agentWalletAddress).toBe("0xabc");
+
+    const listResponse = await app.inject({ method: "GET", url: "/v1/accounts?ownerUserId=user_wallet" });
+    expect(listResponse.json().accounts[0].agentWalletAddress).toBe("0xabc");
+  });
+
+  it("has no agent wallet address when no provisioner is configured (offline scaffold)", async () => {
+    const store = new InMemoryRiskLedgerStore();
+    const app = buildApp({ store });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/accounts",
+      payload: { accountId: "acct_no_wallet", ownerUserId: "user_no_wallet", initialEquity: "1000" },
+    });
+
+    expect(response.json().agentWalletAddress).toBeNull();
   });
 
   it("defaults to hyperliquid venue and an empty rule set", async () => {

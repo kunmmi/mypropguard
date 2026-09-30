@@ -9,6 +9,8 @@ export function rowToProtectedAccount(row: Record<string, unknown>): ProtectedAc
     venue: row.venue as string,
     protectionEnabled: row.protection_enabled as boolean,
     createdAt: new Date(row.created_at as string),
+    agentWalletId: (row.agent_wallet_id as string | null) ?? null,
+    agentWalletAddress: (row.agent_wallet_address as string | null) ?? null,
   };
 }
 

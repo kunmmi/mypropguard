@@ -41,6 +41,7 @@ export default function Dashboard() {
   const [ownerUserId, setOwnerUserId] = useState("");
   const [initialEquity, setInitialEquity] = useState("10000");
   const [maxPositionSize, setMaxPositionSize] = useState("100000");
+  const [newAgentWalletAddress, setNewAgentWalletAddress] = useState<string | null>(null);
 
   const [venueAddress, setVenueAddress] = useState("");
   const [reconcileResult, setReconcileResult] = useState<ReconcileResult | null>(null);
@@ -142,12 +143,13 @@ export default function Dashboard() {
   async function handleCreateAccount() {
     setError(null);
     try {
-      await api.createAccount({
+      const result = await api.createAccount({
         accountId,
         ownerUserId: ownerUserId || "demo_owner",
         initialEquity,
         initialRules: [{ ruleType: "MAX_POSITION_SIZE", param: maxPositionSize }],
       });
+      setNewAgentWalletAddress(result.agentWalletAddress);
       await loadAccount(accountId);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create account");
@@ -328,6 +330,25 @@ export default function Dashboard() {
                   Create account
                 </Button>
               </div>
+            </div>
+          )}
+
+          {newAgentWalletAddress && (
+            <div
+              style={{
+                marginTop: "var(--space-5)",
+                padding: "var(--space-3) var(--space-4)",
+                borderRadius: "var(--radius-md)",
+                background: "var(--surface-sunken)",
+                fontSize: 13,
+              }}
+            >
+              <div style={{ fontWeight: 600, marginBottom: 4 }}>One more step: approve this wallet on Hyperliquid</div>
+              <div style={{ color: "var(--text-muted)", marginBottom: 6 }}>
+                We provisioned a signing wallet just for this account. Go to Hyperliquid&apos;s site → API tab →
+                Approve Agent, and paste this address:
+              </div>
+              <code style={{ fontFamily: "var(--font-accent)", wordBreak: "break-all" }}>{newAgentWalletAddress}</code>
             </div>
           )}
         </Panel>

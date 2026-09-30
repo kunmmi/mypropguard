@@ -31,6 +31,8 @@ export type CreateAccountRequest = z.infer<typeof createAccountRequestSchema>;
 export const createAccountResponseSchema = z.object({
   accountId: z.string(),
   protectionOn: z.boolean(),
+  /** The address to approve as a Hyperliquid agent, if an AgentWalletProvisioner is configured. Null in the offline scaffold. */
+  agentWalletAddress: z.string().nullable(),
 });
 export type CreateAccountResponse = z.infer<typeof createAccountResponseSchema>;
 
@@ -40,6 +42,7 @@ export const protectedAccountSchema = z.object({
   venue: z.string(),
   protectionEnabled: z.boolean(),
   createdAt: isoDateTime,
+  agentWalletAddress: z.string().nullable(),
 });
 export type ProtectedAccountResponse = z.infer<typeof protectedAccountSchema>;
 

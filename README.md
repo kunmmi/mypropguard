@@ -75,7 +75,7 @@ be offline.
 
 ## What's real right now
 
-- `POST /v1/accounts` provisions a `protected_accounts` + `account_risk_heads` + initial `rule_versions` row set.
+- `POST /v1/accounts` provisions a `protected_accounts` + `account_risk_heads` + initial `rule_versions` row set. When `agentWalletProvisioner` is configured (i.e. `ENABLE_REAL_SIGNER=true`), also provisions a real, distinct Privy wallet for this specific account and returns its address as `agentWalletAddress` — that's the address a user needs to go approve as a Hyperliquid agent. Verified against the live Privy API: two calls genuinely return two different wallets, neither matching the single shared wallet the rest of the codebase still signs with (see below).
 - `POST /v1/orders` runs the real deterministic risk engine and atomic reservation logic against whatever account/rule state is in Postgres.
 - `POST /v1/accounts/:accountId/reconcile` fetches an account's live equity/exposure from Hyperliquid's public Info API (read-only, any address, no auth) and folds it into `account_risk_heads`, recording a `VERIFIED` state checkpoint.
 - `GET /v1/protection` only reports `botCanOpenNewTrades: true` once a **fresh** (< 5 minutes) `VERIFIED` checkpoint exists for that account — before the first reconcile, or once one goes stale, it correctly reports `walletNeedsAttention: true` instead. Per the blueprint: never show green protection when state continuity is unverified.
@@ -87,6 +87,30 @@ be offline.
 - `GET /v1/accounts/:accountId/rules` — real. Lists an account's active rules.
 - `POST /v1/accounts/:accountId/rules` — real. Adds a new rule to an account's mandate. Takes effect on the very next order.
 - `POST /v1/accounts/:accountId/rules/:ruleId/deactivate` — real. Deactivates a rule; idempotent.
+
+## Per-account wallet provisioning (real, not yet wired into signing)
+
+`packages/hyperliquid/src/agentWalletProvisioner.ts`'s `HyperliquidAgentWalletProvisioner`
+wraps a real Privy wallet-creation call behind the venue-agnostic
+`AgentWalletProvisioner` domain port. Every new account gets its own
+signing wallet automatically, stored on `protected_accounts.agent_wallet_id`/
+`agent_wallet_address` — this is the provisioning half of multi-user support.
+
+**Deliberately not done yet**: the actual signing/submission pipeline
+(`authorizeAndSignOrder`, `HyperliquidOrderLifecycle`) still uses the single
+server-wide wallet from `PRIVY_AGENT_WALLET_ID`/`PRIVY_AGENT_WALLET_ADDRESS`
+in `.env`, not each account's own provisioned wallet. Rewiring that is a
+separate, larger decision gated behind auth actually existing — without a
+verified caller identity, "use this account's wallet" isn't yet a real
+security boundary, just plumbing. Don't assume per-account wallets are
+live in trading until that follow-up lands.
+
+Verified against the live browser dashboard, not just the API: creating an
+account now shows a real provisioned address and a prompt to go approve it
+on Hyperliquid. Caught and fixed a real bug doing that — the callout was
+nested inside the same conditional block as the "provision a new account"
+form, so it vanished the instant the account finished loading (right after
+creation), meaning a user would never actually see the address they needed.
 
 ## Dashboard (`apps/web`)
 

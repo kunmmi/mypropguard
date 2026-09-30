@@ -1,8 +1,16 @@
-import type { ActionHasher, OrderCanceller, OrderLifecycleReader, OrderSubmitter, SignerGateway } from "@mypropguard/domain";
+import type {
+  ActionHasher,
+  AgentWalletProvisioner,
+  OrderCanceller,
+  OrderLifecycleReader,
+  OrderSubmitter,
+  SignerGateway,
+} from "@mypropguard/domain";
 import { createPool, PgExecutionSequencer, PgRiskLedgerStore } from "@mypropguard/risk-ledger";
 import {
   HyperliquidInfoClient,
   HyperliquidActionHasher,
+  HyperliquidAgentWalletProvisioner,
   HyperliquidOrderLifecycle,
   PrivyClient,
   PrivySignerGateway,
@@ -37,6 +45,7 @@ let signer: SignerGateway = new FakeSignerGateway(hasher);
 let orderSubmitter: OrderSubmitter | undefined;
 let orderCanceller: OrderCanceller | undefined;
 let orderLifecycleReader: OrderLifecycleReader | undefined;
+let agentWalletProvisioner: AgentWalletProvisioner | undefined;
 
 if (process.env.ENABLE_REAL_SIGNER === "true") {
   const { PRIVY_APP_ID, PRIVY_APP_SECRET, PRIVY_AGENT_WALLET_ID, PRIVY_AGENT_WALLET_ADDRESS } = process.env;
@@ -53,8 +62,12 @@ if (process.env.ENABLE_REAL_SIGNER === "true") {
     walletAddress: PRIVY_AGENT_WALLET_ADDRESS as `0x${string}`,
     isTestnet: true,
   });
+  // Reuses the same Privy credentials - this is just "create a wallet",
+  // not "sign with the server-wide one" - genuinely independent of the
+  // signing pipeline this flag otherwise gates, but not worth a third flag.
+  agentWalletProvisioner = new HyperliquidAgentWalletProvisioner(privyClient);
   // eslint-disable-next-line no-console
-  console.log("Real signer enabled: HyperliquidActionHasher + PrivySignerGateway.");
+  console.log("Real signer enabled: HyperliquidActionHasher + PrivySignerGateway. New accounts get a real provisioned wallet.");
 
   // Separate, more cautious gate: real signing alone can never move
   // anything; this is the flag that actually lets /v1/execution/dry-run
@@ -73,7 +86,17 @@ if (process.env.ENABLE_REAL_SIGNER === "true") {
   }
 }
 
-const app = buildApp({ store, venueReader, executionSequencer, hasher, signer, orderSubmitter, orderCanceller, orderLifecycleReader });
+const app = buildApp({
+  store,
+  venueReader,
+  executionSequencer,
+  hasher,
+  signer,
+  orderSubmitter,
+  orderCanceller,
+  orderLifecycleReader,
+  agentWalletProvisioner,
+});
 
 const port = Number(process.env.PORT ?? 3000);
 app

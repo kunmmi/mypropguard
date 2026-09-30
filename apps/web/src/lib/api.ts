@@ -55,6 +55,7 @@ export interface ProtectedAccountSummary {
   venue: string;
   protectionEnabled: boolean;
   createdAt: string;
+  agentWalletAddress: string | null;
 }
 
 export interface RuleVersion {
@@ -80,7 +81,7 @@ export interface DryRunOrderResult {
 
 export const api = {
   createAccount: (input: CreateAccountInput) =>
-    request<{ accountId: string; protectionOn: boolean }>("/v1/accounts", {
+    request<{ accountId: string; protectionOn: boolean; agentWalletAddress: string | null }>("/v1/accounts", {
       method: "POST",
       body: JSON.stringify(input),
     }),

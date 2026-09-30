@@ -24,6 +24,15 @@ export function registerAccountRoutes(app: FastifyInstance, deps: AppDeps): void
       throw error;
     }
 
+    // Provisioned before the account row is written, not inside it: a
+    // failed Privy call should fail the whole creation rather than leave an
+    // account permanently missing its wallet with no retry path.
+    let agentWallet: { walletId: string; walletAddress: string } | null = null;
+    if (deps.agentWalletProvisioner) {
+      const provisioned = await deps.agentWalletProvisioner.provisionWallet();
+      agentWallet = { walletId: provisioned.walletId, walletAddress: provisioned.walletAddress };
+    }
+
     try {
       await deps.store.createAccount({
         accountId: body.accountId,
@@ -31,6 +40,8 @@ export function registerAccountRoutes(app: FastifyInstance, deps: AppDeps): void
         venue: body.venue,
         initialEquity: new Decimal(body.initialEquity),
         initialRules: body.initialRules.map((rule) => ({ ruleType: rule.ruleType, param: new Decimal(rule.param) })),
+        agentWalletId: agentWallet?.walletId ?? null,
+        agentWalletAddress: agentWallet?.walletAddress ?? null,
       });
     } catch (error) {
       if (error instanceof AccountAlreadyExistsError) {
@@ -39,7 +50,11 @@ export function registerAccountRoutes(app: FastifyInstance, deps: AppDeps): void
       throw error;
     }
 
-    const response: CreateAccountResponse = { accountId: body.accountId, protectionOn: false };
+    const response: CreateAccountResponse = {
+      accountId: body.accountId,
+      protectionOn: false,
+      agentWalletAddress: agentWallet?.walletAddress ?? null,
+    };
     return reply.status(201).send(createAccountResponseSchema.parse(response));
   });
 
@@ -64,6 +79,7 @@ export function registerAccountRoutes(app: FastifyInstance, deps: AppDeps): void
         venue: a.venue,
         protectionEnabled: a.protectionEnabled,
         createdAt: a.createdAt.toISOString(),
+        agentWalletAddress: a.agentWalletAddress,
       })),
     };
     return reply.send(listAccountsResponseSchema.parse(response));

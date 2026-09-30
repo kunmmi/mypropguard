@@ -2,6 +2,7 @@ import Fastify, { type FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
 import type {
   ActionHasher,
+  AgentWalletProvisioner,
   ExecutionSequencer,
   OrderCanceller,
   OrderLifecycleReader,
@@ -29,6 +30,8 @@ export interface AppDeps {
   orderSubmitter?: OrderSubmitter;
   orderCanceller?: OrderCanceller;
   orderLifecycleReader?: OrderLifecycleReader;
+  /** Optional: when configured, POST /v1/accounts provisions a real signing wallet for the new account. Null/absent in the offline scaffold - accounts just get no wallet. */
+  agentWalletProvisioner?: AgentWalletProvisioner;
 }
 
 export function buildApp(deps: AppDeps): FastifyInstance {

@@ -21,6 +21,26 @@ export interface NewAccountInput {
   /** Starting equity snapshot the owner declares at provisioning time (no live venue read yet — Phase 2). */
   initialEquity: Decimal;
   initialRules: readonly NewAccountRuleInput[];
+  /** Set when an AgentWalletProvisioner was used to create this account's own signing wallet. Null in the offline scaffold. */
+  agentWalletId?: string | null;
+  agentWalletAddress?: string | null;
+}
+
+export interface ProvisionedAgentWallet {
+  walletId: string;
+  walletAddress: string;
+}
+
+/**
+ * Creates a fresh, distinct signing wallet for one account. Separate from
+ * SignerGateway (which signs with a wallet that already exists) - this is
+ * the step before it: giving each account its own wallet to eventually
+ * sign with, and an address for its owner to go approve as a Hyperliquid
+ * agent. HyperliquidAgentWalletProvisioner (packages/hyperliquid) wraps a
+ * real Privy wallet-creation call.
+ */
+export interface AgentWalletProvisioner {
+  provisionWallet(): Promise<ProvisionedAgentWallet>;
 }
 
 /**
