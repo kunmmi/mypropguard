@@ -83,6 +83,28 @@ be offline.
 - `POST /v1/execution/submit` — the endpoint that can actually reach a venue. Same risk-check → reservation → sign pipeline as dry-run; additionally submits and records the real `venueOrderId` when `ENABLE_VENUE_SUBMISSION=true` (alongside `ENABLE_REAL_SIGNER`) — if signing **or** submission fails, the reservation is released, not left permanently spending budget. Any UI wiring this up needs to make unmistakably clear to whoever clicks it that this one can move real money.
 - `GET /v1/orders/:id` — real. A reservation that was never submitted (the common case — `/v1/orders` itself never signs/submits, and neither does `/v1/execution/dry-run` anymore) reports `result: "PENDING"`, `venueOrderId: null`. One that was submitted via `/v1/execution/submit` reports its real `venueOrderId`; pass `?venueAddress=0x...` to also get a live `result: "COMMITTED"`/`"OUTCOME_UNKNOWN"` read from Hyperliquid's Info API (needs `orderLifecycleReader` configured, i.e. both flags above).
 - `POST /v1/orders/:id/cancel` — real. A reservation that never reached the venue is just released locally (`reasonCode: "NEVER_SUBMITTED"`, no venue call needed). One with a real `venueOrderId` gets a real `cancel` action built, signed, and submitted to Hyperliquid before the reservation is released — needs `ENABLE_VENUE_SUBMISSION`, else `501`.
+- `GET /v1/accounts?ownerUserId=...` — real. Lists every account owned by one user.
+- `GET /v1/accounts/:accountId/rules` — real. Lists an account's active rules.
+- `POST /v1/accounts/:accountId/rules` — real. Adds a new rule to an account's mandate. Takes effect on the very next order.
+- `POST /v1/accounts/:accountId/rules/:ruleId/deactivate` — real. Deactivates a rule; idempotent.
+
+## Dashboard (`apps/web`)
+
+Now has real account/rule management, not just single-account inspection:
+"Your accounts" (list by owner id, click to load), "Risk rules" (list active
+rules, add a new one, deactivate any of them — the panel showing this
+account's actual mandate). Verified end to end in a real browser against a
+running API: create an account, list it back, add a rule, watch the
+Protection status panel's daily-loss budget update live, deactivate the
+rule, confirm it's gone.
+
+Caught and fixed two real bugs doing that verification, not just from code
+review: (1) the deactivate-rule request sent `Content-Type: application/json`
+with no body, which Fastify's parser rejects outright — every `POST` that
+takes no input body now sends an explicit `"{}"`. (2) Protection status
+(the daily-loss budget shown) depends on active rules but wasn't refreshed
+after adding/deactivating one, so it silently went stale until the next full
+reload — both rule-mutating handlers now also refetch protection status.
 
 ## Signer vendor: Privy (real)
 

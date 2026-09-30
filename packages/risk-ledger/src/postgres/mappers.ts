@@ -1,6 +1,16 @@
 import { Decimal } from "decimal.js";
-import type { AccountRiskHead, OrderReservation, RuleVersion, StateCheckpoint } from "@mypropguard/domain";
+import type { AccountRiskHead, OrderReservation, ProtectedAccount, RuleVersion, StateCheckpoint } from "@mypropguard/domain";
 import { OrderReservationStatus, StateConfidence } from "@mypropguard/domain";
+
+export function rowToProtectedAccount(row: Record<string, unknown>): ProtectedAccount {
+  return {
+    accountId: row.account_id as string,
+    ownerUserId: row.owner_user_id as string,
+    venue: row.venue as string,
+    protectionEnabled: row.protection_enabled as boolean,
+    createdAt: new Date(row.created_at as string),
+  };
+}
 
 export function rowToAccountRiskHead(row: Record<string, unknown>): AccountRiskHead {
   return {

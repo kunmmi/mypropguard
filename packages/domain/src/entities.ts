@@ -5,6 +5,15 @@ import type {
   RuleType,
 } from "./enums.js";
 
+/** A provisioned account's identity/ownership record - separate from AccountRiskHead, which is the risk numbers. */
+export interface ProtectedAccount {
+  accountId: string;
+  ownerUserId: string;
+  venue: string;
+  protectionEnabled: boolean;
+  createdAt: Date;
+}
+
 /**
  * The per-account serialization root. Any mutation that can change whether
  * new risk may be opened must acquire this row's lock (see

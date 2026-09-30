@@ -5,9 +5,11 @@ import {
   type AccountRiskHead,
   type LedgerContext,
   type NewAccountInput,
+  type NewAccountRuleInput,
   type NewReservationInput,
   type NewStateCheckpointInput,
   type OrderReservation,
+  type ProtectedAccount,
   type RiskLedgerStore,
   type RuleVersion,
   type StateCheckpoint,
@@ -31,9 +33,14 @@ export class InMemoryRiskLedgerStore implements RiskLedgerStore {
   private readonly locks = new Map<string, Promise<unknown>>();
   private readonly protectionEnabled = new Map<string, boolean>();
   private readonly checkpoints = new Map<string, StateCheckpoint[]>();
+  private readonly accounts = new Map<string, ProtectedAccount>();
 
   seedAccountRiskHead(head: AccountRiskHead): void {
     this.heads.set(head.accountId, head);
+  }
+
+  seedAccount(account: ProtectedAccount): void {
+    this.accounts.set(account.accountId, account);
   }
 
   seedProtectionEnabled(accountId: string, enabled: boolean): void {
@@ -52,11 +59,24 @@ export class InMemoryRiskLedgerStore implements RiskLedgerStore {
     return this.reservations.find((r) => r.id === reservationId) ?? null;
   }
 
+  async listAccounts(ownerUserId: string): Promise<readonly ProtectedAccount[]> {
+    return [...this.accounts.values()]
+      .filter((a) => a.ownerUserId === ownerUserId)
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  }
+
   async createAccount(input: NewAccountInput): Promise<void> {
     if (this.heads.has(input.accountId)) {
       throw new AccountAlreadyExistsError(input.accountId);
     }
 
+    this.accounts.set(input.accountId, {
+      accountId: input.accountId,
+      ownerUserId: input.ownerUserId,
+      venue: input.venue,
+      protectionEnabled: false,
+      createdAt: new Date(),
+    });
     this.heads.set(input.accountId, {
       accountId: input.accountId,
       equityStartOfDay: input.initialEquity,
@@ -110,7 +130,31 @@ export class InMemoryRiskLedgerStore implements RiskLedgerStore {
         updateAccountRiskHead: async (head) => {
           this.heads.set(head.accountId, head);
         },
-        getActiveRules: async (id) => this.rules.get(id) ?? [],
+        getActiveRules: async (id) => (this.rules.get(id) ?? []).filter((r) => r.isActive),
+        insertRule: async (accountId: string, input: NewAccountRuleInput) => {
+          ruleSequence += 1;
+          const rule: RuleVersion = {
+            id: `rule_${ruleSequence}`,
+            accountId,
+            ruleType: input.ruleType,
+            param: input.param,
+            effectiveFrom: new Date(),
+            isActive: true,
+            createdAt: new Date(),
+          };
+          const existing = this.rules.get(accountId) ?? [];
+          this.rules.set(accountId, [...existing, rule]);
+          return rule;
+        },
+        deactivateRule: async (ruleId: string) => {
+          for (const list of this.rules.values()) {
+            const rule = list.find((r) => r.id === ruleId);
+            if (rule) {
+              rule.isActive = false;
+              return;
+            }
+          }
+        },
         getOutstandingReservationTotal: async (id) =>
           this.reservations
             .filter((r) => r.accountId === id && r.status === OrderReservationStatus.HELD)
@@ -145,6 +189,8 @@ export class InMemoryRiskLedgerStore implements RiskLedgerStore {
         isProtectionEnabled: async (id) => this.protectionEnabled.get(id) ?? false,
         setProtectionEnabled: async (id, enabled) => {
           this.protectionEnabled.set(id, enabled);
+          const account = this.accounts.get(id);
+          if (account) account.protectionEnabled = enabled;
         },
         recordStateCheckpoint: async (input: NewStateCheckpointInput) => {
           checkpointSequence += 1;

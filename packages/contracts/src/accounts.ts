@@ -1,8 +1,8 @@
 import { z } from "zod";
 import { RuleType } from "@mypropguard/domain";
-import { decimalString } from "./primitives.js";
+import { decimalString, isoDateTime } from "./primitives.js";
 
-const ruleTypeEnum = z.enum([
+export const ruleTypeEnum = z.enum([
   RuleType.MAX_DAILY_LOSS,
   RuleType.MAX_DRAWDOWN,
   RuleType.MAX_LEVERAGE,
@@ -33,3 +33,17 @@ export const createAccountResponseSchema = z.object({
   protectionOn: z.boolean(),
 });
 export type CreateAccountResponse = z.infer<typeof createAccountResponseSchema>;
+
+export const protectedAccountSchema = z.object({
+  accountId: z.string(),
+  ownerUserId: z.string(),
+  venue: z.string(),
+  protectionEnabled: z.boolean(),
+  createdAt: isoDateTime,
+});
+export type ProtectedAccountResponse = z.infer<typeof protectedAccountSchema>;
+
+export const listAccountsResponseSchema = z.object({
+  accounts: z.array(protectedAccountSchema),
+});
+export type ListAccountsResponse = z.infer<typeof listAccountsResponseSchema>;

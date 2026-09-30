@@ -59,3 +59,29 @@ describe("POST /v1/accounts", () => {
     expect(response.statusCode).toBe(400);
   });
 });
+
+describe("GET /v1/accounts", () => {
+  it("lists only accounts owned by the requested user", async () => {
+    const store = new InMemoryRiskLedgerStore();
+    const app = buildApp({ store });
+
+    await app.inject({ method: "POST", url: "/v1/accounts", payload: { accountId: "acct_list_a", ownerUserId: "owner_list_1", initialEquity: "1000" } });
+    await app.inject({ method: "POST", url: "/v1/accounts", payload: { accountId: "acct_list_b", ownerUserId: "owner_list_1", initialEquity: "2000" } });
+    await app.inject({ method: "POST", url: "/v1/accounts", payload: { accountId: "acct_list_c", ownerUserId: "owner_list_2", initialEquity: "3000" } });
+
+    const response = await app.inject({ method: "GET", url: "/v1/accounts?ownerUserId=owner_list_1" });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.accounts).toHaveLength(2);
+    expect(body.accounts.map((a: { accountId: string }) => a.accountId).sort()).toEqual(["acct_list_a", "acct_list_b"]);
+  });
+
+  it("rejects a request with no ownerUserId", async () => {
+    const store = new InMemoryRiskLedgerStore();
+    const app = buildApp({ store });
+
+    const response = await app.inject({ method: "GET", url: "/v1/accounts" });
+    expect(response.statusCode).toBe(400);
+  });
+});

@@ -5,12 +5,20 @@ import {
   OrderReservationStatus,
   type LedgerContext,
   type NewAccountInput,
+  type NewAccountRuleInput,
   type NewReservationInput,
   type NewStateCheckpointInput,
   type OrderReservation,
+  type ProtectedAccount,
   type RiskLedgerStore,
 } from "@mypropguard/domain";
-import { rowToAccountRiskHead, rowToOrderReservation, rowToRuleVersion, rowToStateCheckpoint } from "./mappers.js";
+import {
+  rowToAccountRiskHead,
+  rowToOrderReservation,
+  rowToProtectedAccount,
+  rowToRuleVersion,
+  rowToStateCheckpoint,
+} from "./mappers.js";
 
 const POSTGRES_UNIQUE_VIOLATION = "23505";
 
@@ -66,6 +74,16 @@ export class PgRiskLedgerStore implements RiskLedgerStore {
             [id],
           );
           return result.rows.map(rowToRuleVersion);
+        },
+        insertRule: async (accountId: string, input: NewAccountRuleInput) => {
+          const result = await client.query(
+            "INSERT INTO rule_versions (account_id, rule_type, param) VALUES ($1, $2, $3) RETURNING *",
+            [accountId, input.ruleType, input.param.toString()],
+          );
+          return rowToRuleVersion(result.rows[0]);
+        },
+        deactivateRule: async (ruleId: string) => {
+          await client.query("UPDATE rule_versions SET is_active = false WHERE id = $1 AND is_active = true", [ruleId]);
         },
         getOutstandingReservationTotal: async (id) => {
           const result = await client.query(
@@ -132,6 +150,14 @@ export class PgRiskLedgerStore implements RiskLedgerStore {
   async findReservationById(reservationId: string): Promise<OrderReservation | null> {
     const result = await this.pool.query("SELECT * FROM order_reservations WHERE id = $1", [reservationId]);
     return result.rows[0] ? rowToOrderReservation(result.rows[0]) : null;
+  }
+
+  async listAccounts(ownerUserId: string): Promise<readonly ProtectedAccount[]> {
+    const result = await this.pool.query(
+      "SELECT * FROM protected_accounts WHERE owner_user_id = $1 ORDER BY created_at DESC",
+      [ownerUserId],
+    );
+    return result.rows.map(rowToProtectedAccount);
   }
 
   async createAccount(input: NewAccountInput): Promise<void> {

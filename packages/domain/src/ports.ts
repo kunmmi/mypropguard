@@ -1,5 +1,5 @@
 import { Decimal } from "decimal.js";
-import type { AccountRiskHead, OrderReservation, RuleVersion } from "./entities.js";
+import type { AccountRiskHead, OrderReservation, ProtectedAccount, RuleVersion } from "./entities.js";
 import type { OrderSide, RuleType, StateConfidence } from "./enums.js";
 
 export interface NewReservationInput {
@@ -33,6 +33,10 @@ export interface LedgerContext {
   getAccountRiskHead(accountId: string): Promise<AccountRiskHead>;
   updateAccountRiskHead(head: AccountRiskHead): Promise<void>;
   getActiveRules(accountId: string): Promise<readonly RuleVersion[]>;
+  /** Adds a new rule version to this account's active mandate. */
+  insertRule(accountId: string, input: NewAccountRuleInput): Promise<RuleVersion>;
+  /** Deactivates a rule so it no longer applies to future risk decisions. No-op if already inactive - idempotent, same as releaseReservation. */
+  deactivateRule(ruleId: string): Promise<void>;
   /** Sum of reservedAmount for all HELD reservations on this account. */
   getOutstandingReservationTotal(accountId: string): Promise<Decimal>;
   insertReservation(input: NewReservationInput): Promise<OrderReservation>;
@@ -110,6 +114,8 @@ export interface RiskLedgerStore {
    * Returns null if no reservation with that id exists.
    */
   findReservationById(reservationId: string): Promise<OrderReservation | null>;
+  /** Lists accounts owned by one user. Read-only, no per-account lock needed. */
+  listAccounts(ownerUserId: string): Promise<readonly ProtectedAccount[]>;
 }
 
 export class AccountAlreadyExistsError extends Error {

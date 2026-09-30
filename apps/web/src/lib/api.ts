@@ -49,6 +49,24 @@ export interface DryRunOrderInput {
   reduceOnly?: boolean;
 }
 
+export interface ProtectedAccountSummary {
+  accountId: string;
+  ownerUserId: string;
+  venue: string;
+  protectionEnabled: boolean;
+  createdAt: string;
+}
+
+export interface RuleVersion {
+  id: string;
+  accountId: string;
+  ruleType: string;
+  param: string;
+  effectiveFrom: string;
+  isActive: boolean;
+  createdAt: string;
+}
+
 export interface DryRunOrderResult {
   mock: boolean;
   decision: { outcome: "ALLOW" | "RESIZE" | "BLOCK"; reasonCode: string; message: string };
@@ -92,4 +110,25 @@ export const api = {
       method: "POST",
       body: JSON.stringify(input),
     }),
+
+  listAccounts: (ownerUserId: string) =>
+    request<{ accounts: ProtectedAccountSummary[] }>(`/v1/accounts?ownerUserId=${encodeURIComponent(ownerUserId)}`),
+
+  listRules: (accountId: string) =>
+    request<{ rules: RuleVersion[] }>(`/v1/accounts/${encodeURIComponent(accountId)}/rules`),
+
+  addRule: (accountId: string, ruleType: string, param: string) =>
+    request<{ rule: RuleVersion }>(`/v1/accounts/${encodeURIComponent(accountId)}/rules`, {
+      method: "POST",
+      body: JSON.stringify({ ruleType, param }),
+    }),
+
+  deactivateRule: (accountId: string, ruleId: string) =>
+    // Fastify's JSON body parser rejects an empty body when Content-Type is
+    // application/json (which `request()` always sets) - this route needs
+    // no input, but still needs a real (even empty) JSON body to parse.
+    request<{ ruleId: string; isActive: false }>(
+      `/v1/accounts/${encodeURIComponent(accountId)}/rules/${encodeURIComponent(ruleId)}/deactivate`,
+      { method: "POST", body: "{}" },
+    ),
 };

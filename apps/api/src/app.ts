@@ -15,6 +15,7 @@ import { registerOrderRoutes } from "./routes/orders.js";
 import { registerProtectionRoutes } from "./routes/protection.js";
 import { registerReconciliationRoutes } from "./routes/reconciliation.js";
 import { registerExecutionRoutes } from "./routes/execution.js";
+import { registerRuleRoutes } from "./routes/rules.js";
 
 export interface AppDeps {
   store: RiskLedgerStore;
@@ -42,6 +43,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   registerProtectionRoutes(app, deps);
   registerReconciliationRoutes(app, deps);
   registerExecutionRoutes(app, deps);
+  registerRuleRoutes(app, deps);
 
   // Route handlers already return typed errors (400/409/501) for expected
   // cases. Anything reaching here is unexpected (e.g. a database driver

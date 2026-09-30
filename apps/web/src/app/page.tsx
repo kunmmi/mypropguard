@@ -4,16 +4,33 @@ import { useEffect, useState } from "react";
 import Image from "next/image";
 import { Button } from "@/design-system/components/core/Button";
 import { Input } from "@/design-system/components/forms/Input";
+import { Select } from "@/design-system/components/forms/Select";
 import { Panel } from "@/design-system/Panel";
 import { StatusBadge } from "@/design-system/StatusBadge";
 import {
   api,
   type DryRunOrderResult,
+  type ProtectedAccountSummary,
   type ProtectionStatus,
   type ReconcileResult,
+  type RuleVersion,
 } from "@/lib/api";
 
 const STORAGE_KEY = "mypropguard.accountId";
+
+const RULE_TYPE_OPTIONS = [
+  { value: "MAX_DAILY_LOSS", label: "Max daily loss ($)" },
+  { value: "MAX_DRAWDOWN", label: "Max drawdown ($)" },
+  { value: "MAX_LEVERAGE", label: "Max leverage (x)" },
+  { value: "MAX_POSITION_SIZE", label: "Max position size ($)" },
+  { value: "MAX_EXPOSURE", label: "Max exposure ($)" },
+  { value: "MAX_TRADE_FREQUENCY", label: "Max trades (count)" },
+  { value: "COOLDOWN", label: "Cooldown (seconds)" },
+];
+
+function ruleTypeLabel(ruleType: string): string {
+  return RULE_TYPE_OPTIONS.find((o) => o.value === ruleType)?.label ?? ruleType;
+}
 
 export default function Dashboard() {
   const [accountId, setAccountId] = useState("");
@@ -34,6 +51,15 @@ export default function Dashboard() {
   const [price, setPrice] = useState("50000");
   const [orderResult, setOrderResult] = useState<DryRunOrderResult | null>(null);
 
+  const [accounts, setAccounts] = useState<ProtectedAccountSummary[]>([]);
+  const [accountsLoading, setAccountsLoading] = useState(false);
+  const [accountsLoaded, setAccountsLoaded] = useState(false);
+
+  const [rules, setRules] = useState<RuleVersion[]>([]);
+  const [newRuleType, setNewRuleType] = useState("MAX_POSITION_SIZE");
+  const [newRuleParam, setNewRuleParam] = useState("");
+  const [addingRule, setAddingRule] = useState(false);
+
   useEffect(() => {
     const saved = window.localStorage.getItem(STORAGE_KEY);
     if (saved) {
@@ -51,11 +77,65 @@ export default function Dashboard() {
       const result = await api.getProtection(id);
       setStatus(result);
       window.localStorage.setItem(STORAGE_KEY, id);
+      await loadRules(id);
     } catch (err) {
       setStatus(null);
       setError(err instanceof Error ? err.message : "Failed to load account");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function loadAccounts() {
+    if (!ownerUserId) return;
+    setAccountsLoading(true);
+    setError(null);
+    try {
+      const result = await api.listAccounts(ownerUserId);
+      setAccounts(result.accounts);
+      setAccountsLoaded(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load accounts");
+    } finally {
+      setAccountsLoading(false);
+    }
+  }
+
+  async function loadRules(id: string) {
+    try {
+      const result = await api.listRules(id);
+      setRules(result.rules);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load rules");
+    }
+  }
+
+  async function handleAddRule() {
+    if (!accountId || !newRuleParam) return;
+    setAddingRule(true);
+    setError(null);
+    try {
+      await api.addRule(accountId, newRuleType, newRuleParam);
+      setNewRuleParam("");
+      // Protection status (e.g. the daily-loss budget shown) depends on
+      // active rules - refresh it too, not just the rules list, or it goes
+      // stale the moment a rule that fed it changes.
+      await Promise.all([loadRules(accountId), api.getProtection(accountId).then(setStatus)]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to add rule");
+    } finally {
+      setAddingRule(false);
+    }
+  }
+
+  async function handleDeactivateRule(ruleId: string) {
+    if (!accountId) return;
+    setError(null);
+    try {
+      await api.deactivateRule(accountId, ruleId);
+      await Promise.all([loadRules(accountId), api.getProtection(accountId).then(setStatus)]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to deactivate rule");
     }
   }
 
@@ -169,6 +249,64 @@ export default function Dashboard() {
       )}
 
       <div style={{ display: "grid", gap: "var(--space-6)" }}>
+        <Panel title="Your accounts">
+          <p style={{ marginTop: 0, fontSize: 13, color: "var(--text-muted)" }}>
+            Look up every account you own by the owner id you used when provisioning them.
+          </p>
+          <div style={{ display: "flex", gap: "var(--space-3)", alignItems: "flex-end", flexWrap: "wrap" }}>
+            <Input
+              label="Owner user id"
+              value={ownerUserId}
+              onChange={(e: React.ChangeEvent<HTMLInputElement>) => setOwnerUserId(e.target.value)}
+              placeholder="demo_owner"
+            />
+            <Button variant="secondary" onClick={loadAccounts} disabled={!ownerUserId || accountsLoading}>
+              {accountsLoading ? "Loading…" : "Load accounts"}
+            </Button>
+          </div>
+
+          {accountsLoaded && (
+            <div style={{ marginTop: "var(--space-4)" }}>
+              {accounts.length === 0 ? (
+                <p style={{ fontSize: 13, color: "var(--text-muted)", margin: 0 }}>No accounts found for that owner id yet.</p>
+              ) : (
+                <div style={{ display: "grid", gap: "var(--space-2)" }}>
+                  {accounts.map((account) => (
+                    <button
+                      key={account.accountId}
+                      onClick={() => {
+                        setAccountId(account.accountId);
+                        void loadAccount(account.accountId);
+                      }}
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        gap: "var(--space-3)",
+                        padding: "var(--space-3) var(--space-4)",
+                        borderRadius: "var(--radius-md)",
+                        border: account.accountId === accountId ? "1px solid var(--color-primary)" : "1px solid var(--border-default)",
+                        background: "var(--surface-card)",
+                        cursor: "pointer",
+                        textAlign: "left",
+                        fontFamily: "inherit",
+                      }}
+                    >
+                      <span style={{ fontSize: 14, fontWeight: 600 }}>{account.accountId}</span>
+                      <span style={{ display: "flex", gap: "var(--space-2)", alignItems: "center" }}>
+                        <span style={{ fontSize: 12, color: "var(--text-muted)" }}>{account.venue}</span>
+                        <StatusBadge tone={account.protectionEnabled ? "success" : "neutral"}>
+                          {account.protectionEnabled ? "Protected" : "Off"}
+                        </StatusBadge>
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </Panel>
+
         <Panel title="Account">
           <div style={{ display: "flex", gap: "var(--space-3)", alignItems: "flex-end", flexWrap: "wrap" }}>
             <Input label="Account ID" value={accountId} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setAccountId(e.target.value)} placeholder="acct_my_first" />
@@ -234,6 +372,61 @@ export default function Dashboard() {
               <Button variant="subtle" onClick={handleDeactivate} disabled={!status.protectionOn}>
                 Deactivate
               </Button>
+            </div>
+          </Panel>
+        )}
+
+        {status && (
+          <Panel title="Risk rules">
+            <p style={{ marginTop: 0, fontSize: 13, color: "var(--text-muted)" }}>
+              The mandate this account is actually checked against on every trade. Deactivating a rule takes effect
+              immediately — it stops applying to the very next order.
+            </p>
+
+            {rules.length === 0 ? (
+              <p style={{ fontSize: 13, color: "var(--text-muted)" }}>No active rules on this account.</p>
+            ) : (
+              <div style={{ display: "grid", gap: "var(--space-2)", marginBottom: "var(--space-5)" }}>
+                {rules.map((rule) => (
+                  <div
+                    key={rule.id}
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      gap: "var(--space-3)",
+                      padding: "var(--space-3) var(--space-4)",
+                      borderRadius: "var(--radius-md)",
+                      border: "1px solid var(--border-default)",
+                      background: "var(--surface-card)",
+                    }}
+                  >
+                    <div>
+                      <div style={{ fontSize: 14, fontWeight: 600 }}>{ruleTypeLabel(rule.ruleType)}</div>
+                      <div style={{ fontSize: 12, color: "var(--text-muted)" }}>Limit: {rule.param}</div>
+                    </div>
+                    <Button variant="subtle" size="sm" onClick={() => handleDeactivateRule(rule.id)}>
+                      Deactivate
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div style={{ paddingTop: "var(--space-4)", borderTop: "1px solid var(--border-default)" }}>
+              <h4 style={{ fontSize: "var(--text-body-md)", fontWeight: 600, marginBottom: "var(--space-3)" }}>Add a rule</h4>
+              <div style={{ display: "flex", gap: "var(--space-3)", flexWrap: "wrap", alignItems: "flex-end" }}>
+                <Select label="Rule type" options={RULE_TYPE_OPTIONS} value={newRuleType} onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setNewRuleType(e.target.value)} />
+                <Input
+                  label="Limit"
+                  value={newRuleParam}
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => setNewRuleParam(e.target.value)}
+                  placeholder="e.g. 500"
+                />
+                <Button onClick={handleAddRule} disabled={!newRuleParam || addingRule}>
+                  {addingRule ? "Adding…" : "Add rule"}
+                </Button>
+              </div>
             </div>
           </Panel>
         )}
