@@ -1,9 +1,22 @@
+import { supabase } from "./supabaseClient";
+
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3000";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  if (!session) {
+    throw new Error("Not signed in.");
+  }
+
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...init,
-    headers: { "Content-Type": "application/json", ...init?.headers },
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${session.access_token}`,
+      ...init?.headers,
+    },
   });
   const body = await response.json().catch(() => null);
   if (!response.ok) {
@@ -112,8 +125,9 @@ export const api = {
       body: JSON.stringify(input),
     }),
 
-  listAccounts: (ownerUserId: string) =>
-    request<{ accounts: ProtectedAccountSummary[] }>(`/v1/accounts?ownerUserId=${encodeURIComponent(ownerUserId)}`),
+  // The API derives ownerUserId from the authenticated bearer token, not a
+  // query param - this always lists the signed-in user's own accounts.
+  listAccounts: () => request<{ accounts: ProtectedAccountSummary[] }>("/v1/accounts"),
 
   listRules: (accountId: string) =>
     request<{ rules: RuleVersion[] }>(`/v1/accounts/${encodeURIComponent(accountId)}/rules`),

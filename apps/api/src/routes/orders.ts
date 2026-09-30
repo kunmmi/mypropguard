@@ -13,7 +13,12 @@ import {
 } from "@mypropguard/contracts";
 import { DecisionOutcome, OrderReservationStatus, type ProposedOrder } from "@mypropguard/domain";
 import { releaseReservation, reserveOrder } from "@mypropguard/risk-ledger";
-import { resolveOrderCancellerForAccount, resolveOrderLifecycleReaderForAccount, type AppDeps } from "../app.js";
+import {
+  assertAccountOwnership,
+  resolveOrderCancellerForAccount,
+  resolveOrderLifecycleReaderForAccount,
+  type AppDeps,
+} from "../app.js";
 
 function outcomeToStatus(outcome: string): CreateOrderResponse["status"] {
   if (outcome === DecisionOutcome.ALLOW) return "ACCEPTED";
@@ -32,6 +37,7 @@ export function registerOrderRoutes(app: FastifyInstance, deps: AppDeps): void {
       }
       throw error;
     }
+    if (!(await assertAccountOwnership(deps, request, reply, body.accountId))) return;
 
     const proposedOrder: ProposedOrder = {
       clientIntentId: body.clientIntentId,
@@ -76,6 +82,7 @@ export function registerOrderRoutes(app: FastifyInstance, deps: AppDeps): void {
       const response: CancelOrderResponse = { orderId, status: "NOT_FOUND", reasonCode: "RESERVATION_NOT_FOUND" };
       return reply.status(404).send(cancelOrderResponseSchema.parse(response));
     }
+    if (!(await assertAccountOwnership(deps, request, reply, reservation.accountId))) return;
 
     if (reservation.status !== OrderReservationStatus.HELD) {
       const response: CancelOrderResponse = {
@@ -124,6 +131,7 @@ export function registerOrderRoutes(app: FastifyInstance, deps: AppDeps): void {
     if (!reservation) {
       return reply.status(404).send({ error: "NOT_FOUND", message: `No order found for id ${orderId}` });
     }
+    if (!(await assertAccountOwnership(deps, request, reply, reservation.accountId))) return;
 
     // Every reservation that exists was created from an ALLOW/RESIZE
     // decision (reserveOrder never reserves for a BLOCK) - which of the two

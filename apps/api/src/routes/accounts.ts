@@ -33,10 +33,15 @@ export function registerAccountRoutes(app: FastifyInstance, deps: AppDeps): void
       agentWallet = { walletId: provisioned.walletId, walletAddress: provisioned.walletAddress };
     }
 
+    // Never trust a client-supplied ownerUserId when the caller is
+    // authenticated - always create the account under the real logged-in
+    // user, regardless of what the request body claims.
+    const ownerUserId = request.userId ?? body.ownerUserId;
+
     try {
       await deps.store.createAccount({
         accountId: body.accountId,
-        ownerUserId: body.ownerUserId,
+        ownerUserId,
         venue: body.venue,
         initialEquity: new Decimal(body.initialEquity),
         initialRules: body.initialRules.map((rule) => ({ ruleType: rule.ruleType, param: new Decimal(rule.param) })),
@@ -58,7 +63,7 @@ export function registerAccountRoutes(app: FastifyInstance, deps: AppDeps): void
     return reply.status(201).send(createAccountResponseSchema.parse(response));
   });
 
-  const listAccountsQuerySchema = z.object({ ownerUserId: z.string().min(1) });
+  const listAccountsQuerySchema = z.object({ ownerUserId: z.string().min(1).optional() });
 
   app.get("/v1/accounts", async (request, reply) => {
     let query;
@@ -71,7 +76,14 @@ export function registerAccountRoutes(app: FastifyInstance, deps: AppDeps): void
       throw error;
     }
 
-    const accounts = await listAccounts(deps.store, query.ownerUserId);
+    // Authenticated callers always list their own accounts - the query
+    // param only remains for unauthenticated tests/scaffold use.
+    const ownerUserId = request.userId ?? query.ownerUserId;
+    if (!ownerUserId) {
+      return reply.status(400).send({ error: "INVALID_REQUEST", message: "ownerUserId is required." });
+    }
+
+    const accounts = await listAccounts(deps.store, ownerUserId);
     const response: ListAccountsResponse = {
       accounts: accounts.map((a) => ({
         accountId: a.accountId,

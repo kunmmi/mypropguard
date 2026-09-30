@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { ZodError, z } from "zod";
 import { reconcileAccountFromVenue } from "@mypropguard/risk-ledger";
-import type { AppDeps } from "../app.js";
+import { assertAccountOwnership, type AppDeps } from "../app.js";
 
 const reconcileRequestSchema = z.object({ venueAddress: z.string().min(1) });
 
@@ -25,6 +25,8 @@ export function registerReconciliationRoutes(app: FastifyInstance, deps: AppDeps
     }
 
     const { accountId } = request.params as { accountId: string };
+    if (!(await assertAccountOwnership(deps, request, reply, accountId))) return;
+
     const { head } = await reconcileAccountFromVenue(deps.store, deps.venueReader, {
       accountId,
       venueAddress: body.venueAddress,

@@ -16,6 +16,7 @@
     "@mypropguard/execution": "workspace:*",
     "@mypropguard/hyperliquid": "workspace:*",
     "@mypropguard/risk-ledger": "workspace:*",
+    "@supabase/supabase-js": "^2.117.2",
     "decimal.js": "^10.4.3",
     "fastify": "^5.2.0",
     "zod": "^3.24.1"

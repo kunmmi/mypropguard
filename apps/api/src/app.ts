@@ -1,4 +1,4 @@
-import Fastify, { type FastifyInstance } from "fastify";
+import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import cors from "@fastify/cors";
 import type {
   ActionHasher,
@@ -12,6 +12,7 @@ import type {
   SignerGateway,
   VenueStateReader,
 } from "@mypropguard/domain";
+import type { AuthPreHandler } from "./auth.js";
 import { registerAccountRoutes } from "./routes/accounts.js";
 import { registerOrderRoutes } from "./routes/orders.js";
 import { registerProtectionRoutes } from "./routes/protection.js";
@@ -44,6 +45,16 @@ export interface AppDeps {
   orderLifecycleFactory?: (walletId: string) => OrderSubmitter & OrderCanceller & OrderLifecycleReader;
   /** Optional: when configured, POST /v1/accounts provisions a real signing wallet for the new account. Null/absent in the offline scaffold - accounts just get no wallet. */
   agentWalletProvisioner?: AgentWalletProvisioner;
+  /**
+   * When configured, every route requires a valid Supabase bearer token and
+   * populates request.userId - route handlers then use it to derive
+   * ownerUserId (never trust a client-supplied one) and to enforce that a
+   * user can only act on accounts they own (see assertAccountOwnership).
+   * Absent in tests and the offline scaffold, which keeps the previous
+   * unauthenticated behavior for those - production (server.ts) always
+   * configures this.
+   */
+  authPreHandler?: AuthPreHandler;
 }
 
 /**
@@ -105,12 +116,43 @@ export function resolveOrderLifecycleReaderForAccount(deps: AppDeps, accountId: 
   );
 }
 
+/**
+ * Enforces that the authenticated user (request.userId) owns the given
+ * account, replying 404/403 and returning false if not - callers must
+ * `return` immediately when this returns false. When no auth is configured
+ * (request.userId undefined - tests, offline scaffold) this is a no-op that
+ * returns true, preserving the previous unauthenticated behavior for those.
+ */
+export async function assertAccountOwnership(
+  deps: AppDeps,
+  request: FastifyRequest,
+  reply: FastifyReply,
+  accountId: string,
+): Promise<boolean> {
+  if (!request.userId) return true;
+
+  const account = await deps.store.findAccountById(accountId);
+  if (!account) {
+    reply.status(404).send({ error: "NOT_FOUND", message: `No account found for id ${accountId}` });
+    return false;
+  }
+  if (account.ownerUserId !== request.userId) {
+    reply.status(403).send({ error: "FORBIDDEN", message: "You do not own this account." });
+    return false;
+  }
+  return true;
+}
+
 export function buildApp(deps: AppDeps): FastifyInstance {
   const app = Fastify({ logger: false });
 
   // Local dev tool only, not exposed publicly: reflecting the request
   // origin lets apps/web (a different port/origin) call this API.
   void app.register(cors, { origin: true });
+
+  if (deps.authPreHandler) {
+    app.addHook("preHandler", deps.authPreHandler);
+  }
 
   registerAccountRoutes(app, deps);
   registerOrderRoutes(app, deps);

@@ -16,6 +16,7 @@ import {
   PrivySignerGateway,
 } from "@mypropguard/hyperliquid";
 import { FakeSignerGateway, PlaceholderActionHasher } from "@mypropguard/execution";
+import { createAuthPreHandler } from "./auth.js";
 import { buildApp } from "./app.js";
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -24,6 +25,15 @@ if (!DATABASE_URL) {
     "DATABASE_URL is required. Start local Supabase Postgres (`supabase start`) and set it to the printed connection string.",
   );
 }
+
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
+if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+  throw new Error(
+    "SUPABASE_URL and SUPABASE_ANON_KEY are required so every request can be authenticated against real users - without them this server would let any caller act as any accountId.",
+  );
+}
+const authPreHandler = createAuthPreHandler(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 const pool = createPool(DATABASE_URL);
 const store = new PgRiskLedgerStore(pool);
@@ -112,6 +122,7 @@ const app = buildApp({
   agentWalletProvisioner,
   signerFactory,
   orderLifecycleFactory,
+  authPreHandler,
 });
 
 const port = Number(process.env.PORT ?? 3000);

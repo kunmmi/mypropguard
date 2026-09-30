@@ -8,11 +8,13 @@ import {
   type GetProtectionResponse,
 } from "@mypropguard/contracts";
 import { activateProtection, deactivateProtection, getProtectionStatus } from "@mypropguard/risk-ledger";
-import type { AppDeps } from "../app.js";
+import { assertAccountOwnership, type AppDeps } from "../app.js";
 
 export function registerProtectionRoutes(app: FastifyInstance, deps: AppDeps): void {
   app.get("/v1/protection/:accountId", async (request, reply) => {
     const { accountId } = request.params as { accountId: string };
+    if (!(await assertAccountOwnership(deps, request, reply, accountId))) return;
+
     const gate = await getProtectionStatus(deps.store, accountId);
 
     const response: GetProtectionResponse = {
@@ -31,6 +33,8 @@ export function registerProtectionRoutes(app: FastifyInstance, deps: AppDeps): v
 
   app.post("/v1/protection/activate", async (request, reply) => {
     const { accountId } = request.body as { accountId: string };
+    if (!(await assertAccountOwnership(deps, request, reply, accountId))) return;
+
     const result = await activateProtection(deps.store, accountId);
     const response: ActivateProtectionResponse = { accountId, protectionOn: result.protectionOn };
     return reply.send(activateProtectionResponseSchema.parse(response));
@@ -38,6 +42,8 @@ export function registerProtectionRoutes(app: FastifyInstance, deps: AppDeps): v
 
   app.post("/v1/protection/deactivate", async (request, reply) => {
     const { accountId } = request.body as { accountId: string };
+    if (!(await assertAccountOwnership(deps, request, reply, accountId))) return;
+
     const result = await deactivateProtection(deps.store, accountId);
     const response: DeactivateProtectionResponse = {
       accountId,

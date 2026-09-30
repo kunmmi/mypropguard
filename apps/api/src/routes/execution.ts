@@ -4,7 +4,7 @@ import { Decimal } from "decimal.js";
 import { DecisionOutcome, OrderSide, type ProposedOrder } from "@mypropguard/domain";
 import { recordVenueOrderId, releaseReservation, reserveOrder } from "@mypropguard/risk-ledger";
 import { authorizeAndSignOrder, BlockedDecisionError } from "@mypropguard/execution";
-import { resolveOrderSubmitterForAccount, resolveSignerForAccount, type AppDeps } from "../app.js";
+import { assertAccountOwnership, resolveOrderSubmitterForAccount, resolveSignerForAccount, type AppDeps } from "../app.js";
 
 const orderRequestSchema = z.object({
   clientIntentId: z.string().min(1),
@@ -63,6 +63,7 @@ export function registerExecutionRoutes(app: FastifyInstance, deps: AppDeps): vo
       throw error;
     }
     const { accountId, proposedOrder } = parsed;
+    if (!(await assertAccountOwnership(deps, request, reply, accountId))) return;
 
     const signer = await resolveSignerForAccount(deps, accountId);
     if (!signer) {
@@ -146,6 +147,7 @@ export function registerExecutionRoutes(app: FastifyInstance, deps: AppDeps): vo
       throw error;
     }
     const { accountId, proposedOrder } = parsed;
+    if (!(await assertAccountOwnership(deps, request, reply, accountId))) return;
 
     const signer = await resolveSignerForAccount(deps, accountId);
     if (!signer) {

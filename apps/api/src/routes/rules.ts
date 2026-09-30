@@ -11,11 +11,13 @@ import {
   type ListRulesResponse,
 } from "@mypropguard/contracts";
 import { addRule, deactivateRule, listRules } from "@mypropguard/risk-ledger";
-import type { AppDeps } from "../app.js";
+import { assertAccountOwnership, type AppDeps } from "../app.js";
 
 export function registerRuleRoutes(app: FastifyInstance, deps: AppDeps): void {
   app.get("/v1/accounts/:accountId/rules", async (request, reply) => {
     const { accountId } = request.params as { accountId: string };
+    if (!(await assertAccountOwnership(deps, request, reply, accountId))) return;
+
     const rules = await listRules(deps.store, accountId);
 
     const response: ListRulesResponse = {
@@ -34,6 +36,7 @@ export function registerRuleRoutes(app: FastifyInstance, deps: AppDeps): void {
 
   app.post("/v1/accounts/:accountId/rules", async (request, reply) => {
     const { accountId } = request.params as { accountId: string };
+    if (!(await assertAccountOwnership(deps, request, reply, accountId))) return;
 
     let body;
     try {
@@ -62,6 +65,7 @@ export function registerRuleRoutes(app: FastifyInstance, deps: AppDeps): void {
 
   app.post("/v1/accounts/:accountId/rules/:ruleId/deactivate", async (request, reply) => {
     const { accountId, ruleId } = request.params as { accountId: string; ruleId: string };
+    if (!(await assertAccountOwnership(deps, request, reply, accountId))) return;
 
     await deactivateRule(deps.store, accountId, ruleId);
 

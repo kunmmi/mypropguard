@@ -1,12 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import type { Session } from "@supabase/supabase-js";
 import Image from "next/image";
 import { Button } from "@/design-system/components/core/Button";
 import { Input } from "@/design-system/components/forms/Input";
 import { Select } from "@/design-system/components/forms/Select";
 import { Panel } from "@/design-system/Panel";
 import { StatusBadge } from "@/design-system/StatusBadge";
+import { supabase } from "@/lib/supabaseClient";
 import {
   api,
   type DryRunOrderResult,
@@ -32,13 +34,122 @@ function ruleTypeLabel(ruleType: string): string {
   return RULE_TYPE_OPTIONS.find((o) => o.value === ruleType)?.label ?? ruleType;
 }
 
-export default function Dashboard() {
+function AuthForm() {
+  const [mode, setMode] = useState<"sign-in" | "sign-up">("sign-in");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  async function handleSubmit() {
+    setError(null);
+    setInfo(null);
+    setSubmitting(true);
+    try {
+      if (mode === "sign-in") {
+        const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
+        if (signInError) throw signInError;
+      } else {
+        const { error: signUpError } = await supabase.auth.signUp({ email, password });
+        if (signUpError) throw signUpError;
+        setInfo("Check your email to confirm your account, then sign in.");
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Authentication failed");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <main style={{ maxWidth: 400, margin: "80px auto", padding: "0 var(--gutter)" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)", marginBottom: "var(--space-6)" }}>
+        <Image src="/brand/monogram-forest-tight.png" alt="" width={32} height={32} />
+        <h1 style={{ fontSize: "var(--text-h2)" }}>MyPropGuard Onchain</h1>
+      </div>
+
+      <Panel title={mode === "sign-in" ? "Sign in" : "Create an account"}>
+        <div style={{ display: "grid", gap: "var(--space-4)" }}>
+          <Input
+            label="Email"
+            type="email"
+            value={email}
+            onChange={(e: React.ChangeEvent<HTMLInputElement>) => setEmail(e.target.value)}
+            required
+          />
+          <label style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 13, fontWeight: 600 }}>
+            Password
+            <input
+              type="password"
+              value={password}
+              onChange={(e: React.ChangeEvent<HTMLInputElement>) => setPassword(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && void handleSubmit()}
+              required
+              style={{
+                padding: "10px 12px",
+                borderRadius: "var(--radius-md)",
+                border: "1px solid var(--border-default)",
+                fontSize: 15,
+                fontFamily: "inherit",
+              }}
+            />
+          </label>
+          {error && <p style={{ color: "var(--color-danger)", fontSize: 13, margin: 0 }}>{error}</p>}
+          {info && <p style={{ color: "var(--text-muted)", fontSize: 13, margin: 0 }}>{info}</p>}
+          <Button onClick={() => void handleSubmit()} disabled={submitting}>
+            {submitting ? "Please wait…" : mode === "sign-in" ? "Sign in" : "Sign up"}
+          </Button>
+        </div>
+        <button
+          onClick={() => {
+            setMode(mode === "sign-in" ? "sign-up" : "sign-in");
+            setError(null);
+            setInfo(null);
+          }}
+          style={{
+            marginTop: "var(--space-4)",
+            background: "none",
+            border: "none",
+            color: "var(--color-primary)",
+            cursor: "pointer",
+            fontSize: 13,
+            padding: 0,
+          }}
+        >
+          {mode === "sign-in" ? "Need an account? Sign up" : "Already have an account? Sign in"}
+        </button>
+      </Panel>
+    </main>
+  );
+}
+
+export default function Page() {
+  const [session, setSession] = useState<Session | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => {
+      setSession(data.session);
+      setAuthLoading(false);
+    });
+    const { data: subscription } = supabase.auth.onAuthStateChange((_event, newSession) => {
+      setSession(newSession);
+    });
+    return () => subscription.subscription.unsubscribe();
+  }, []);
+
+  if (authLoading) return null;
+  if (!session) return <AuthForm />;
+  return <Dashboard session={session} />;
+}
+
+function Dashboard({ session }: { session: Session }) {
   const [accountId, setAccountId] = useState("");
   const [status, setStatus] = useState<ProtectionStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const [ownerUserId, setOwnerUserId] = useState("");
   const [initialEquity, setInitialEquity] = useState("10000");
   const [maxPositionSize, setMaxPositionSize] = useState("100000");
   const [newAgentWalletAddress, setNewAgentWalletAddress] = useState<string | null>(null);
@@ -67,6 +178,7 @@ export default function Dashboard() {
       setAccountId(saved);
       void loadAccount(saved);
     }
+    void loadAccounts();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -88,11 +200,10 @@ export default function Dashboard() {
   }
 
   async function loadAccounts() {
-    if (!ownerUserId) return;
     setAccountsLoading(true);
     setError(null);
     try {
-      const result = await api.listAccounts(ownerUserId);
+      const result = await api.listAccounts();
       setAccounts(result.accounts);
       setAccountsLoaded(true);
     } catch (err) {
@@ -145,12 +256,12 @@ export default function Dashboard() {
     try {
       const result = await api.createAccount({
         accountId,
-        ownerUserId: ownerUserId || "demo_owner",
+        ownerUserId: session.user.id,
         initialEquity,
         initialRules: [{ ruleType: "MAX_POSITION_SIZE", param: maxPositionSize }],
       });
       setNewAgentWalletAddress(result.agentWalletAddress);
-      await loadAccount(accountId);
+      await Promise.all([loadAccount(accountId), loadAccounts()]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create account");
     }
@@ -210,14 +321,19 @@ export default function Dashboard() {
 
   return (
     <main style={{ maxWidth: 880, margin: "0 auto", padding: "var(--space-7) var(--gutter)" }}>
-      <header style={{ display: "flex", alignItems: "center", gap: "var(--space-3)", marginBottom: "var(--space-2)" }}>
-        <Image src="/brand/monogram-forest-tight.png" alt="" width={32} height={32} />
-        <div>
-          <h1 style={{ fontSize: "var(--text-h2)" }}>MyPropGuard Onchain</h1>
-          <p style={{ margin: 0, fontSize: "var(--text-caption)", color: "var(--text-muted)" }}>
-            Powered by Ighodalo Labs. Hyperliquid risk enforcement, not a signal service or account manager.
-          </p>
+      <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "var(--space-3)", marginBottom: "var(--space-2)" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)" }}>
+          <Image src="/brand/monogram-forest-tight.png" alt="" width={32} height={32} />
+          <div>
+            <h1 style={{ fontSize: "var(--text-h2)" }}>MyPropGuard Onchain</h1>
+            <p style={{ margin: 0, fontSize: "var(--text-caption)", color: "var(--text-muted)" }}>
+              Powered by Ighodalo Labs. Hyperliquid risk enforcement, not a signal service or account manager.
+            </p>
+          </div>
         </div>
+        <Button variant="subtle" size="sm" onClick={() => supabase.auth.signOut()}>
+          Sign out
+        </Button>
       </header>
 
       <p
@@ -253,24 +369,18 @@ export default function Dashboard() {
       <div style={{ display: "grid", gap: "var(--space-6)" }}>
         <Panel title="Your accounts">
           <p style={{ marginTop: 0, fontSize: 13, color: "var(--text-muted)" }}>
-            Look up every account you own by the owner id you used when provisioning them.
+            Every account you own, as {session.user.email}.
           </p>
           <div style={{ display: "flex", gap: "var(--space-3)", alignItems: "flex-end", flexWrap: "wrap" }}>
-            <Input
-              label="Owner user id"
-              value={ownerUserId}
-              onChange={(e: React.ChangeEvent<HTMLInputElement>) => setOwnerUserId(e.target.value)}
-              placeholder="demo_owner"
-            />
-            <Button variant="secondary" onClick={loadAccounts} disabled={!ownerUserId || accountsLoading}>
-              {accountsLoading ? "Loading…" : "Load accounts"}
+            <Button variant="secondary" onClick={loadAccounts} disabled={accountsLoading}>
+              {accountsLoading ? "Loading…" : "Refresh"}
             </Button>
           </div>
 
           {accountsLoaded && (
             <div style={{ marginTop: "var(--space-4)" }}>
               {accounts.length === 0 ? (
-                <p style={{ fontSize: 13, color: "var(--text-muted)", margin: 0 }}>No accounts found for that owner id yet.</p>
+                <p style={{ fontSize: 13, color: "var(--text-muted)", margin: 0 }}>No accounts yet - provision one below.</p>
               ) : (
                 <div style={{ display: "grid", gap: "var(--space-2)" }}>
                   {accounts.map((account) => (
@@ -323,7 +433,6 @@ export default function Dashboard() {
                 Or provision a new account
               </h4>
               <div style={{ display: "flex", gap: "var(--space-3)", flexWrap: "wrap", alignItems: "flex-end" }}>
-                <Input label="Owner user id" value={ownerUserId} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setOwnerUserId(e.target.value)} placeholder="demo_owner" />
                 <Input label="Initial equity ($)" value={initialEquity} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setInitialEquity(e.target.value)} />
                 <Input label="Max position size ($)" value={maxPositionSize} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setMaxPositionSize(e.target.value)} />
                 <Button onClick={handleCreateAccount} disabled={!accountId}>
