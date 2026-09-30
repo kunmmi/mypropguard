@@ -88,22 +88,27 @@ be offline.
 - `POST /v1/accounts/:accountId/rules` — real. Adds a new rule to an account's mandate. Takes effect on the very next order.
 - `POST /v1/accounts/:accountId/rules/:ruleId/deactivate` — real. Deactivates a rule; idempotent.
 
-## Per-account wallet provisioning (real, not yet wired into signing)
+## Per-account wallet provisioning (real, and wired into signing)
 
 `packages/hyperliquid/src/agentWalletProvisioner.ts`'s `HyperliquidAgentWalletProvisioner`
 wraps a real Privy wallet-creation call behind the venue-agnostic
 `AgentWalletProvisioner` domain port. Every new account gets its own
 signing wallet automatically, stored on `protected_accounts.agent_wallet_id`/
-`agent_wallet_address` — this is the provisioning half of multi-user support.
+`agent_wallet_address`.
 
-**Deliberately not done yet**: the actual signing/submission pipeline
-(`authorizeAndSignOrder`, `HyperliquidOrderLifecycle`) still uses the single
-server-wide wallet from `PRIVY_AGENT_WALLET_ID`/`PRIVY_AGENT_WALLET_ADDRESS`
-in `.env`, not each account's own provisioned wallet. Rewiring that is a
-separate, larger decision gated behind auth actually existing — without a
-verified caller identity, "use this account's wallet" isn't yet a real
-security boundary, just plumbing. Don't assume per-account wallets are
-live in trading until that follow-up lands.
+**Now actually used for signing/submission/cancel/status**, not just
+displayed: `apps/api/src/app.ts`'s `resolveSignerForAccount` and its three
+`resolveOrder*ForAccount` siblings look up the account being acted on and,
+if it has its own `agentWalletId`, build a signer/lifecycle scoped to
+*that* wallet via `AppDeps.signerFactory`/`orderLifecycleFactory` — falling
+back to the single server-wide wallet only for accounts with no provisioned
+wallet of their own. `apps/api/src/routes/execution.ts` and `orders.ts` call
+these resolvers instead of a fixed dependency. Verified live: two accounts
+with different provisioned wallets got routed to different signers and
+produced different `venueOrderId`s from the same running server (see git
+history for the exact request/response pairs), and unit-tested in
+`apps/api/test/execution.test.ts`/`orders.test.ts` ("per-account wallet
+resolution").
 
 Verified against the live browser dashboard, not just the API: creating an
 account now shows a real provisioned address and a prompt to go approve it
@@ -112,9 +117,47 @@ nested inside the same conditional block as the "provision a new account"
 form, so it vanished the instant the account finished loading (right after
 creation), meaning a user would never actually see the address they needed.
 
+## Authentication (real, required)
+
+Multi-user auth via Supabase Auth. Every API route requires a valid
+Supabase bearer token (`apps/api/src/auth.ts` verifies it against
+Supabase's own auth server via `supabase.auth.getUser`) — `apps/api/src/server.ts`
+refuses to start without `SUPABASE_URL`/`SUPABASE_ANON_KEY` configured, the
+same fail-closed pattern as `DATABASE_URL`.
+
+`assertAccountOwnership` (`apps/api/src/app.ts`) enforces that the
+authenticated caller actually owns the account it's trying to act on for
+every account-scoped route (rules, execution, orders, protection,
+reconciliation) — a 403 otherwise. `POST /v1/accounts` and
+`GET /v1/accounts` always derive `ownerUserId` from the verified token, not
+the request body/query, so it can no longer be spoofed.
+
+`apps/web` gates the entire dashboard behind a real sign-in/sign-up screen
+(`AuthForm` in `src/app/page.tsx`) and attaches the session's access token
+to every API call (`src/lib/api.ts`). The old manual "owner user id" text
+field is gone — accounts are scoped to whoever is actually signed in.
+
+Tests and the offline in-memory scaffold are unaffected: `authPreHandler`
+is optional on `AppDeps`, so `request.userId` is simply `undefined` there
+and every ownership check is a no-op — all pre-existing tests needed zero
+changes. See `apps/api/test/auth.test.ts` for the auth/ownership-specific
+tests (rejecting missing/invalid tokens, spoofed `ownerUserId`, and
+cross-account access).
+
+**Requires your own Supabase project's credentials** — see `.env.example`
+(`SUPABASE_URL`/`SUPABASE_ANON_KEY`) and `apps/web/.env.local.example`
+(`NEXT_PUBLIC_SUPABASE_URL`/`NEXT_PUBLIC_SUPABASE_ANON_KEY`), from your
+Supabase project's Settings → API page.
+
 ## Dashboard (`apps/web`)
 
-Now has real account/rule management, not just single-account inspection:
+Gated behind real sign-in/sign-up (see "Authentication" above) — no
+session, no access to anything else on the page. Has a "Submit for real"
+control next to "Check order" (`POST /v1/execution/submit`), disabled until
+an explicit confirmation checkbox is checked, kept visually and
+functionally separate from the always-safe dry-run preview.
+
+Also has real account/rule management, not just single-account inspection:
 "Your accounts" (list by owner id, click to load), "Risk rules" (list active
 rules, add a new one, deactivate any of them — the panel showing this
 account's actual mandate). Verified end to end in a real browser against a
@@ -227,3 +270,30 @@ via a single atomic `INSERT ... ON CONFLICT DO UPDATE ... RETURNING`
 level — no separate lock needed). `apps/api/src/server.ts` uses it
 unconditionally, since `DATABASE_URL` is already required there regardless
 of which signer is active.
+
+## Hosting (not done yet — needs your own accounts)
+
+Everything above still only runs locally (`pnpm dev`). This repo can't
+deploy itself: hosting requires accounts and credentials on providers this
+codebase has no access to and shouldn't be given (Vercel, Railway/Fly/Render,
+your Supabase project). What's ready for it, and what you'd still do
+yourself:
+
+- **`apps/web`** is a standard Next.js app — deployable to Vercel by
+  pointing a new Vercel project at this repo with root directory
+  `apps/web` (pnpm workspace is auto-detected). Set
+  `NEXT_PUBLIC_SUPABASE_URL`/`NEXT_PUBLIC_SUPABASE_ANON_KEY`/`NEXT_PUBLIC_API_URL`
+  (the last one pointing at wherever you host `apps/api`) as Vercel project
+  env vars.
+- **`apps/api`** is a plain Fastify server (`pnpm --filter @mypropguard/api build && node dist/server.js`)
+  — deployable to any Node host (Railway, Fly.io, Render). Set every var
+  from `.env.example` (`DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`,
+  and the Privy/signer vars if you want real signing) as that host's env
+  vars, not in a committed file.
+- **Database**: point `DATABASE_URL` at your Supabase project's Postgres
+  connection string (already the case for local dev too) — no separate
+  hosting decision needed there, it's already cloud-hosted once you're using
+  a real Supabase project instead of `supabase start`.
+
+No Dockerfile/CI deploy workflow exists yet — add one if/when you pick a
+specific host, since the exact shape depends on which one.
