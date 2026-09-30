@@ -4,7 +4,7 @@ import { Decimal } from "decimal.js";
 import { DecisionOutcome, OrderSide, type ProposedOrder } from "@mypropguard/domain";
 import { recordVenueOrderId, releaseReservation, reserveOrder } from "@mypropguard/risk-ledger";
 import { authorizeAndSignOrder, BlockedDecisionError } from "@mypropguard/execution";
-import type { AppDeps } from "../app.js";
+import { resolveOrderSubmitterForAccount, resolveSignerForAccount, type AppDeps } from "../app.js";
 
 const orderRequestSchema = z.object({
   clientIntentId: z.string().min(1),
@@ -46,7 +46,7 @@ export function registerExecutionRoutes(app: FastifyInstance, deps: AppDeps): vo
    * /v1/execution/submit for the endpoint that can actually reach a venue.
    */
   app.post("/v1/execution/dry-run", async (request, reply) => {
-    if (!deps.executionSequencer || !deps.signer || !deps.hasher) {
+    if (!deps.executionSequencer || !deps.hasher) {
       return reply.status(501).send({
         error: "NOT_IMPLEMENTED",
         message: "No execution sequencer/hasher/signer configured for this server (Phase 3 scaffold not enabled).",
@@ -64,6 +64,14 @@ export function registerExecutionRoutes(app: FastifyInstance, deps: AppDeps): vo
     }
     const { accountId, proposedOrder } = parsed;
 
+    const signer = await resolveSignerForAccount(deps, accountId);
+    if (!signer) {
+      return reply.status(501).send({
+        error: "NOT_IMPLEMENTED",
+        message: "No execution sequencer/hasher/signer configured for this server (Phase 3 scaffold not enabled).",
+      });
+    }
+
     const { decision, reservation } = await reserveOrder(deps.store, {
       accountId,
       proposedOrder,
@@ -79,7 +87,7 @@ export function registerExecutionRoutes(app: FastifyInstance, deps: AppDeps): vo
     }
 
     try {
-      const { signed } = await authorizeAndSignOrder(deps.executionSequencer, deps.hasher, deps.signer, {
+      const { signed } = await authorizeAndSignOrder(deps.executionSequencer, deps.hasher, signer, {
         accountId,
         proposedOrder,
         decision,
@@ -121,7 +129,7 @@ export function registerExecutionRoutes(app: FastifyInstance, deps: AppDeps): vo
    * that unmistakable to whoever clicks the button.
    */
   app.post("/v1/execution/submit", async (request, reply) => {
-    if (!deps.executionSequencer || !deps.signer || !deps.hasher) {
+    if (!deps.executionSequencer || !deps.hasher) {
       return reply.status(501).send({
         error: "NOT_IMPLEMENTED",
         message: "No execution sequencer/hasher/signer configured for this server (Phase 3 scaffold not enabled).",
@@ -139,6 +147,14 @@ export function registerExecutionRoutes(app: FastifyInstance, deps: AppDeps): vo
     }
     const { accountId, proposedOrder } = parsed;
 
+    const signer = await resolveSignerForAccount(deps, accountId);
+    if (!signer) {
+      return reply.status(501).send({
+        error: "NOT_IMPLEMENTED",
+        message: "No execution sequencer/hasher/signer configured for this server (Phase 3 scaffold not enabled).",
+      });
+    }
+
     const { decision, reservation } = await reserveOrder(deps.store, {
       accountId,
       proposedOrder,
@@ -155,16 +171,17 @@ export function registerExecutionRoutes(app: FastifyInstance, deps: AppDeps): vo
     }
 
     try {
-      const { signed, action } = await authorizeAndSignOrder(deps.executionSequencer, deps.hasher, deps.signer, {
+      const { signed, action } = await authorizeAndSignOrder(deps.executionSequencer, deps.hasher, signer, {
         accountId,
         proposedOrder,
         decision,
         reservation,
       });
 
+      const orderSubmitter = await resolveOrderSubmitterForAccount(deps, accountId);
       let venueOrderId: string | null = null;
-      if (deps.orderSubmitter) {
-        const submitted = await deps.orderSubmitter.submit(signed, action);
+      if (orderSubmitter) {
+        const submitted = await orderSubmitter.submit(signed, action);
         venueOrderId = submitted.venueOrderId;
         await recordVenueOrderId(deps.store, accountId, reservation.id, venueOrderId);
       }

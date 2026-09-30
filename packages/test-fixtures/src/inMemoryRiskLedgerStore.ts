@@ -65,6 +65,10 @@ export class InMemoryRiskLedgerStore implements RiskLedgerStore {
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
   }
 
+  async findAccountById(accountId: string): Promise<ProtectedAccount | null> {
+    return this.accounts.get(accountId) ?? null;
+  }
+
   async createAccount(input: NewAccountInput): Promise<void> {
     if (this.heads.has(input.accountId)) {
       throw new AccountAlreadyExistsError(input.accountId);

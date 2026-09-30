@@ -13,7 +13,7 @@ import {
 } from "@mypropguard/contracts";
 import { DecisionOutcome, OrderReservationStatus, type ProposedOrder } from "@mypropguard/domain";
 import { releaseReservation, reserveOrder } from "@mypropguard/risk-ledger";
-import type { AppDeps } from "../app.js";
+import { resolveOrderCancellerForAccount, resolveOrderLifecycleReaderForAccount, type AppDeps } from "../app.js";
 
 function outcomeToStatus(outcome: string): CreateOrderResponse["status"] {
   if (outcome === DecisionOutcome.ALLOW) return "ACCEPTED";
@@ -94,7 +94,8 @@ export function registerOrderRoutes(app: FastifyInstance, deps: AppDeps): void {
       return reply.send(cancelOrderResponseSchema.parse(response));
     }
 
-    if (!deps.orderCanceller) {
+    const orderCanceller = await resolveOrderCancellerForAccount(deps, reservation.accountId);
+    if (!orderCanceller) {
       return reply.status(501).send({
         error: "NOT_IMPLEMENTED",
         message: "No order canceller configured for this server (ENABLE_REAL_SIGNER not set).",
@@ -102,7 +103,7 @@ export function registerOrderRoutes(app: FastifyInstance, deps: AppDeps): void {
     }
 
     try {
-      await deps.orderCanceller.cancelOrder(reservation.coin, reservation.venueOrderId);
+      await orderCanceller.cancelOrder(reservation.coin, reservation.venueOrderId);
     } catch {
       const response: CancelOrderResponse = { orderId, status: "REJECTED", reasonCode: "VENUE_REJECTED_CANCEL" };
       return reply.status(502).send(cancelOrderResponseSchema.parse(response));
@@ -135,7 +136,8 @@ export function registerOrderRoutes(app: FastifyInstance, deps: AppDeps): void {
       return reply.send(getOrderResponseSchema.parse(response));
     }
 
-    if (!deps.orderLifecycleReader || !venueAddress) {
+    const orderLifecycleReader = await resolveOrderLifecycleReaderForAccount(deps, reservation.accountId);
+    if (!orderLifecycleReader || !venueAddress) {
       const response: GetOrderResponse = {
         ...base,
         venueOrderId: reservation.venueOrderId,
@@ -145,7 +147,7 @@ export function registerOrderRoutes(app: FastifyInstance, deps: AppDeps): void {
       return reply.send(getOrderResponseSchema.parse(response));
     }
 
-    const liveStatus = await deps.orderLifecycleReader.getOrderStatus(venueAddress, reservation.venueOrderId);
+    const liveStatus = await orderLifecycleReader.getOrderStatus(venueAddress, reservation.venueOrderId);
     const response: GetOrderResponse = {
       ...base,
       venueOrderId: reservation.venueOrderId,

@@ -5,6 +5,16 @@ import { FakeSignerGateway, InMemoryExecutionSequencer, PlaceholderActionHasher 
 import { InMemoryRiskLedgerStore, buildAccountRiskHead, buildRuleVersion } from "@mypropguard/test-fixtures";
 import { buildApp } from "../src/app.js";
 
+function fakeSignerFor(address: string): SignerGateway {
+  return {
+    signExact: async (authorization) => ({
+      authorization,
+      signature: `sig_from_${address}`,
+      signerAddress: address,
+    }),
+  };
+}
+
 function throwingSigner(): SignerGateway {
   return {
     signExact: async () => {
@@ -288,5 +298,143 @@ describe("POST /v1/execution/submit", () => {
     });
 
     expect(response.statusCode).toBe(501);
+  });
+});
+
+describe("per-account wallet resolution", () => {
+  it("signs with an account's own provisioned wallet via signerFactory, instead of the shared fallback signer", async () => {
+    const store = new InMemoryRiskLedgerStore();
+    store.seedAccountRiskHead(buildAccountRiskHead({ accountId: "acct_own_wallet" }));
+    store.seedRules("acct_own_wallet", [buildRuleVersion(RuleType.MAX_POSITION_SIZE, 100_000)]);
+    store.seedAccount({
+      accountId: "acct_own_wallet",
+      ownerUserId: "user_1",
+      venue: "hyperliquid",
+      protectionEnabled: false,
+      createdAt: new Date(),
+      agentWalletId: "wallet_own",
+      agentWalletAddress: "0xOWNWALLET",
+    });
+
+    const hasher = new PlaceholderActionHasher();
+    const app = buildApp({
+      store,
+      executionSequencer: new InMemoryExecutionSequencer(),
+      hasher,
+      signer: new FakeSignerGateway(hasher), // shared fallback - must NOT be used here
+      signerFactory: (walletId, walletAddress) => {
+        expect(walletId).toBe("wallet_own");
+        return fakeSignerFor(walletAddress);
+      },
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/execution/dry-run",
+      payload: {
+        clientIntentId: "exec_own_wallet",
+        accountId: "acct_own_wallet",
+        coin: "BTC",
+        side: "BUY",
+        size: "1",
+        price: "50000",
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().mockSignedAction.mockSignerAddress).toBe("0xOWNWALLET");
+  });
+
+  it("falls back to the shared signer when the account has no provisioned wallet, even though signerFactory is configured", async () => {
+    const store = new InMemoryRiskLedgerStore();
+    store.seedAccountRiskHead(buildAccountRiskHead({ accountId: "acct_no_wallet" }));
+    store.seedRules("acct_no_wallet", [buildRuleVersion(RuleType.MAX_POSITION_SIZE, 100_000)]);
+    store.seedAccount({
+      accountId: "acct_no_wallet",
+      ownerUserId: "user_1",
+      venue: "hyperliquid",
+      protectionEnabled: false,
+      createdAt: new Date(),
+      agentWalletId: null,
+      agentWalletAddress: null,
+    });
+
+    const hasher = new PlaceholderActionHasher();
+    const app = buildApp({
+      store,
+      executionSequencer: new InMemoryExecutionSequencer(),
+      hasher,
+      signer: new FakeSignerGateway(hasher),
+      signerFactory: () => {
+        throw new Error("signerFactory must not be called for an account with no provisioned wallet");
+      },
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/execution/dry-run",
+      payload: {
+        clientIntentId: "exec_no_wallet",
+        accountId: "acct_no_wallet",
+        coin: "BTC",
+        side: "BUY",
+        size: "1",
+        price: "50000",
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().mockSignedAction.mockSignerAddress).toMatch(/^0xFAKE/);
+  });
+
+  it("submits through an account's own provisioned wallet via orderLifecycleFactory, instead of the shared fallback submitter", async () => {
+    const store = new InMemoryRiskLedgerStore();
+    store.seedAccountRiskHead(buildAccountRiskHead({ accountId: "acct_own_wallet_submit" }));
+    store.seedRules("acct_own_wallet_submit", [buildRuleVersion(RuleType.MAX_POSITION_SIZE, 100_000)]);
+    store.seedAccount({
+      accountId: "acct_own_wallet_submit",
+      ownerUserId: "user_1",
+      venue: "hyperliquid",
+      protectionEnabled: false,
+      createdAt: new Date(),
+      agentWalletId: "wallet_own_submit",
+      agentWalletAddress: "0xOWNWALLETSUBMIT",
+    });
+
+    const hasher = new PlaceholderActionHasher();
+    const app = buildApp({
+      store,
+      executionSequencer: new InMemoryExecutionSequencer(),
+      hasher,
+      signer: new FakeSignerGateway(hasher),
+      signerFactory: (_walletId, walletAddress) => fakeSignerFor(walletAddress),
+      orderSubmitter: fakeOrderSubmitter("should_never_happen"), // shared fallback - must NOT be used here
+      orderLifecycleFactory: (walletId) => {
+        expect(walletId).toBe("wallet_own_submit");
+        return {
+          ...fakeOrderSubmitter("venue_oid_from_own_wallet"),
+          cancelOrder: async () => {},
+          getOrderStatus: async () => ({ status: "OPEN" as const }),
+        };
+      },
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/execution/submit",
+      payload: {
+        clientIntentId: "submit_own_wallet",
+        accountId: "acct_own_wallet_submit",
+        coin: "BTC",
+        side: "BUY",
+        size: "1",
+        price: "50000",
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.submitted).toBe(true);
+    expect(body.venueOrderId).toBe("venue_oid_from_own_wallet");
   });
 });

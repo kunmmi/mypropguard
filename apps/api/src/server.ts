@@ -46,6 +46,8 @@ let orderSubmitter: OrderSubmitter | undefined;
 let orderCanceller: OrderCanceller | undefined;
 let orderLifecycleReader: OrderLifecycleReader | undefined;
 let agentWalletProvisioner: AgentWalletProvisioner | undefined;
+let signerFactory: ((walletId: string, walletAddress: string) => SignerGateway) | undefined;
+let orderLifecycleFactory: ((walletId: string) => OrderSubmitter & OrderCanceller & OrderLifecycleReader) | undefined;
 
 if (process.env.ENABLE_REAL_SIGNER === "true") {
   const { PRIVY_APP_ID, PRIVY_APP_SECRET, PRIVY_AGENT_WALLET_ID, PRIVY_AGENT_WALLET_ADDRESS } = process.env;
@@ -66,6 +68,16 @@ if (process.env.ENABLE_REAL_SIGNER === "true") {
   // not "sign with the server-wide one" - genuinely independent of the
   // signing pipeline this flag otherwise gates, but not worth a third flag.
   agentWalletProvisioner = new HyperliquidAgentWalletProvisioner(privyClient);
+  // Lets each account with its own provisioned wallet (agentWalletId) sign
+  // with that wallet instead of the single shared one above - see
+  // resolveSignerForAccount in app.ts.
+  signerFactory = (walletId, walletAddress) =>
+    new PrivySignerGateway({
+      privyClient,
+      walletId,
+      walletAddress: walletAddress as `0x${string}`,
+      isTestnet: true,
+    });
   // eslint-disable-next-line no-console
   console.log("Real signer enabled: HyperliquidActionHasher + PrivySignerGateway. New accounts get a real provisioned wallet.");
 
@@ -81,6 +93,8 @@ if (process.env.ENABLE_REAL_SIGNER === "true") {
     orderSubmitter = lifecycle;
     orderCanceller = lifecycle;
     orderLifecycleReader = lifecycle;
+    // Per-account equivalent of signerFactory - see resolveOrderSubmitterForAccount and siblings in app.ts.
+    orderLifecycleFactory = (walletId) => new HyperliquidOrderLifecycle({ privyClient, walletId, isTestnet: true });
     // eslint-disable-next-line no-console
     console.log("Venue submission enabled: orders placed via /v1/execution/dry-run now actually reach Hyperliquid.");
   }
@@ -96,6 +110,8 @@ const app = buildApp({
   orderCanceller,
   orderLifecycleReader,
   agentWalletProvisioner,
+  signerFactory,
+  orderLifecycleFactory,
 });
 
 const port = Number(process.env.PORT ?? 3000);

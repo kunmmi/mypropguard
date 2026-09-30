@@ -15,12 +15,11 @@ export interface ProtectedAccount {
   /**
    * This account's own delegated signing wallet, provisioned automatically
    * at creation - null until an AgentWalletProvisioner is configured
-   * (offline scaffold has none). Not yet used by the signing pipeline
-   * itself (authorizeAndSignOrder still signs with the single
-   * server-configured wallet) - that wiring is a separate, later decision
-   * gated behind auth actually existing to make "whose wallet" a real
-   * security boundary rather than just plumbing. This is the provisioning
-   * half: the address a user needs to approve on Hyperliquid.
+   * (offline scaffold has none). When set, apps/api's resolveSignerForAccount
+   * and its order-lifecycle siblings sign/submit/cancel/read status through
+   * THIS wallet instead of the single server-wide fallback signer - see
+   * AppDeps.signerFactory/orderLifecycleFactory. This is also the address a
+   * user needs to approve on Hyperliquid.
    */
   agentWalletId: string | null;
   agentWalletAddress: string | null;

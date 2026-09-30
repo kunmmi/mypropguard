@@ -136,6 +136,8 @@ export interface RiskLedgerStore {
   findReservationById(reservationId: string): Promise<OrderReservation | null>;
   /** Lists accounts owned by one user. Read-only, no per-account lock needed. */
   listAccounts(ownerUserId: string): Promise<readonly ProtectedAccount[]>;
+  /** Looks up one account by id - e.g. to find its provisioned agent wallet before signing. Null if it doesn't exist. */
+  findAccountById(accountId: string): Promise<ProtectedAccount | null>;
 }
 
 export class AccountAlreadyExistsError extends Error {

@@ -241,4 +241,68 @@ describe("POST /v1/orders", () => {
     const cancel = await app.inject({ method: "POST", url: `/v1/orders/${orderId}/cancel` });
     expect(cancel.statusCode).toBe(501);
   });
+
+  it("cancels and reads status through an account's own provisioned wallet via orderLifecycleFactory, instead of the shared fallback", async () => {
+    const store = makeStoreWithAccount("acct_api_10");
+    store.seedAccount({
+      accountId: "acct_api_10",
+      ownerUserId: "user_1",
+      venue: "hyperliquid",
+      protectionEnabled: true,
+      createdAt: new Date(),
+      agentWalletId: "wallet_orders_10",
+      agentWalletAddress: "0xORDERSWALLET10",
+    });
+
+    let cancelledArgs: [string, string] | null = null;
+    const app = buildApp({
+      store,
+      orderCanceller: {
+        cancelOrder: async () => {
+          throw new Error("shared fallback canceller must not be used for an account with its own wallet");
+        },
+      },
+      orderLifecycleReader: {
+        getOrderStatus: async () => {
+          throw new Error("shared fallback reader must not be used for an account with its own wallet");
+        },
+      },
+      orderLifecycleFactory: (walletId) => {
+        expect(walletId).toBe("wallet_orders_10");
+        return {
+          submit: async () => ({ venueOrderId: "unused" }),
+          cancelOrder: async (coin, venueOrderId) => {
+            cancelledArgs = [coin, venueOrderId];
+          },
+          getOrderStatus: async () => ({ status: "OPEN" }),
+        };
+      },
+    });
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/v1/orders",
+      payload: {
+        clientIntentId: "intent_10",
+        accountId: "acct_api_10",
+        coin: "BTC",
+        side: "BUY",
+        size: "1",
+        price: "50000",
+        orderStyle: "MARKET",
+        reduceOnly: false,
+      },
+    });
+    const orderId = created.json().orderId;
+    await store.runExclusive("acct_api_10", (ctx) => ctx.recordVenueOrderId(orderId, "venue_oid_own_wallet"));
+
+    const get = await app.inject({ method: "GET", url: `/v1/orders/${orderId}?venueAddress=0xabc` });
+    expect(get.statusCode).toBe(200);
+    expect(get.json().result).toBe("COMMITTED");
+
+    const cancel = await app.inject({ method: "POST", url: `/v1/orders/${orderId}/cancel` });
+    expect(cancel.statusCode).toBe(200);
+    expect(cancel.json().reasonCode).toBe("CANCELED_ON_VENUE");
+    expect(cancelledArgs).toEqual(["BTC", "venue_oid_own_wallet"]);
+  });
 });

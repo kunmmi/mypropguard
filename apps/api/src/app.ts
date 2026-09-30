@@ -7,6 +7,7 @@ import type {
   OrderCanceller,
   OrderLifecycleReader,
   OrderSubmitter,
+  ProtectedAccount,
   RiskLedgerStore,
   SignerGateway,
   VenueStateReader,
@@ -25,13 +26,83 @@ export interface AppDeps {
   /** Optional: only /v1/execution/dry-run needs these. Pair PlaceholderActionHasher with FakeSignerGateway (offline scaffold) or HyperliquidActionHasher with PrivySignerGateway (real signing, still no venue submission). */
   executionSequencer?: ExecutionSequencer;
   hasher?: ActionHasher;
+  /** Fallback signer, used when the account has no provisioned wallet of its own (see signerFactory) - and the only signer at all in the offline scaffold. */
   signer?: SignerGateway;
-  /** Optional: only present once real submission is configured (ENABLE_REAL_SIGNER). Lets dry-run actually reach the venue and lets order status/cancel act on the result. */
+  /**
+   * When set, and the account being signed for has its own agentWalletId
+   * (see agentWalletProvisioner), this builds a signer scoped to THAT
+   * account's wallet instead of falling back to the single shared `signer`.
+   * This is what makes per-account wallet provisioning actually matter for
+   * trading, rather than just an address shown on screen.
+   */
+  signerFactory?: (walletId: string, walletAddress: string) => SignerGateway;
+  /** Fallback order lifecycle (submit/cancel/status), used when the account has no provisioned wallet - and the only one at all when orderLifecycleFactory isn't configured. */
   orderSubmitter?: OrderSubmitter;
   orderCanceller?: OrderCanceller;
   orderLifecycleReader?: OrderLifecycleReader;
+  /** Per-account equivalent of signerFactory, for submit/cancel/status. */
+  orderLifecycleFactory?: (walletId: string) => OrderSubmitter & OrderCanceller & OrderLifecycleReader;
   /** Optional: when configured, POST /v1/accounts provisions a real signing wallet for the new account. Null/absent in the offline scaffold - accounts just get no wallet. */
   agentWalletProvisioner?: AgentWalletProvisioner;
+}
+
+/**
+ * Resolves which real implementation to use for one account: its own
+ * provisioned wallet when it has one and a factory is configured,
+ * otherwise the server-wide fallback instance. The same resolution rule
+ * backs signing, submitting, cancelling, and status reads, so per-account
+ * wallets apply consistently across the whole order lifecycle rather than
+ * only some of it.
+ */
+async function resolveForAccount<T>(
+  deps: AppDeps,
+  accountId: string,
+  factory: ((account: ProtectedAccount) => T) | undefined,
+  fallback: T | undefined,
+): Promise<T | undefined> {
+  if (factory) {
+    const account = await deps.store.findAccountById(accountId);
+    if (account?.agentWalletId) {
+      return factory(account);
+    }
+  }
+  return fallback;
+}
+
+export function resolveSignerForAccount(deps: AppDeps, accountId: string): Promise<SignerGateway | undefined> {
+  return resolveForAccount(
+    deps,
+    accountId,
+    deps.signerFactory && ((account) => deps.signerFactory!(account.agentWalletId!, account.agentWalletAddress!)),
+    deps.signer,
+  );
+}
+
+export function resolveOrderSubmitterForAccount(deps: AppDeps, accountId: string): Promise<OrderSubmitter | undefined> {
+  return resolveForAccount(
+    deps,
+    accountId,
+    deps.orderLifecycleFactory && ((account) => deps.orderLifecycleFactory!(account.agentWalletId!)),
+    deps.orderSubmitter,
+  );
+}
+
+export function resolveOrderCancellerForAccount(deps: AppDeps, accountId: string): Promise<OrderCanceller | undefined> {
+  return resolveForAccount(
+    deps,
+    accountId,
+    deps.orderLifecycleFactory && ((account) => deps.orderLifecycleFactory!(account.agentWalletId!)),
+    deps.orderCanceller,
+  );
+}
+
+export function resolveOrderLifecycleReaderForAccount(deps: AppDeps, accountId: string): Promise<OrderLifecycleReader | undefined> {
+  return resolveForAccount(
+    deps,
+    accountId,
+    deps.orderLifecycleFactory && ((account) => deps.orderLifecycleFactory!(account.agentWalletId!)),
+    deps.orderLifecycleReader,
+  );
 }
 
 export function buildApp(deps: AppDeps): FastifyInstance {

@@ -160,6 +160,11 @@ export class PgRiskLedgerStore implements RiskLedgerStore {
     return result.rows.map(rowToProtectedAccount);
   }
 
+  async findAccountById(accountId: string): Promise<ProtectedAccount | null> {
+    const result = await this.pool.query("SELECT * FROM protected_accounts WHERE account_id = $1", [accountId]);
+    return result.rows[0] ? rowToProtectedAccount(result.rows[0]) : null;
+  }
+
   async createAccount(input: NewAccountInput): Promise<void> {
     const client = await this.pool.connect();
     try {
