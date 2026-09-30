@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: mypropguard-api
+    runtime: node
+    plan: free
+    region: oregon
+    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm --filter @mypropguard/api build
+    startCommand: node apps/api/dist/server.js
+    envVars:
+      - key: PORT
+        value: 3000
+      - key: DATABASE_URL
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: PRIVY_APP_ID
+        sync: false
+      - key: PRIVY_APP_SECRET
+        sync: false
+      - key: ENABLE_REAL_SIGNER
+        value: "false"
+      - key: PRIVY_AGENT_WALLET_ID
+        sync: false
+      - key: PRIVY_AGENT_WALLET_ADDRESS
+        sync: false
