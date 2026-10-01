@@ -73,30 +73,36 @@ within-limit case proves the Guard let it through (confirmed by the revert NOT c
 Guard's own error selector) before GMX's own logic rejects it deeper in for lack of real
 collateral - the same limitation the plain fork-integration tests already had.
 
-## Then: wire this into the actual MyPropGuard product
+## Done: wired into the actual MyPropGuard product (provisioning + dashboard)
 
-Everything above lives only in `packages/evm-guard` as standalone, tested Solidity - connected to
-real TypeScript orchestration code now (`packages/evm`), but not yet to MyPropGuard's actual
-account/rule system in `apps/api`/Postgres (contrast with the Hyperliquid side, where `apps/api`
-actually provisions wallets and signs real orders). To make this a real, usable feature:
+1. **Provisioning - done, real, wired in.** `packages/evm`'s `SafeDeployer` (verified against a
+   real local Anvil chain) is now called from `POST /v1/accounts` via the new
+   `EvmSafeProvisioner` domain port and `EvmChainSafeProvisioner` adapter, opt-in per chain via
+   `AppDeps.evmSafeProvisioners` - `server.ts` wires one concrete example (Arbitrum/GMX) behind
+   `ENABLE_EVM_ARBITRUM_PROVISIONING`. `protected_accounts` gained
+   `evm_owner_wallet_address`/`evm_safe_address`/`evm_chain_id` columns
+   (`supabase/migrations/0007_evm_safe_accounts.sql`) to persist the result. A request with
+   `venue="arbitrum-gmx"` + `evmOwnerWalletAddress` + `evmChainId=42161` now deploys a real Safe
+   and returns its address - 2 new apps/api tests prove this is actually called when configured
+   and skipped when it isn't.
+2. **Dashboard - done.** A Venue selector (Hyperliquid vs GMX on Arbitrum) in the "provision a
+   new account" form reveals a "Your wallet address" field for EVM venues, and shows the
+   provisioned Safe address afterward with instructions to connect it directly on GMX's own UI -
+   mirroring the existing Hyperliquid agent-wallet-approval callout. Verified live in the browser.
 
-1. **Provisioning**: done at the library level - `packages/evm`'s `SafeDeployer` deploys a real
-   Safe with the Guard already attached, zero trader signature, verified against a real local
-   Anvil chain (`packages/evm/test/safeFlow.anvil.test.ts`). What's missing: calling it from an
-   actual `apps/api` route instead of a test, and persisting the resulting Safe address per
-   account in Postgres (a new column/table - `protected_accounts` currently only has Privy
-   wallet fields, which don't fit a Safe address).
-2. **Rule sync**: done at the library level - `packages/evm`'s `GmxGuardClient`/`SpotGuardClient`
-   call each Guard's admin-only rule functions, verified the same way. What's missing: triggering
-   these calls from `apps/api` when a user sets/changes a rule in Postgres, and provisioning a
-   funded admin wallet per chain to pay the gas for these calls (a new operational requirement,
-   unlike Hyperliquid's gas-free signing model).
-3. **Dashboard**: a new "EVM accounts" panel showing the Safe's address (what the trader actually
-   connects to GMX/PancakeSwap/Uniswap's own UI with), current limits, and trade history read
-   back from the Guard's emitted events. Not started.
+## Deliberately not done yet (real decisions needed, not just more time)
+
+3. **Rule sync**: `packages/evm`'s `GmxGuardClient`/`SpotGuardClient` exist and are verified
+   (same Anvil test), but nothing in `apps/api` calls them yet when a Postgres rule
+   changes. Blocked on a real schema decision, not just wiring: the spot Guards'
+   `setTokenLimit` is per-token, and `rule_versions` has no token column - extending it needs an
+   actual design choice (a new column? a new rule type? how does "max $100 per trade in USDT"
+   round-trip through the existing single-decimal `param` field?), not a guess. Also needs a
+   funded admin wallet per chain to pay gas for these calls, an operational requirement
+   Hyperliquid's gas-free signing never had.
 4. **Real funded proof**: the same bar as the Hyperliquid mainnet proof - a real Safe, real
    funds, a real trade through the real exchange UI, with a rule violation genuinely reverting
-   on-chain. The *mechanism* is now proven on forks (see above); this step is specifically about
+   on-chain. The *mechanism* is proven on forks (see above); this step is specifically about
    doing it with real money on real mainnet, which needs the account owner's own funded wallet -
    prepare it, have them run it, same pattern as the Hyperliquid mainnet proof.
 
