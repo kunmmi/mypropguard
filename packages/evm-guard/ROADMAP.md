@@ -254,3 +254,37 @@ all passing alongside the full existing suite (63 `apps/api`, 34 `packages/risk-
 Max daily loss for BSC/PancakeSwap accounts is now built end to end: schema → freeze mechanism →
 decision logic → live equity feed → automatic periodic enforcement. Ethereum/Uniswap still lacks
 only the equity reader (no Uniswap-specific pricing built yet) to reach the same state.
+
+## Done: a frozen account can still sell, never buy
+
+Per explicit product direction: blocking a trader from exiting a losing position while frozen
+works against the entire point of the feature (stopping *new* risk, not trapping someone in an
+existing one). Both spot Guards now distinguish direction: `_checkAndRecord` only applies the
+freeze check when the trade's output token is **not** the chain's native asset or its wrapped form
+(BNB/WBNB for PancakeSwap, ETH/WETH for Uniswap) - i.e. a trade that returns to the base asset is
+always allowed, frozen or not. Every other check (per-token amount limit, trade count) still
+applies to that exit exactly as it would to any other trade - the exemption only ever touches the
+freeze.
+
+This needed real decode work, not just a flag: the Guards previously only extracted the *input*
+token from a swap call. Both now also extract the *output* token - trivial for V3 (`exactInputSingle`'s
+struct already names `tokenOut`), and for V2's `swapExactTokensForTokens`/`...Fee` and
+`exactInput`'s packed path, the output token is the path's last entry (`_lastTokenFromPath`,
+mirroring the existing `_firstTokenFromPath`). `swapExactTokensForETH`/`swapExactETHForTokens`
+don't need path inspection at all - the function name itself guarantees which side is native.
+
+A direct token-for-token swap where **neither** side is the base asset (e.g. one meme coin for
+another) is deliberately **not** treated as an exit - it still opens exposure to a different asset,
+not a return to safety, so it stays blocked while frozen. This is a conservative choice: ambiguous
+cases are blocked, not guessed at.
+
+Both contracts' constructors gained a third parameter (`wrappedNative` - WBNB or WETH) to make this
+recognition possible; `DeployBscGuard.s.sol` was updated to pass BSC's real WBNB address. This is a
+breaking constructor change, made before any real deployment exists, so there is no migration cost.
+
+**Proof:** 6 new Foundry tests per Guard contract (selling into native and into wrapped-native are
+both allowed while frozen; buying with either is blocked; a direct token-for-token swap stays
+blocked; an allowed exit still enforces the per-token amount limit), written to run against this
+machine's own Foundry install alongside the full existing suite including the multicall/batch and
+V2/V3 decode-shape regression tests from before this change - confirm with `forge test` before
+deploying.

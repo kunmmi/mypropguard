@@ -23,6 +23,9 @@ import {PancakeSwapLimitGuard} from "../src/PancakeSwapLimitGuard.sol";
 contract DeployBscGuard is Script {
     // PancakeSwap's own canonical V2 Router on BSC mainnet - never MyPropGuard's own contract.
     address constant PANCAKESWAP_V2_ROUTER = 0x10ED43C718714eb63d5aA57B78B54704E256024E;
+    // Wrapped BNB - lets the Guard recognize a trade that exits back into BNB (allowed even while
+    // an account is frozen) versus one that opens a new position (blocked while frozen).
+    address constant WBNB = 0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c;
 
     function run() external {
         address adminAddress = vm.envAddress("ADMIN_ADDRESS");
@@ -32,7 +35,7 @@ contract DeployBscGuard is Script {
         SafeGuardSetup safeGuardSetup = new SafeGuardSetup();
         console.log("SafeGuardSetup deployed at:", address(safeGuardSetup));
 
-        PancakeSwapLimitGuard guard = new PancakeSwapLimitGuard(adminAddress, PANCAKESWAP_V2_ROUTER);
+        PancakeSwapLimitGuard guard = new PancakeSwapLimitGuard(adminAddress, PANCAKESWAP_V2_ROUTER, WBNB);
         console.log("PancakeSwapLimitGuard deployed at:", address(guard));
         console.log("Guard admin set to:", adminAddress);
         console.log("PancakeSwap V2 Router registered:", PANCAKESWAP_V2_ROUTER);

@@ -20,9 +20,10 @@ contract UniswapLimitGuardTest is Test {
     address otherTarget = address(0xBEEF);
     address usdt = address(0xdAC17F958D2ee523a2206206994597C13D831ec7);
     address dai = address(0x6B175474E89094C44Da98b954EedeAC495271d0F);
+    address weth = address(0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2);
 
     function setUp() public {
-        guard = new UniswapLimitGuard(admin, v2Router);
+        guard = new UniswapLimitGuard(admin, v2Router, weth);
         vm.startPrank(admin);
         guard.setRouterKind(v3RouterNoDeadline, UniswapLimitGuard.RouterKind.V3NoDeadline);
         guard.setRouterKind(v3RouterWithDeadline, UniswapLimitGuard.RouterKind.V3WithDeadline);
@@ -37,6 +38,24 @@ contract UniswapLimitGuardTest is Test {
         path[1] = tokenOut;
         return abi.encodeWithSignature(
             "swapExactTokensForTokens(uint256,uint256,address[],address,uint256)", amountIn, 0, path, safeAccount, block.timestamp + 300
+        );
+    }
+
+    function _swapExactTokensForEth(uint256 amountIn, address tokenIn) private view returns (bytes memory) {
+        address[] memory path = new address[](2);
+        path[0] = tokenIn;
+        path[1] = weth;
+        return abi.encodeWithSignature(
+            "swapExactTokensForETH(uint256,uint256,address[],address,uint256)", amountIn, 0, path, safeAccount, block.timestamp + 300
+        );
+    }
+
+    function _swapExactEthForTokens(address tokenOut) private view returns (bytes memory) {
+        address[] memory path = new address[](2);
+        path[0] = weth;
+        path[1] = tokenOut;
+        return abi.encodeWithSignature(
+            "swapExactETHForTokens(uint256,address[],address,uint256)", 0, path, safeAccount, block.timestamp + 300
         );
     }
 
@@ -278,5 +297,69 @@ contract UniswapLimitGuardTest is Test {
         vm.expectRevert(UniswapLimitGuard.NotAdmin.selector);
         vm.prank(safeAccount);
         guard.recordDailyLossBreach(safeAccount);
+    }
+
+    // ---- buy/sell asymmetry while frozen - selling into ETH is always allowed ---------------
+
+    function test_V2_SellingForNativeEthIsAllowedEvenWhileFrozen() public {
+        _setLimits(5, usdt, 1000e18);
+        vm.prank(admin);
+        guard.recordDailyLossBreach(safeAccount);
+
+        // swapExactTokensForETH always outputs native ETH regardless of the path's last entry.
+        _checkAsSafe(v2Router, 0, _swapExactTokensForEth(500e18, usdt));
+        (, uint256 tradesToday) = guard.tradeState(safeAccount);
+        assertEq(tradesToday, 1);
+    }
+
+    function test_V2_BuyingWithNativeEthIsBlockedWhileFrozen() public {
+        _setLimits(5, address(0), 0);
+        vm.prank(admin);
+        guard.recordDailyLossBreach(safeAccount);
+
+        vm.expectRevert(abi.encodeWithSelector(UniswapLimitGuard.AccountIsFrozen.selector, safeAccount));
+        _checkAsSafe(v2Router, 1 ether, _swapExactEthForTokens(usdt));
+    }
+
+    function test_V3_SellingForWethIsAllowedEvenWhileFrozen() public {
+        _setLimits(5, usdt, 1000e18);
+        vm.prank(admin);
+        guard.recordDailyLossBreach(safeAccount);
+
+        // V3 routers always output the wrapped form, never the native sentinel directly.
+        _checkAsSafe(v3RouterNoDeadline, 0, _exactInputSingleNoDeadline(usdt, weth, 500e18));
+        (, uint256 tradesToday) = guard.tradeState(safeAccount);
+        assertEq(tradesToday, 1);
+    }
+
+    function test_V3_BuyingFromWethIsBlockedWhileFrozen() public {
+        _setLimits(5, weth, 1000e18);
+        vm.prank(admin);
+        guard.recordDailyLossBreach(safeAccount);
+
+        vm.expectRevert(abi.encodeWithSelector(UniswapLimitGuard.AccountIsFrozen.selector, safeAccount));
+        _checkAsSafe(v3RouterNoDeadline, 0, _exactInputSingleNoDeadline(weth, usdt, 500e18));
+    }
+
+    function test_DirectTokenToTokenSwapNeitherSideEthIsConservativelyBlockedWhileFrozen() public {
+        // usdt -> dai: neither side is ETH/WETH, so this still opens exposure to a different
+        // token rather than returning to the base asset - must stay blocked while frozen.
+        _setLimits(5, usdt, 1000e18);
+        vm.prank(admin);
+        guard.recordDailyLossBreach(safeAccount);
+
+        vm.expectRevert(abi.encodeWithSelector(UniswapLimitGuard.AccountIsFrozen.selector, safeAccount));
+        _checkAsSafe(v2Router, 0, _swapExactTokensForTokens(500e18, usdt, dai));
+    }
+
+    function test_SellingForEthStillEnforcesTheTokenAmountAndTradeCountLimits() public {
+        // The freeze exemption only skips the freeze check itself - every other rule still
+        // applies to an exit trade exactly as it would to any other trade.
+        _setLimits(5, usdt, 1000e18);
+        vm.prank(admin);
+        guard.recordDailyLossBreach(safeAccount);
+
+        vm.expectRevert(abi.encodeWithSelector(UniswapLimitGuard.TradeAmountExceeded.selector, usdt, 2000e18, 1000e18));
+        _checkAsSafe(v2Router, 0, _swapExactTokensForEth(2000e18, usdt));
     }
 }

@@ -42,7 +42,7 @@ contract UniswapSafeEndToEndTest is Test {
         );
         safe = Safe(payable(address(factory.createProxyWithNonce(address(safeSingleton), initializer, 0))));
 
-        guard = new UniswapLimitGuard(admin, V2_ROUTER);
+        guard = new UniswapLimitGuard(admin, V2_ROUTER, WETH);
         _execAsTrader(address(safe), 0, abi.encodeWithSignature("setGuard(address)", address(guard)), Enum.Operation.Call);
 
         address nativeEth = guard.NATIVE_ETH();

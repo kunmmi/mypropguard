@@ -23,7 +23,7 @@ contract UniswapForkIntegrationTest is Test {
     function setUp() public {
         string memory rpcUrl = vm.envOr("ETH_RPC_URL", string("https://ethereum.publicnode.com"));
         vm.createSelectFork(rpcUrl);
-        guard = new UniswapLimitGuard(address(this), V2_ROUTER);
+        guard = new UniswapLimitGuard(address(this), V2_ROUTER, WETH);
         guard.setRouterKind(SWAP_ROUTER_02, UniswapLimitGuard.RouterKind.V3NoDeadline);
         guard.setMaxTradesPerDay(trader, 10);
         guard.setTokenLimit(trader, guard.NATIVE_ETH(), 1 ether);

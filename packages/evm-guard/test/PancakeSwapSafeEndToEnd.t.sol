@@ -42,7 +42,7 @@ contract PancakeSwapSafeEndToEndTest is Test {
         );
         safe = Safe(payable(address(factory.createProxyWithNonce(address(safeSingleton), initializer, 0))));
 
-        guard = new PancakeSwapLimitGuard(admin, V2_ROUTER);
+        guard = new PancakeSwapLimitGuard(admin, V2_ROUTER, WBNB);
         _execAsTrader(address(safe), 0, abi.encodeWithSignature("setGuard(address)", address(guard)), Enum.Operation.Call);
 
         address nativeBnb = guard.NATIVE_BNB();

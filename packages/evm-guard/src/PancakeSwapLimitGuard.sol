@@ -68,6 +68,12 @@ contract PancakeSwapLimitGuard is BaseGuard {
 
     address public immutable admin;
 
+    /// @notice PancakeSwap's wrapped native token (WBNB on BSC). Used only to recognize a trade
+    /// that exits into BNB (see `_checkAndRecord`'s exit-trade exemption) - V3 routers always use
+    /// the wrapped form as `tokenOut`, never the native sentinel below, since a V3 swap's
+    /// recipient can't receive raw native value directly from the router.
+    address public immutable wrappedNative;
+
     address public constant NATIVE_BNB = address(0);
 
     // --- V2-style selectors (unchanged from the original V2-only Guard) ---
@@ -145,8 +151,10 @@ contract PancakeSwapLimitGuard is BaseGuard {
     /// routers or limits.
     /// @param _v2Router PancakeSwap V2 Router address, registered as `RouterKind.V2` immediately so
     /// existing V2-only deployments of this Guard keep working with zero extra setup.
-    constructor(address _admin, address _v2Router) {
+    /// @param _wrappedNative WBNB's address on this chain - see the field's own NatSpec.
+    constructor(address _admin, address _v2Router, address _wrappedNative) {
         admin = _admin;
+        wrappedNative = _wrappedNative;
         routerKind[_v2Router] = RouterKind.V2;
         emit RouterConfigured(_v2Router, RouterKind.V2);
     }
@@ -215,7 +223,6 @@ contract PancakeSwapLimitGuard is BaseGuard {
         RouterKind kind = routerKind[to];
         if (kind == RouterKind.None) return;
         if (operation == Enum.Operation.DelegateCall) revert DelegateCallNotAllowed();
-        if (frozenThroughDay[account] == block.timestamp / 1 days) revert AccountIsFrozen(account);
 
         uint256 tradeLimit = maxTradesPerDay[account];
         if (tradeLimit == 0) revert LimitsNotConfigured(account);
@@ -228,9 +235,9 @@ contract PancakeSwapLimitGuard is BaseGuard {
     }
 
     function _enforceV2(address account, uint256 value, bytes memory data, uint256 tradeLimit) private {
-        (address inputToken, uint256 inputAmount, bool isSwap) = _decodeV2Swap(data, value);
+        (address inputToken, address outputToken, uint256 inputAmount, bool isSwap) = _decodeV2Swap(data, value);
         if (!isSwap) return;
-        _checkAndRecord(account, inputToken, inputAmount, tradeLimit);
+        _checkAndRecord(account, inputToken, outputToken, inputAmount, tradeLimit);
     }
 
     /// @dev Handles both direct exactInputSingle/exactInput calls and the same wrapped inside
@@ -256,9 +263,9 @@ contract PancakeSwapLimitGuard is BaseGuard {
             return;
         }
 
-        (address inputToken, uint256 inputAmount, bool isSwap) = _decodeV3Swap(sel, data, kind);
+        (address inputToken, address outputToken, uint256 inputAmount, bool isSwap) = _decodeV3Swap(sel, data, kind);
         if (!isSwap) return;
-        _checkAndRecord(account, inputToken, inputAmount, tradeLimit);
+        _checkAndRecord(account, inputToken, outputToken, inputAmount, tradeLimit);
     }
 
     function _enforceV3Batch(address account, bytes[] memory calls, uint256 tradeLimit, RouterKind kind) private {
@@ -266,13 +273,25 @@ contract PancakeSwapLimitGuard is BaseGuard {
             bytes memory inner = calls[i];
             if (inner.length < 4) continue;
             bytes4 innerSel = _selector(inner);
-            (address inputToken, uint256 inputAmount, bool isSwap) = _decodeV3Swap(innerSel, inner, kind);
+            (address inputToken, address outputToken, uint256 inputAmount, bool isSwap) = _decodeV3Swap(innerSel, inner, kind);
             if (!isSwap) continue;
-            _checkAndRecord(account, inputToken, inputAmount, tradeLimit);
+            _checkAndRecord(account, inputToken, outputToken, inputAmount, tradeLimit);
         }
     }
 
-    function _checkAndRecord(address account, address inputToken, uint256 inputAmount, uint256 tradeLimit) private {
+    /// @dev `isExit` (output is native BNB or WBNB) skips only the daily-loss freeze - every other
+    /// check (per-token amount limit, trade count) still applies regardless of direction. This is
+    /// the one deliberate asymmetry in an otherwise direction-agnostic Guard: a frozen account may
+    /// still reduce a position back to BNB, but may never use BNB (or any other token) to open or
+    /// add to one. A direct token-for-token swap where neither side is BNB/WBNB is NOT treated as
+    /// an exit - conservatively blocked while frozen, since it still opens exposure to a different
+    /// token rather than returning to the base asset.
+    function _checkAndRecord(address account, address inputToken, address outputToken, uint256 inputAmount, uint256 tradeLimit) private {
+        bool isExit = outputToken == NATIVE_BNB || outputToken == wrappedNative;
+        if (!isExit && frozenThroughDay[account] == block.timestamp / 1 days) {
+            revert AccountIsFrozen(account);
+        }
+
         uint256 tokenLimit = maxAmountPerTrade[account][inputToken];
         if (tokenLimit != 0 && inputAmount > tokenLimit) {
             revert TradeAmountExceeded(inputToken, inputAmount, tokenLimit);
@@ -290,59 +309,63 @@ contract PancakeSwapLimitGuard is BaseGuard {
         emit SwapChecked(account, inputToken, inputAmount, tradesToday);
     }
 
-    function _decodeV2Swap(bytes memory data, uint256 value) private pure returns (address, uint256, bool) {
-        if (data.length < 4) return (address(0), 0, false);
+    function _decodeV2Swap(bytes memory data, uint256 value) private pure returns (address, address, uint256, bool) {
+        if (data.length < 4) return (address(0), address(0), 0, false);
         bytes4 sel = _selector(data);
 
-        if (
-            sel == SWAP_EXACT_TOKENS_FOR_TOKENS || sel == SWAP_EXACT_TOKENS_FOR_TOKENS_FEE || sel == SWAP_EXACT_TOKENS_FOR_ETH
-                || sel == SWAP_EXACT_TOKENS_FOR_ETH_FEE
-        ) {
+        if (sel == SWAP_EXACT_TOKENS_FOR_TOKENS || sel == SWAP_EXACT_TOKENS_FOR_TOKENS_FEE) {
             (uint256 amountIn,, address[] memory path,,) =
                 abi.decode(_stripSelector(data), (uint256, uint256, address[], address, uint256));
-            return (path[0], amountIn, true);
+            return (path[0], path[path.length - 1], amountIn, true);
+        }
+
+        if (sel == SWAP_EXACT_TOKENS_FOR_ETH || sel == SWAP_EXACT_TOKENS_FOR_ETH_FEE) {
+            (uint256 amountIn,, address[] memory path,,) =
+                abi.decode(_stripSelector(data), (uint256, uint256, address[], address, uint256));
+            return (path[0], NATIVE_BNB, amountIn, true);
         }
 
         if (sel == SWAP_EXACT_ETH_FOR_TOKENS || sel == SWAP_EXACT_ETH_FOR_TOKENS_FEE) {
-            return (NATIVE_BNB, value, true);
+            (, address[] memory path,,) = abi.decode(_stripSelector(data), (uint256, address[], address, uint256));
+            return (NATIVE_BNB, path[path.length - 1], value, true);
         }
 
-        return (address(0), 0, false);
+        return (address(0), address(0), 0, false);
     }
 
     /// @dev `amountIn == 0` is GMX/PancakeSwap's "spend my whole balance" sentinel for these V3
     /// functions - the real amount isn't in calldata, so this reverts rather than silently
     /// mis-checking it as a zero-value trade. See the contract-level NatSpec.
-    function _decodeV3Swap(bytes4 sel, bytes memory data, RouterKind kind) private pure returns (address, uint256, bool) {
+    function _decodeV3Swap(bytes4 sel, bytes memory data, RouterKind kind) private pure returns (address, address, uint256, bool) {
         bool noDeadline = kind == RouterKind.V3NoDeadline;
 
         if (sel == EXACT_INPUT_SINGLE_NO_DEADLINE && noDeadline) {
-            (address tokenIn,,, , uint256 amountIn,,) =
+            (address tokenIn, address tokenOut,, , uint256 amountIn,,) =
                 abi.decode(_stripSelector(data), (address, address, uint24, address, uint256, uint256, uint160));
             if (amountIn == 0) revert ZeroAmountInNotAllowed();
-            return (tokenIn, amountIn, true);
+            return (tokenIn, tokenOut, amountIn, true);
         }
         if (sel == EXACT_INPUT_SINGLE_WITH_DEADLINE && !noDeadline) {
-            (address tokenIn,,, , uint256 deadline, uint256 amountIn,,) = abi.decode(
+            (address tokenIn, address tokenOut,, , uint256 deadline, uint256 amountIn,,) = abi.decode(
                 _stripSelector(data), (address, address, uint24, address, uint256, uint256, uint256, uint160)
             );
             deadline; // unused - present only to preserve struct field alignment
             if (amountIn == 0) revert ZeroAmountInNotAllowed();
-            return (tokenIn, amountIn, true);
+            return (tokenIn, tokenOut, amountIn, true);
         }
         if (sel == EXACT_INPUT_NO_DEADLINE && noDeadline) {
             (bytes memory path,, uint256 amountIn,) = abi.decode(_stripSelector(data), (bytes, address, uint256, uint256));
             if (amountIn == 0) revert ZeroAmountInNotAllowed();
-            return (_firstTokenFromPath(path), amountIn, true);
+            return (_firstTokenFromPath(path), _lastTokenFromPath(path), amountIn, true);
         }
         if (sel == EXACT_INPUT_WITH_DEADLINE && !noDeadline) {
             (bytes memory path,,, uint256 amountIn,) =
                 abi.decode(_stripSelector(data), (bytes, address, uint256, uint256, uint256));
             if (amountIn == 0) revert ZeroAmountInNotAllowed();
-            return (_firstTokenFromPath(path), amountIn, true);
+            return (_firstTokenFromPath(path), _lastTokenFromPath(path), amountIn, true);
         }
 
-        return (address(0), 0, false);
+        return (address(0), address(0), 0, false);
     }
 
     /// @dev V3's packed path encoding is `token(20B) | fee(3B) | token(20B) | fee(3B) | ...` -
@@ -351,6 +374,16 @@ contract PancakeSwapLimitGuard is BaseGuard {
         require(path.length >= 20, "PancakeSwapLimitGuard: path too short");
         assembly {
             token := shr(96, mload(add(path, 32)))
+        }
+    }
+
+    /// @dev The output token is always the last 20 bytes of the packed path, regardless of how
+    /// many intermediate hops it contains.
+    function _lastTokenFromPath(bytes memory path) private pure returns (address token) {
+        require(path.length >= 20, "PancakeSwapLimitGuard: path too short");
+        uint256 offset = path.length - 20;
+        assembly {
+            token := shr(96, mload(add(add(path, 32), offset)))
         }
     }
 

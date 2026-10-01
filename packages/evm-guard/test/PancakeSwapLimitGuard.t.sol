@@ -20,9 +20,10 @@ contract PancakeSwapLimitGuardTest is Test {
     address otherTarget = address(0xBEEF);
     address usdt = address(0x55d398326f99059fF775485246999027B3197955);
     address busd = address(0xe9e7CEA3DedcA5984780Bafc599bD69ADd087D56);
+    address wbnb = address(0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c);
 
     function setUp() public {
-        guard = new PancakeSwapLimitGuard(admin, v2Router);
+        guard = new PancakeSwapLimitGuard(admin, v2Router, wbnb);
         vm.startPrank(admin);
         guard.setRouterKind(v3RouterNoDeadline, PancakeSwapLimitGuard.RouterKind.V3NoDeadline);
         guard.setRouterKind(v3RouterWithDeadline, PancakeSwapLimitGuard.RouterKind.V3WithDeadline);
@@ -37,6 +38,24 @@ contract PancakeSwapLimitGuardTest is Test {
         path[1] = tokenOut;
         return abi.encodeWithSignature(
             "swapExactTokensForTokens(uint256,uint256,address[],address,uint256)", amountIn, 0, path, safeAccount, block.timestamp + 300
+        );
+    }
+
+    function _swapExactTokensForEth(uint256 amountIn, address tokenIn) private view returns (bytes memory) {
+        address[] memory path = new address[](2);
+        path[0] = tokenIn;
+        path[1] = wbnb;
+        return abi.encodeWithSignature(
+            "swapExactTokensForETH(uint256,uint256,address[],address,uint256)", amountIn, 0, path, safeAccount, block.timestamp + 300
+        );
+    }
+
+    function _swapExactEthForTokens(address tokenOut) private view returns (bytes memory) {
+        address[] memory path = new address[](2);
+        path[0] = wbnb;
+        path[1] = tokenOut;
+        return abi.encodeWithSignature(
+            "swapExactETHForTokens(uint256,address[],address,uint256)", 0, path, safeAccount, block.timestamp + 300
         );
     }
 
@@ -278,5 +297,69 @@ contract PancakeSwapLimitGuardTest is Test {
         vm.expectRevert(PancakeSwapLimitGuard.NotAdmin.selector);
         vm.prank(safeAccount);
         guard.recordDailyLossBreach(safeAccount);
+    }
+
+    // ---- buy/sell asymmetry while frozen - selling into BNB is always allowed ---------------
+
+    function test_V2_SellingForNativeBnbIsAllowedEvenWhileFrozen() public {
+        _setLimits(5, usdt, 1000e18);
+        vm.prank(admin);
+        guard.recordDailyLossBreach(safeAccount);
+
+        // swapExactTokensForETH always outputs native BNB regardless of the path's last entry.
+        _checkAsSafe(v2Router, 0, _swapExactTokensForEth(500e18, usdt));
+        (, uint256 tradesToday) = guard.tradeState(safeAccount);
+        assertEq(tradesToday, 1);
+    }
+
+    function test_V2_BuyingWithNativeBnbIsBlockedWhileFrozen() public {
+        _setLimits(5, address(0), 0);
+        vm.prank(admin);
+        guard.recordDailyLossBreach(safeAccount);
+
+        vm.expectRevert(abi.encodeWithSelector(PancakeSwapLimitGuard.AccountIsFrozen.selector, safeAccount));
+        _checkAsSafe(v2Router, 1 ether, _swapExactEthForTokens(usdt));
+    }
+
+    function test_V3_SellingForWbnbIsAllowedEvenWhileFrozen() public {
+        _setLimits(5, usdt, 1000e18);
+        vm.prank(admin);
+        guard.recordDailyLossBreach(safeAccount);
+
+        // V3 routers always output the wrapped form, never the native sentinel directly.
+        _checkAsSafe(v3RouterNoDeadline, 0, _exactInputSingleNoDeadline(usdt, wbnb, 500e18));
+        (, uint256 tradesToday) = guard.tradeState(safeAccount);
+        assertEq(tradesToday, 1);
+    }
+
+    function test_V3_BuyingFromWbnbIsBlockedWhileFrozen() public {
+        _setLimits(5, wbnb, 1000e18);
+        vm.prank(admin);
+        guard.recordDailyLossBreach(safeAccount);
+
+        vm.expectRevert(abi.encodeWithSelector(PancakeSwapLimitGuard.AccountIsFrozen.selector, safeAccount));
+        _checkAsSafe(v3RouterNoDeadline, 0, _exactInputSingleNoDeadline(wbnb, usdt, 500e18));
+    }
+
+    function test_DirectTokenToTokenSwapNeitherSideBnbIsConservativelyBlockedWhileFrozen() public {
+        // usdt -> busd: neither side is BNB/WBNB, so this still opens exposure to a different
+        // token rather than returning to the base asset - must stay blocked while frozen.
+        _setLimits(5, usdt, 1000e18);
+        vm.prank(admin);
+        guard.recordDailyLossBreach(safeAccount);
+
+        vm.expectRevert(abi.encodeWithSelector(PancakeSwapLimitGuard.AccountIsFrozen.selector, safeAccount));
+        _checkAsSafe(v2Router, 0, _swapExactTokensForTokens(500e18, usdt, busd));
+    }
+
+    function test_SellingForBnbStillEnforcesTheTokenAmountAndTradeCountLimits() public {
+        // The freeze exemption only skips the freeze check itself - every other rule still
+        // applies to an exit trade exactly as it would to any other trade.
+        _setLimits(5, usdt, 1000e18);
+        vm.prank(admin);
+        guard.recordDailyLossBreach(safeAccount);
+
+        vm.expectRevert(abi.encodeWithSelector(PancakeSwapLimitGuard.TradeAmountExceeded.selector, usdt, 2000e18, 1000e18));
+        _checkAsSafe(v2Router, 0, _swapExactTokensForEth(2000e18, usdt));
     }
 }

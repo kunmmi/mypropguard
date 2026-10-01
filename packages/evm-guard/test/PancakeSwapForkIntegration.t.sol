@@ -23,7 +23,7 @@ contract PancakeSwapForkIntegrationTest is Test {
     function setUp() public {
         string memory rpcUrl = vm.envOr("BSC_RPC_URL", string("https://bsc-dataseed.binance.org"));
         vm.createSelectFork(rpcUrl);
-        guard = new PancakeSwapLimitGuard(address(this), V2_ROUTER);
+        guard = new PancakeSwapLimitGuard(address(this), V2_ROUTER, WBNB);
         guard.setRouterKind(V3_SMART_ROUTER, PancakeSwapLimitGuard.RouterKind.V3NoDeadline);
         guard.setMaxTradesPerDay(trader, 10);
         guard.setTokenLimit(trader, guard.NATIVE_BNB(), 1 ether);
