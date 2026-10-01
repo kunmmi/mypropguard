@@ -100,6 +100,28 @@ export interface EvmGuardRuleSyncer {
   setFrozen(safeAddress: string, isFrozen: boolean): Promise<void>;
 }
 
+export interface EvmEquityQuery {
+  safeAddress: string;
+  /**
+   * ERC-20 addresses to value in addition to the Safe's native-token balance - in practice, the
+   * tokens the account has a MAX_POSITION_SIZE rule for, since there's no general way to enumerate
+   * every token an arbitrary address holds on-chain. A token the account holds but has never set a
+   * rule for is not counted - see EvmSafeEquityReader's implementer for why this is a deliberate
+   * scope decision, not an oversight.
+   */
+  trackedTokens: readonly string[];
+}
+
+/**
+ * Reads an EVM Safe's live USD equity - the EVM-chain equivalent of VenueStateReader, feeding
+ * AccountRiskHead.currentEquity the same way reconcileAccountFromVenue does for Hyperliquid, so
+ * checkAndEnforceDailyLossFreeze has a real number to compare against instead of whatever the
+ * account's equity was frozen at when it was created.
+ */
+export interface EvmSafeEquityReader {
+  getEquityUsd(query: EvmEquityQuery): Promise<Decimal>;
+}
+
 /**
  * The transactional context available inside a `RiskLedgerStore.runExclusive`
  * critical section: everything a caller needs to make and record a risk

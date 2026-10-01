@@ -4,6 +4,7 @@ import type {
   ActionHasher,
   AgentWalletProvisioner,
   EvmGuardRuleSyncer,
+  EvmSafeEquityReader,
   EvmSafeProvisioner,
   ExecutionSequencer,
   OrderCanceller,
@@ -63,6 +64,15 @@ export interface AppDeps {
    * inside MyPropGuard's own dashboard, same as before this existed.
    */
   evmGuardSyncers?: Record<number, EvmGuardRuleSyncer>;
+  /**
+   * Reads an EVM Safe's live on-chain USD equity (see packages/evm's PancakeSwapEquityReader),
+   * keyed by chain id the same way as evmGuardSyncers. POST /v1/accounts/:accountId/reconcile-evm
+   * uses the entry matching the account's own evmChainId to feed real equity into
+   * account_risk_heads, which is what actually makes checkAndEnforceDailyLossFreeze live rather
+   * than comparing against an equity number frozen at account-creation time. Absent entirely in
+   * the offline scaffold and for any chain not yet configured.
+   */
+  evmEquityReaders?: Record<number, EvmSafeEquityReader>;
   /**
    * When configured, every route requires a valid Supabase bearer token and
    * populates request.userId - route handlers then use it to derive

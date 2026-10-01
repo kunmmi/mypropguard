@@ -152,6 +152,60 @@ export const spotGuardAdminAbi = [
   },
 ] as const;
 
+/** The handful of ERC-20 view functions needed to price and value a Safe's token holdings. */
+export const erc20ReadAbi = [
+  {
+    type: "function",
+    name: "decimals",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "uint8" }],
+  },
+  {
+    type: "function",
+    name: "balanceOf",
+    stateMutability: "view",
+    inputs: [{ name: "account", type: "address" }],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+] as const;
+
+/** PancakeSwap V2 Factory - just enough to find a token's pair against a known base token. */
+export const pancakeFactoryAbi = [
+  {
+    type: "function",
+    name: "getPair",
+    stateMutability: "view",
+    inputs: [
+      { name: "tokenA", type: "address" },
+      { name: "tokenB", type: "address" },
+    ],
+    outputs: [{ name: "pair", type: "address" }],
+  },
+] as const;
+
+/** PancakeSwap V2 pair - enough to read a spot price from reserves (see PancakeSwapEquityReader's NatSpec for the manipulation caveat this implies). */
+export const pancakePairAbi = [
+  {
+    type: "function",
+    name: "getReserves",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [
+      { name: "reserve0", type: "uint112" },
+      { name: "reserve1", type: "uint112" },
+      { name: "blockTimestampLast", type: "uint32" },
+    ],
+  },
+  {
+    type: "function",
+    name: "token0",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "address" }],
+  },
+] as const;
+
 /**
  * Safe's own GUARD_STORAGE_SLOT constant (safe-smart-account/contracts/libraries/SafeStorage.sol) -
  * exported here as the single source of truth so nothing has to hand-transcribe this 32-byte

@@ -174,14 +174,49 @@ here; written to the exact same style as the existing passing test suite and sho
 deployment) plus 6 new `packages/risk-ledger` unit tests and 4 new `apps/api` tests (all passing)
 covering the breach/no-breach/no-rule/non-EVM/no-syncer cases and the route-level wiring.
 
-**The real remaining gap - this mechanism has nothing live to act on yet**: `currentEquity` for an
-EVM account only reflects reality once something feeds the Safe's live on-chain USD value into
-`account_risk_heads`, the same way `reconcileAccountFromVenue` already does for Hyperliquid by
-reading its Info API. No such reconciliation exists for EVM accounts, because it needs pricing
-arbitrary ERC-20 holdings - the exact oracle/P&L problem this roadmap has flagged since the
-original research (`reports/EVM on-chain trading risk enforcement.md`). Until an EVM equity feed is
-built, `checkAndEnforceDailyLossFreeze` is correct and fully tested, but will only ever see an
-EVM account's equity frozen at whatever it was when the account was created - it cannot yet detect
-a real loss happening from real EVM trades. That EVM price-oracle/reconciliation piece is now the
-single remaining prerequisite before max daily loss is actually live for PancakeSwap/Uniswap
-accounts, not a decision to make, but a build to do.
+## Done: EVM equity feed for BSC (the oracle/P&L piece that makes max daily loss live)
+
+Closes the gap this roadmap used to describe as "the real remaining gap." `account_risk_heads`
+needed something to feed it an EVM Safe's live on-chain USD value, the same way
+`reconcileAccountFromVenue` already does for Hyperliquid from its Info API - no such feed existed
+for EVM, because it needs pricing arbitrary ERC-20 holdings, the oracle/P&L problem flagged since
+the original research (`reports/EVM on-chain trading risk enforcement.md`).
+
+**The decision made**: price using PancakeSwap's own pool reserves (`packages/evm`'s
+`PancakeSwapEquityReader`), not an external oracle like Chainlink. Chainlink only covers major
+assets; this product's whole premise is enforcing risk on PancakeSwap trading, which includes the
+long-tail meme-coin-style tokens Chainlink will never list. The tradeoff, stated plainly: a pool's
+spot price can be briefly skewed by a large trade or deliberately manipulated within one block
+(e.g. a flash loan). That's accepted here because this number only drives a risk-monitoring freeze
+decision, not a fund-moving settlement - the worst case of a bad read is a wrongly frozen/unfrozen
+account, not a theft. Revisit if max-daily-loss enforcement is ever used to gate something costlier
+to get wrong.
+
+Only values the Safe's native BNB balance plus whatever ERC-20s the account has an active
+MAX_POSITION_SIZE rule for (`packages/risk-ledger`'s new `reconcileEvmAccountEquity` collects these
+from the account's own rules before calling the reader) - there's no general way to enumerate every
+token an address holds purely on-chain, so a token the account holds but has never set a rule for
+isn't counted. Each tracked token is priced via a direct pool with USDT if one exists, otherwise
+routed through a WBNB pool; a token with neither is valued at $0 rather than erroring, so one
+illiquid token can't break the whole equity read. `POST /v1/accounts/:accountId/reconcile-evm`
+exposes this (no `venueAddress` needed, unlike the Hyperliquid `/reconcile` - the account's own
+`evmSafeAddress`/`evmChainId` already say what to read) and immediately re-checks the daily-loss
+freeze state afterward, the same way adding a MAX_DAILY_LOSS rule does.
+
+Wired for BSC/PancakeSwap only, using PancakeSwap's own canonical Factory/WBNB/USDT addresses
+(public, hardcoded in `apps/api/src/server.ts`, not configurable - one less thing to misconfigure).
+Ethereum/Uniswap has no equivalent reader yet; that chain's accounts still have max-daily-loss
+freezing built but not live, same as before this change.
+
+**Proof:** 6 new `packages/evm` unit tests (mocked viem client) cover direct-stablecoin pricing,
+WBNB-routed pricing, the no-pair-found $0 fallback, the stablecoin-itself shortcut, and the
+native-sentinel dedup; 5 new `packages/risk-ledger` tests cover the full reconcile-then-freeze flow
+and both not-configured error cases; 3 new `apps/api` tests cover the HTTP route. All existing
+tests continue to pass (63 `apps/api`, 27 `packages/risk-ledger` in-memory, 12 `packages/evm` unit
+tests not requiring a live chain).
+
+**Still not live in production**: nothing calls `/reconcile-evm` automatically yet - it has to be
+invoked (e.g. from the dashboard, or a periodic job) for an account's equity to actually update.
+There is also no periodic/automatic trigger built, mirroring Hyperliquid's own `/reconcile`, which
+likewise only updates on a manual dashboard click today (see "What's Not Done Yet" in the milestone
+report).

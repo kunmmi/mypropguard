@@ -2,6 +2,7 @@ import type {
   ActionHasher,
   AgentWalletProvisioner,
   EvmGuardRuleSyncer,
+  EvmSafeEquityReader,
   EvmSafeProvisioner,
   OrderCanceller,
   OrderLifecycleReader,
@@ -21,7 +22,20 @@ import { FakeSignerGateway, PlaceholderActionHasher } from "@mypropguard/executi
 import { createPublicClient, createWalletClient, http, type Address, type Chain } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { arbitrum, bsc, mainnet } from "viem/chains";
-import { SafeDeployer, EvmChainSafeProvisioner, SpotGuardClient, EvmChainGuardRuleSyncer } from "@mypropguard/evm";
+import {
+  SafeDeployer,
+  EvmChainSafeProvisioner,
+  SpotGuardClient,
+  EvmChainGuardRuleSyncer,
+  PancakeSwapEquityReader,
+} from "@mypropguard/evm";
+
+// PancakeSwap's own canonical BSC mainnet addresses - public, not secrets, so hardcoded rather
+// than made configurable (one less thing to misconfigure). See PancakeSwapEquityReader's NatSpec
+// for why pool-reserve pricing (not an external oracle) is used here.
+const PANCAKESWAP_V2_FACTORY_BSC: Address = "0xcA143Ce32Fe78f1f7019d7d551a6402fC5350c73";
+const WBNB_ADDRESS_BSC: Address = "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c";
+const USDT_ADDRESS_BSC: Address = "0x55d398326f99059fF775485246999027B3197955";
 import { createAuthPreHandler } from "./auth.js";
 import { buildApp } from "./app.js";
 
@@ -129,7 +143,14 @@ function configureEvmChainProvisioning(
   chain: Chain,
   guardLabel: string,
   guardKind: "gmx" | "spot",
-): { provisioner: EvmSafeProvisioner; guardSyncer?: EvmGuardRuleSyncer } | undefined {
+  /**
+   * Only passed for chains with a built EvmSafeEquityReader (currently BSC/PancakeSwap only - see
+   * PancakeSwapEquityReader; Ethereum/Uniswap has no equivalent yet). When present, also builds an
+   * equity reader from the same publicClient, so checkAndEnforceDailyLossFreeze has live data for
+   * that chain.
+   */
+  equityReaderConfig?: { factoryAddress: Address; wrappedNativeAddress: Address; stablecoinAddress: Address },
+): { provisioner: EvmSafeProvisioner; guardSyncer?: EvmGuardRuleSyncer; equityReader?: EvmSafeEquityReader } | undefined {
   if (process.env[`ENABLE_EVM_${envPrefix}_PROVISIONING`] !== "true") return undefined;
 
   const rpcUrl = process.env[`EVM_${envPrefix}_RPC_URL`];
@@ -162,23 +183,42 @@ function configureEvmChainProvisioning(
     guardSyncer = new EvmChainGuardRuleSyncer(publicClient, spotGuardClient);
   }
 
+  let equityReader: EvmSafeEquityReader | undefined;
+  if (equityReaderConfig) {
+    equityReader = new PancakeSwapEquityReader(
+      publicClient,
+      equityReaderConfig.factoryAddress,
+      equityReaderConfig.wrappedNativeAddress,
+      equityReaderConfig.stablecoinAddress,
+    );
+  }
+
   // eslint-disable-next-line no-console
   console.log(`EVM Safe provisioning enabled for ${label}. New accounts on that chain get a real provisioned Safe.`);
-  return { provisioner, guardSyncer };
+  return { provisioner, guardSyncer, equityReader };
 }
 
 const evmSafeProvisioners: Record<number, EvmSafeProvisioner> = {};
 const evmGuardSyncers: Record<number, EvmGuardRuleSyncer> = {};
+const evmEquityReaders: Record<number, EvmSafeEquityReader> = {};
 
 const arbitrumConfig = configureEvmChainProvisioning("Arbitrum (GMX)", "ARBITRUM", arbitrum, "GMX", "gmx");
 if (arbitrumConfig) evmSafeProvisioners[arbitrum.id] = arbitrumConfig.provisioner;
 
-const bscConfig = configureEvmChainProvisioning("BSC (PancakeSwap)", "BSC", bsc, "PANCAKESWAP", "spot");
+const bscConfig = configureEvmChainProvisioning("BSC (PancakeSwap)", "BSC", bsc, "PANCAKESWAP", "spot", {
+  factoryAddress: PANCAKESWAP_V2_FACTORY_BSC,
+  wrappedNativeAddress: WBNB_ADDRESS_BSC,
+  stablecoinAddress: USDT_ADDRESS_BSC,
+});
 if (bscConfig) {
   evmSafeProvisioners[bsc.id] = bscConfig.provisioner;
   if (bscConfig.guardSyncer) evmGuardSyncers[bsc.id] = bscConfig.guardSyncer;
+  if (bscConfig.equityReader) evmEquityReaders[bsc.id] = bscConfig.equityReader;
 }
 
+// Ethereum/Uniswap has no EvmSafeEquityReader yet (would need a Uniswap-specific factory/WETH/
+// USDC wiring, analogous to PancakeSwapEquityReader) - max-daily-loss freezing isn't live for
+// Ethereum accounts yet even though the freeze mechanism itself works on any spot Guard.
 const ethereumConfig = configureEvmChainProvisioning("Ethereum (Uniswap)", "ETHEREUM", mainnet, "UNISWAP", "spot");
 if (ethereumConfig) {
   evmSafeProvisioners[mainnet.id] = ethereumConfig.provisioner;
@@ -200,6 +240,7 @@ const app = buildApp({
   authPreHandler,
   evmSafeProvisioners,
   evmGuardSyncers,
+  evmEquityReaders,
 });
 
 const port = Number(process.env.PORT ?? 3000);
