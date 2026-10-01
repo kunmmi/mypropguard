@@ -49,15 +49,21 @@ explicit answer on `executeSigned`'s authorization model. Shipping with these op
 the worst outcome for a security product: claiming a trade is blocked when it actually wasn't
 decoded correctly, or claiming coverage of an execution path that was never actually blocked.
 
-## Open question: GMGN
+## Resolved: GMGN is out of scope for on-chain enforcement, confirmed
 
-Left unresolved deliberately (see
-`research_notes/EVM on-chain trading risk enforcement/gmgn_bsc_routing_confirmed.md`) - evidence
-leans toward GMGN using its own backend-mediated execution path on BSC (would need its own Guard
-support, not covered by the PancakeSwap one), but this isn't confirmed. Resolving it needs either
-someone sharing a real GMGN BSC transaction hash, or creating a real GMGN account and inspecting
-a trade's wallet-confirmation payload directly - deliberately not done without explicit sign-off,
-since it's a bigger step than research.
+Previously left unresolved (see `research_notes/EVM on-chain trading risk enforcement/
+gmgn_bsc_routing_confirmed.md`), now confirmed directly against a real GMGN account rather than
+left as a guess. Connecting an external wallet (MetaMask) to GMGN is sign-in only - a message
+signature, not a transaction. GMGN's own BSC "Wallet" screen then shows a separate, GMGN-generated
+address ("Wallet1") with Deposit/Withdraw/Consolidate actions - the connected MetaMask address
+never appears there. Trading requires depositing funds into that GMGN-controlled wallet; GMGN's
+backend executes swaps from it, not from the trader's own wallet.
+
+This means a MyPropGuard Safe can never be the wallet GMGN trades from - there is no flow where
+GMGN signs a transaction from an externally-held smart contract wallet. The "which contract does
+it call" question this item used to be framed around turns out not to matter: no Guard attached to
+a trader's own Safe can ever see a GMGN trade, regardless of what GMGN's backend calls internally,
+because the Safe is never the signer. No Guard work is possible or planned for GMGN.
 
 ## Done: real Safe + execTransaction end-to-end proof (all three exchanges)
 
