@@ -118,6 +118,41 @@ describe("POST /v1/accounts", () => {
     expect(response.json().evmSafeAddress).toBeNull();
   });
 
+  it("routes each chain's accounts to its own provisioner when multiple chains are configured (Arbitrum, BSC, Ethereum)", async () => {
+    const store = new InMemoryRiskLedgerStore();
+    const app = buildApp({
+      store,
+      evmSafeProvisioners: {
+        42161: fakeEvmSafeProvisioner("0xARBITRUM_SAFE", 42161),
+        56: fakeEvmSafeProvisioner("0xBSC_SAFE", 56),
+        1: fakeEvmSafeProvisioner("0xETH_SAFE", 1),
+      },
+    });
+
+    const cases = [
+      { accountId: "acct_multi_arb", venue: "arbitrum-gmx", chainId: 42161, expected: "0xARBITRUM_SAFE" },
+      { accountId: "acct_multi_bsc", venue: "bsc-pancakeswap", chainId: 56, expected: "0xBSC_SAFE" },
+      { accountId: "acct_multi_eth", venue: "ethereum-uniswap", chainId: 1, expected: "0xETH_SAFE" },
+    ];
+
+    for (const testCase of cases) {
+      const response = await app.inject({
+        method: "POST",
+        url: "/v1/accounts",
+        payload: {
+          accountId: testCase.accountId,
+          ownerUserId: "user_multi_chain",
+          venue: testCase.venue,
+          initialEquity: "1000",
+          evmOwnerWalletAddress: "0xTRADERWALLET",
+          evmChainId: testCase.chainId,
+        },
+      });
+      expect(response.statusCode).toBe(201);
+      expect(response.json().evmSafeAddress).toBe(testCase.expected);
+    }
+  });
+
   it("defaults to hyperliquid venue and an empty rule set", async () => {
     const store = new InMemoryRiskLedgerStore();
     const app = buildApp({ store });

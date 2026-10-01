@@ -17,9 +17,9 @@ import {
   PrivySignerGateway,
 } from "@mypropguard/hyperliquid";
 import { FakeSignerGateway, PlaceholderActionHasher } from "@mypropguard/execution";
-import { createPublicClient, createWalletClient, http, type Address } from "viem";
+import { createPublicClient, createWalletClient, http, type Address, type Chain } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { arbitrum } from "viem/chains";
+import { arbitrum, bsc, mainnet } from "viem/chains";
 import { SafeDeployer, EvmChainSafeProvisioner } from "@mypropguard/evm";
 import { createAuthPreHandler } from "./auth.js";
 import { buildApp } from "./app.js";
@@ -116,49 +116,54 @@ if (process.env.ENABLE_REAL_SIGNER === "true") {
 }
 
 // EVM-chain Safe provisioning (see packages/evm-guard, packages/evm) - opt-in per chain, off by
-// default. Only Arbitrum/GMX is wired here for now (the first and most-proven EVM integration -
-// see packages/evm-guard/ROADMAP.md); adding BSC/Ethereum follows the same pattern with their
-// own env var prefix and viem chain import.
-const evmSafeProvisioners: Record<number, EvmSafeProvisioner> = {};
+// default. Each chain needs its own env var prefix, viem Chain, and already-deployed Guard
+// contract address (see packages/evm-guard/ROADMAP.md for which chains have a Guard built).
+function configureEvmChainProvisioning(
+  label: string,
+  envPrefix: string,
+  chain: Chain,
+  guardLabel: string,
+): EvmSafeProvisioner | undefined {
+  if (process.env[`ENABLE_EVM_${envPrefix}_PROVISIONING`] !== "true") return undefined;
 
-if (process.env.ENABLE_EVM_ARBITRUM_PROVISIONING === "true") {
-  const {
-    EVM_ARBITRUM_RPC_URL,
-    EVM_ARBITRUM_ADMIN_PRIVATE_KEY,
-    EVM_ARBITRUM_SAFE_PROXY_FACTORY,
-    EVM_ARBITRUM_SAFE_SINGLETON,
-    EVM_ARBITRUM_SAFE_GUARD_SETUP,
-    EVM_ARBITRUM_GMX_GUARD_ADDRESS,
-  } = process.env;
-  if (
-    !EVM_ARBITRUM_RPC_URL ||
-    !EVM_ARBITRUM_ADMIN_PRIVATE_KEY ||
-    !EVM_ARBITRUM_SAFE_PROXY_FACTORY ||
-    !EVM_ARBITRUM_SAFE_SINGLETON ||
-    !EVM_ARBITRUM_SAFE_GUARD_SETUP ||
-    !EVM_ARBITRUM_GMX_GUARD_ADDRESS
-  ) {
+  const rpcUrl = process.env[`EVM_${envPrefix}_RPC_URL`];
+  const adminPrivateKey = process.env[`EVM_${envPrefix}_ADMIN_PRIVATE_KEY`];
+  const safeProxyFactory = process.env[`EVM_${envPrefix}_SAFE_PROXY_FACTORY`];
+  const safeSingleton = process.env[`EVM_${envPrefix}_SAFE_SINGLETON`];
+  const safeGuardSetup = process.env[`EVM_${envPrefix}_SAFE_GUARD_SETUP`];
+  const guardAddress = process.env[`EVM_${envPrefix}_${guardLabel}_GUARD_ADDRESS`];
+
+  if (!rpcUrl || !adminPrivateKey || !safeProxyFactory || !safeSingleton || !safeGuardSetup || !guardAddress) {
     throw new Error(
-      "ENABLE_EVM_ARBITRUM_PROVISIONING=true requires EVM_ARBITRUM_RPC_URL, EVM_ARBITRUM_ADMIN_PRIVATE_KEY, EVM_ARBITRUM_SAFE_PROXY_FACTORY, EVM_ARBITRUM_SAFE_SINGLETON, EVM_ARBITRUM_SAFE_GUARD_SETUP, and EVM_ARBITRUM_GMX_GUARD_ADDRESS.",
+      `ENABLE_EVM_${envPrefix}_PROVISIONING=true requires EVM_${envPrefix}_RPC_URL, EVM_${envPrefix}_ADMIN_PRIVATE_KEY, EVM_${envPrefix}_SAFE_PROXY_FACTORY, EVM_${envPrefix}_SAFE_SINGLETON, EVM_${envPrefix}_SAFE_GUARD_SETUP, and EVM_${envPrefix}_${guardLabel}_GUARD_ADDRESS.`,
     );
   }
-  const adminAccount = privateKeyToAccount(EVM_ARBITRUM_ADMIN_PRIVATE_KEY as `0x${string}`);
-  const transport = http(EVM_ARBITRUM_RPC_URL);
-  const publicClient = createPublicClient({ chain: arbitrum, transport });
-  const walletClient = createWalletClient({ chain: arbitrum, transport, account: adminAccount });
-  const safeDeployer = new SafeDeployer(publicClient, walletClient, adminAccount, arbitrum, {
-    safeProxyFactory: EVM_ARBITRUM_SAFE_PROXY_FACTORY as Address,
-    safeSingleton: EVM_ARBITRUM_SAFE_SINGLETON as Address,
-    safeGuardSetup: EVM_ARBITRUM_SAFE_GUARD_SETUP as Address,
+
+  const adminAccount = privateKeyToAccount(adminPrivateKey as `0x${string}`);
+  const transport = http(rpcUrl);
+  const publicClient = createPublicClient({ chain, transport });
+  const walletClient = createWalletClient({ chain, transport, account: adminAccount });
+  const safeDeployer = new SafeDeployer(publicClient, walletClient, adminAccount, chain, {
+    safeProxyFactory: safeProxyFactory as Address,
+    safeSingleton: safeSingleton as Address,
+    safeGuardSetup: safeGuardSetup as Address,
   });
-  evmSafeProvisioners[arbitrum.id] = new EvmChainSafeProvisioner(
-    safeDeployer,
-    arbitrum.id,
-    EVM_ARBITRUM_GMX_GUARD_ADDRESS as Address,
-  );
+
   // eslint-disable-next-line no-console
-  console.log("EVM Safe provisioning enabled for Arbitrum (GMX). New accounts on that chain get a real provisioned Safe.");
+  console.log(`EVM Safe provisioning enabled for ${label}. New accounts on that chain get a real provisioned Safe.`);
+  return new EvmChainSafeProvisioner(safeDeployer, chain.id, guardAddress as Address);
 }
+
+const evmSafeProvisioners: Record<number, EvmSafeProvisioner> = {};
+
+const arbitrumProvisioner = configureEvmChainProvisioning("Arbitrum (GMX)", "ARBITRUM", arbitrum, "GMX");
+if (arbitrumProvisioner) evmSafeProvisioners[arbitrum.id] = arbitrumProvisioner;
+
+const bscProvisioner = configureEvmChainProvisioning("BSC (PancakeSwap)", "BSC", bsc, "PANCAKESWAP");
+if (bscProvisioner) evmSafeProvisioners[bsc.id] = bscProvisioner;
+
+const ethereumProvisioner = configureEvmChainProvisioning("Ethereum (Uniswap)", "ETHEREUM", mainnet, "UNISWAP");
+if (ethereumProvisioner) evmSafeProvisioners[mainnet.id] = ethereumProvisioner;
 
 const app = buildApp({
   store,

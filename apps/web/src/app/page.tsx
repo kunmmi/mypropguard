@@ -81,14 +81,25 @@ function ruleTypeLabel(ruleType: string): string {
   return RULE_TYPE_OPTIONS.find((o) => o.value === ruleType)?.label ?? ruleType;
 }
 
-// Only Hyperliquid (a Privy-managed wallet) and Arbitrum/GMX (a real on-chain Safe + Guard, see
-// packages/evm-guard) are wired up server-side right now - see packages/evm-guard/ROADMAP.md for
-// BSC/Ethereum.
+// Hyperliquid (a Privy-managed wallet) and all three EVM venues (a real on-chain Safe + Guard per
+// chain, see packages/evm-guard) are wired up server-side - each EVM venue still needs its own
+// ENABLE_EVM_*_PROVISIONING env var actually turned on, though (see .env.example).
 const VENUE_OPTIONS = [
   { value: "hyperliquid", label: "Hyperliquid" },
   { value: "arbitrum-gmx", label: "GMX on Arbitrum" },
+  { value: "bsc-pancakeswap", label: "PancakeSwap on BSC" },
+  { value: "ethereum-uniswap", label: "Uniswap on Ethereum" },
 ];
-const VENUE_CHAIN_IDS: Record<string, number> = { "arbitrum-gmx": 42161 };
+const VENUE_CHAIN_IDS: Record<string, number> = {
+  "arbitrum-gmx": 42161,
+  "bsc-pancakeswap": 56,
+  "ethereum-uniswap": 1,
+};
+const VENUE_EXCHANGE_NAMES: Record<string, string> = {
+  "arbitrum-gmx": "GMX",
+  "bsc-pancakeswap": "PancakeSwap",
+  "ethereum-uniswap": "Uniswap",
+};
 
 function AuthForm() {
   const [mode, setMode] = useState<"sign-in" | "sign-up">("sign-in");
@@ -597,11 +608,14 @@ function Dashboard({ session }: { session: Session }) {
                 fontSize: 13,
               }}
             >
-              <div style={{ fontWeight: 600, marginBottom: 4 }}>Your Safe is ready - trade with it directly on GMX</div>
+              <div style={{ fontWeight: 600, marginBottom: 4 }}>
+                Your Safe is ready - trade with it directly on {VENUE_EXCHANGE_NAMES[newVenue] ?? "the exchange"}
+              </div>
               <div style={{ color: "var(--text-muted)", marginBottom: 6 }}>
-                This Safe already has your risk rules attached on-chain. Go to GMX&apos;s own site, connect this
-                address as your trading wallet, and trade normally - a rule-breaking order will revert on-chain
-                before it ever reaches GMX:
+                This Safe already has your risk rules attached on-chain. Go to{" "}
+                {VENUE_EXCHANGE_NAMES[newVenue] ?? "the exchange"}&apos;s own site, connect this address as your
+                trading wallet, and trade normally - a rule-breaking order will revert on-chain before it ever
+                reaches the exchange:
               </div>
               <code style={{ fontFamily: "var(--font-accent)", wordBreak: "break-all" }}>{newEvmSafeAddress}</code>
             </div>
