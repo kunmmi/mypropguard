@@ -7,8 +7,14 @@ export async function listRules(store: RiskLedgerStore, accountId: string): Prom
 }
 
 /** Adds a new rule to an account's active mandate. */
-export async function addRule(store: RiskLedgerStore, accountId: string, ruleType: RuleType, param: Decimal): Promise<RuleVersion> {
-  return store.runExclusive(accountId, (ctx) => ctx.insertRule(accountId, { ruleType, param }));
+export async function addRule(
+  store: RiskLedgerStore,
+  accountId: string,
+  ruleType: RuleType,
+  param: Decimal,
+  tokenAddress?: string | null,
+): Promise<RuleVersion> {
+  return store.runExclusive(accountId, (ctx) => ctx.insertRule(accountId, { ruleType, param, tokenAddress }));
 }
 
 /** Deactivates a rule so it no longer applies to future risk decisions. */

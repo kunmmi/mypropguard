@@ -7,6 +7,8 @@ export const ruleVersionSchema = z.object({
   accountId: z.string(),
   ruleType: ruleTypeEnum,
   param: decimalString,
+  /** Which ERC-20 token param limits per-trade spend in - only set for MAX_POSITION_SIZE on EVM spot venues. */
+  tokenAddress: z.string().nullable().optional(),
   effectiveFrom: isoDateTime,
   isActive: z.boolean(),
   createdAt: isoDateTime,
@@ -21,6 +23,8 @@ export type ListRulesResponse = z.infer<typeof listRulesResponseSchema>;
 export const addRuleRequestSchema = z.object({
   ruleType: ruleTypeEnum,
   param: decimalString,
+  /** Required when ruleType is MAX_POSITION_SIZE on an EVM spot venue (bsc-pancakeswap, ethereum-uniswap). */
+  tokenAddress: z.string().min(1).optional(),
 });
 export type AddRuleRequest = z.infer<typeof addRuleRequestSchema>;
 

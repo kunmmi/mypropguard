@@ -287,6 +287,9 @@ importers:
       '@mypropguard/domain':
         specifier: workspace:*
         version: link:../domain
+      decimal.js:
+        specifier: ^10.4.3
+        version: 10.6.0
       viem:
         specifier: ^2.56.5
         version: 2.56.5(typescript@5.9.3)(zod@3.25.76)

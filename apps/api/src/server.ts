@@ -1,6 +1,7 @@
 import type {
   ActionHasher,
   AgentWalletProvisioner,
+  EvmGuardRuleSyncer,
   EvmSafeProvisioner,
   OrderCanceller,
   OrderLifecycleReader,
@@ -20,7 +21,7 @@ import { FakeSignerGateway, PlaceholderActionHasher } from "@mypropguard/executi
 import { createPublicClient, createWalletClient, http, type Address, type Chain } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { arbitrum, bsc, mainnet } from "viem/chains";
-import { SafeDeployer, EvmChainSafeProvisioner } from "@mypropguard/evm";
+import { SafeDeployer, EvmChainSafeProvisioner, SpotGuardClient, EvmChainGuardRuleSyncer } from "@mypropguard/evm";
 import { createAuthPreHandler } from "./auth.js";
 import { buildApp } from "./app.js";
 
@@ -118,12 +119,17 @@ if (process.env.ENABLE_REAL_SIGNER === "true") {
 // EVM-chain Safe provisioning (see packages/evm-guard, packages/evm) - opt-in per chain, off by
 // default. Each chain needs its own env var prefix, viem Chain, and already-deployed Guard
 // contract address (see packages/evm-guard/ROADMAP.md for which chains have a Guard built).
+// "spot" chains (PancakeSwap/Uniswap) also get an EvmGuardRuleSyncer, built from the exact same
+// admin wallet/RPC config - that Guard's setTokenLimit/setMaxTradesPerDay are independently
+// settable per rule, unlike GMX's combined setLimits, which needs its own, separate design before
+// a single rule change could safely push to it without clobbering the other limit.
 function configureEvmChainProvisioning(
   label: string,
   envPrefix: string,
   chain: Chain,
   guardLabel: string,
-): EvmSafeProvisioner | undefined {
+  guardKind: "gmx" | "spot",
+): { provisioner: EvmSafeProvisioner; guardSyncer?: EvmGuardRuleSyncer } | undefined {
   if (process.env[`ENABLE_EVM_${envPrefix}_PROVISIONING`] !== "true") return undefined;
 
   const rpcUrl = process.env[`EVM_${envPrefix}_RPC_URL`];
@@ -148,22 +154,36 @@ function configureEvmChainProvisioning(
     safeSingleton: safeSingleton as Address,
     safeGuardSetup: safeGuardSetup as Address,
   });
+  const provisioner = new EvmChainSafeProvisioner(safeDeployer, chain.id, guardAddress as Address);
+
+  let guardSyncer: EvmGuardRuleSyncer | undefined;
+  if (guardKind === "spot") {
+    const spotGuardClient = new SpotGuardClient(publicClient, walletClient, adminAccount, chain, guardAddress as Address);
+    guardSyncer = new EvmChainGuardRuleSyncer(publicClient, spotGuardClient);
+  }
 
   // eslint-disable-next-line no-console
   console.log(`EVM Safe provisioning enabled for ${label}. New accounts on that chain get a real provisioned Safe.`);
-  return new EvmChainSafeProvisioner(safeDeployer, chain.id, guardAddress as Address);
+  return { provisioner, guardSyncer };
 }
 
 const evmSafeProvisioners: Record<number, EvmSafeProvisioner> = {};
+const evmGuardSyncers: Record<number, EvmGuardRuleSyncer> = {};
 
-const arbitrumProvisioner = configureEvmChainProvisioning("Arbitrum (GMX)", "ARBITRUM", arbitrum, "GMX");
-if (arbitrumProvisioner) evmSafeProvisioners[arbitrum.id] = arbitrumProvisioner;
+const arbitrumConfig = configureEvmChainProvisioning("Arbitrum (GMX)", "ARBITRUM", arbitrum, "GMX", "gmx");
+if (arbitrumConfig) evmSafeProvisioners[arbitrum.id] = arbitrumConfig.provisioner;
 
-const bscProvisioner = configureEvmChainProvisioning("BSC (PancakeSwap)", "BSC", bsc, "PANCAKESWAP");
-if (bscProvisioner) evmSafeProvisioners[bsc.id] = bscProvisioner;
+const bscConfig = configureEvmChainProvisioning("BSC (PancakeSwap)", "BSC", bsc, "PANCAKESWAP", "spot");
+if (bscConfig) {
+  evmSafeProvisioners[bsc.id] = bscConfig.provisioner;
+  if (bscConfig.guardSyncer) evmGuardSyncers[bsc.id] = bscConfig.guardSyncer;
+}
 
-const ethereumProvisioner = configureEvmChainProvisioning("Ethereum (Uniswap)", "ETHEREUM", mainnet, "UNISWAP");
-if (ethereumProvisioner) evmSafeProvisioners[mainnet.id] = ethereumProvisioner;
+const ethereumConfig = configureEvmChainProvisioning("Ethereum (Uniswap)", "ETHEREUM", mainnet, "UNISWAP", "spot");
+if (ethereumConfig) {
+  evmSafeProvisioners[mainnet.id] = ethereumConfig.provisioner;
+  if (ethereumConfig.guardSyncer) evmGuardSyncers[mainnet.id] = ethereumConfig.guardSyncer;
+}
 
 const app = buildApp({
   store,
@@ -179,6 +199,7 @@ const app = buildApp({
   orderLifecycleFactory,
   authPreHandler,
   evmSafeProvisioners,
+  evmGuardSyncers,
 });
 
 const port = Number(process.env.PORT ?? 3000);

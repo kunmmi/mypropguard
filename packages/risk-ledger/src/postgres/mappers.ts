@@ -39,6 +39,7 @@ export function rowToRuleVersion(row: Record<string, unknown>): RuleVersion {
     accountId: row.account_id as string,
     ruleType: row.rule_type as RuleVersion["ruleType"],
     param: new Decimal(row.param as string),
+    tokenAddress: (row.token_address as string | null) ?? null,
     effectiveFrom: new Date(row.effective_from as string),
     isActive: row.is_active as boolean,
     createdAt: new Date(row.created_at as string),

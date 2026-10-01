@@ -77,8 +77,8 @@ export class PgRiskLedgerStore implements RiskLedgerStore {
         },
         insertRule: async (accountId: string, input: NewAccountRuleInput) => {
           const result = await client.query(
-            "INSERT INTO rule_versions (account_id, rule_type, param) VALUES ($1, $2, $3) RETURNING *",
-            [accountId, input.ruleType, input.param.toString()],
+            "INSERT INTO rule_versions (account_id, rule_type, param, token_address) VALUES ($1, $2, $3, $4) RETURNING *",
+            [accountId, input.ruleType, input.param.toString(), input.tokenAddress ?? null],
           );
           return rowToRuleVersion(result.rows[0]);
         },
@@ -199,11 +199,10 @@ export class PgRiskLedgerStore implements RiskLedgerStore {
       );
 
       for (const rule of input.initialRules) {
-        await client.query("INSERT INTO rule_versions (account_id, rule_type, param) VALUES ($1, $2, $3)", [
-          input.accountId,
-          rule.ruleType,
-          rule.param.toString(),
-        ]);
+        await client.query(
+          "INSERT INTO rule_versions (account_id, rule_type, param, token_address) VALUES ($1, $2, $3, $4)",
+          [input.accountId, rule.ruleType, rule.param.toString(), rule.tokenAddress ?? null],
+        );
       }
 
       await client.query("COMMIT");

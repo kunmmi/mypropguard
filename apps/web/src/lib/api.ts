@@ -81,6 +81,7 @@ export interface RuleVersion {
   accountId: string;
   ruleType: string;
   param: string;
+  tokenAddress?: string | null;
   effectiveFrom: string;
   isActive: boolean;
   createdAt: string;
@@ -160,10 +161,10 @@ export const api = {
   listRules: (accountId: string) =>
     request<{ rules: RuleVersion[] }>(`/v1/accounts/${encodeURIComponent(accountId)}/rules`),
 
-  addRule: (accountId: string, ruleType: string, param: string) =>
+  addRule: (accountId: string, ruleType: string, param: string, tokenAddress?: string) =>
     request<{ rule: RuleVersion }>(`/v1/accounts/${encodeURIComponent(accountId)}/rules`, {
       method: "POST",
-      body: JSON.stringify({ ruleType, param }),
+      body: JSON.stringify(tokenAddress ? { ruleType, param, tokenAddress } : { ruleType, param }),
     }),
 
   deactivateRule: (accountId: string, ruleId: string) =>

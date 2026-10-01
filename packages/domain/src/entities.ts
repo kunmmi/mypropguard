@@ -74,6 +74,13 @@ export interface RuleVersion {
   ruleType: RuleType;
   /** Rule-specific numeric parameter (e.g. max daily loss amount, max leverage multiple). */
   param: Decimal;
+  /**
+   * For MAX_POSITION_SIZE rules on EVM spot venues only (e.g. "bsc-pancakeswap",
+   * "ethereum-uniswap"): which ERC-20 token `param` limits per-trade spend in - those Guards'
+   * setTokenLimit is per-token, so one generic number isn't enough to describe the rule. Null for
+   * every other rule type/venue (Hyperliquid and GMX have no per-token concept here).
+   */
+  tokenAddress: string | null;
   effectiveFrom: Date;
   isActive: boolean;
   createdAt: Date;

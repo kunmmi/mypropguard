@@ -90,17 +90,44 @@ collateral - the same limitation the plain fork-integration tests already had.
    provisioned Safe address afterward with instructions to connect it directly on GMX's own UI -
    mirroring the existing Hyperliquid agent-wallet-approval callout. Verified live in the browser.
 
+## Done: on-chain rule sync for the spot Guards (PancakeSwap/Uniswap)
+
+The schema decision this used to be blocked on: `rule_versions` gained a nullable `token_address`
+column (`supabase/migrations/0008_rule_token_address.sql`) rather than a new rule type - null for
+every rule except MAX_POSITION_SIZE on an EVM spot venue, where it names which ERC-20 the limit
+applies to. `POST /v1/accounts/:accountId/rules` now rejects a MAX_POSITION_SIZE rule missing
+`tokenAddress` on an EVM Safe account, and otherwise pushes MAX_POSITION_SIZE/MAX_TRADE_FREQUENCY
+changes straight to that account's Guard via the new `EvmChainGuardRuleSyncer`
+(`packages/evm/src/evmGuardRuleSyncer.ts`) - built from the same admin wallet/RPC config that
+already provisions Safes (`apps/api/src/server.ts`'s `configureEvmChainProvisioning`, now also
+wired to `AppDeps.evmGuardSyncers`), so no new env vars. Token decimals are resolved live via the
+ERC-20's own `decimals()` call rather than stored, so a dollar-denominated rule param converts to
+the correct raw on-chain amount regardless of the token. If the on-chain push fails, the
+just-created rule is deactivated and the request fails - a rule the Guard never actually received
+can't sit in Postgres looking active. The dashboard's "Add a rule" form now shows a token-address
+field whenever MAX_POSITION_SIZE is picked for an EVM Safe account, with inline copy explaining
+the limit is enforced for every trade on that token, not just ones placed through the dashboard.
+
+GMX is deliberately excluded from this: its Guard's `setLimits` sets `maxPositionSizeUsd` and
+`maxTradesPerDay` together in one call, so pushing just one rule change would need to first read
+the other current limit to avoid clobbering it - a separate, still-undone piece of design, not
+covered by this change.
+
+**Proof:** 5 new `packages/evm` unit tests (mocked viem clients, no live chain) cover the
+decimals-conversion math, the native-token sentinel, the missing-tokenAddress rejection, and the
+unsupported-rule-type rejection; 5 new `apps/api` tests cover the full HTTP path with a fake
+syncer - successful push, missing-tokenAddress 400, no-op for non-EVM accounts, no-op when no
+syncer is configured for the chain, and the deactivate-on-failure rollback. All 56 `apps/api`
+tests and all `packages/risk-ledger` in-memory tests still pass.
+
+**Still needs, before this is live**: migration 0008 applied to the production database (not done
+from this environment - direct Postgres access to the production pooler isn't reachable from
+here), and a funded admin wallet per EVM chain to pay the gas these calls cost, same operational
+requirement Hyperliquid's gas-free signing never had.
+
 ## Deliberately not done yet (real decisions needed, not just more time)
 
-3. **Rule sync**: `packages/evm`'s `GmxGuardClient`/`SpotGuardClient` exist and are verified
-   (same Anvil test), but nothing in `apps/api` calls them yet when a Postgres rule
-   changes. Blocked on a real schema decision, not just wiring: the spot Guards'
-   `setTokenLimit` is per-token, and `rule_versions` has no token column - extending it needs an
-   actual design choice (a new column? a new rule type? how does "max $100 per trade in USDT"
-   round-trip through the existing single-decimal `param` field?), not a guess. Also needs a
-   funded admin wallet per chain to pay gas for these calls, an operational requirement
-   Hyperliquid's gas-free signing never had.
-4. **Real funded proof**: the same bar as the Hyperliquid mainnet proof - a real Safe, real
+1. **Real funded proof**: the same bar as the Hyperliquid mainnet proof - a real Safe, real
    funds, a real trade through the real exchange UI, with a rule violation genuinely reverting
    on-chain. The *mechanism* is proven on forks (see above); this step is specifically about
    doing it with real money on real mainnet, which needs the account owner's own funded wallet -

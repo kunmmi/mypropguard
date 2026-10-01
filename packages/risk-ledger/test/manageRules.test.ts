@@ -29,6 +29,17 @@ describe("manageRules", () => {
     expect(rules.map((r) => r.ruleType).sort()).toEqual([RuleType.MAX_DAILY_LOSS, RuleType.MAX_POSITION_SIZE].sort());
   });
 
+  it("addRule stores tokenAddress for a per-token EVM rule", async () => {
+    const store = new InMemoryRiskLedgerStore();
+    store.seedAccountRiskHead(buildAccountRiskHead({ accountId: "acct_rules_token" }));
+
+    const added = await addRule(store, "acct_rules_token", RuleType.MAX_POSITION_SIZE, new Decimal(500), "0xUSDT");
+    expect(added.tokenAddress).toBe("0xUSDT");
+
+    const rules = await listRules(store, "acct_rules_token");
+    expect(rules[0]!.tokenAddress).toBe("0xUSDT");
+  });
+
   it("deactivateRule removes a rule from listRules without affecting others", async () => {
     const store = new InMemoryRiskLedgerStore();
     store.seedAccountRiskHead(buildAccountRiskHead({ accountId: "acct_rules_3" }));

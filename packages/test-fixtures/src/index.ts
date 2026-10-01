@@ -41,6 +41,7 @@ export function buildRuleVersion(
     accountId: "acct_test_1",
     ruleType,
     param: new Decimal(param),
+    tokenAddress: null,
     effectiveFrom: new Date("2026-01-01T00:00:00Z"),
     isActive: true,
     createdAt: new Date("2026-01-01T00:00:00Z"),

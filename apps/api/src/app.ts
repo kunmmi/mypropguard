@@ -3,6 +3,7 @@ import cors from "@fastify/cors";
 import type {
   ActionHasher,
   AgentWalletProvisioner,
+  EvmGuardRuleSyncer,
   EvmSafeProvisioner,
   ExecutionSequencer,
   OrderCanceller,
@@ -53,6 +54,15 @@ export interface AppDeps {
    * entirely in the offline scaffold and for any chain not yet configured.
    */
   evmSafeProvisioners?: Record<number, EvmSafeProvisioner>;
+  /**
+   * EVM-chain on-chain rule sync (see packages/evm's EvmChainGuardRuleSyncer), keyed by chain id
+   * the same way as evmSafeProvisioners. POST /v1/accounts/:accountId/rules uses the entry
+   * matching the account's own evmChainId (not the request) to push MAX_POSITION_SIZE/
+   * MAX_TRADE_FREQUENCY changes to that account's already-deployed Guard. Absent entirely in the
+   * offline scaffold and for any chain not yet configured - rule changes then only ever apply
+   * inside MyPropGuard's own dashboard, same as before this existed.
+   */
+  evmGuardSyncers?: Record<number, EvmGuardRuleSyncer>;
   /**
    * When configured, every route requires a valid Supabase bearer token and
    * populates request.userId - route handlers then use it to derive

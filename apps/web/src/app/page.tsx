@@ -240,9 +240,12 @@ function Dashboard({ session }: { session: Session }) {
   const [accountsLoading, setAccountsLoading] = useState(false);
   const [accountsLoaded, setAccountsLoaded] = useState(false);
 
+  const isEvmSafeAccount = Boolean(accounts.find((a) => a.accountId === accountId)?.evmSafeAddress);
+
   const [rules, setRules] = useState<RuleVersion[]>([]);
   const [newRuleType, setNewRuleType] = useState("MAX_POSITION_SIZE");
   const [newRuleParam, setNewRuleParam] = useState("");
+  const [newRuleTokenAddress, setNewRuleTokenAddress] = useState("");
   const [addingRule, setAddingRule] = useState(false);
 
   const [showGuide, setShowGuide] = useState(false);
@@ -316,8 +319,9 @@ function Dashboard({ session }: { session: Session }) {
     setAddingRule(true);
     setError(null);
     try {
-      await api.addRule(accountId, newRuleType, newRuleParam);
+      await api.addRule(accountId, newRuleType, newRuleParam, newRuleTokenAddress || undefined);
       setNewRuleParam("");
+      setNewRuleTokenAddress("");
       // Protection status (e.g. the daily-loss budget shown) depends on
       // active rules - refresh it too, not just the rules list, or it goes
       // stale the moment a rule that fed it changes.
@@ -693,7 +697,10 @@ function Dashboard({ session }: { session: Session }) {
                   >
                     <div>
                       <div style={{ fontSize: 14, fontWeight: 600 }}>{ruleTypeLabel(rule.ruleType)}</div>
-                      <div style={{ fontSize: 12, color: "var(--text-muted)" }}>Limit: {rule.param}</div>
+                      <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
+                        Limit: {rule.param}
+                        {rule.tokenAddress ? ` (token ${rule.tokenAddress})` : ""}
+                      </div>
                     </div>
                     <Button variant="subtle" size="sm" onClick={() => handleDeactivateRule(rule.id)}>
                       Deactivate
@@ -713,10 +720,27 @@ function Dashboard({ session }: { session: Session }) {
                   onChange={(e: React.ChangeEvent<HTMLInputElement>) => setNewRuleParam(e.target.value)}
                   placeholder="e.g. 500"
                 />
-                <Button onClick={handleAddRule} disabled={!newRuleParam || addingRule}>
+                {newRuleType === "MAX_POSITION_SIZE" && isEvmSafeAccount && (
+                  <Input
+                    label="Token address"
+                    value={newRuleTokenAddress}
+                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => setNewRuleTokenAddress(e.target.value)}
+                    placeholder="0x... (the ERC-20 this limit applies to)"
+                  />
+                )}
+                <Button
+                  onClick={handleAddRule}
+                  disabled={!newRuleParam || addingRule || (newRuleType === "MAX_POSITION_SIZE" && isEvmSafeAccount && !newRuleTokenAddress)}
+                >
                   {addingRule ? "Adding…" : "Add rule"}
                 </Button>
               </div>
+              {newRuleType === "MAX_POSITION_SIZE" && isEvmSafeAccount && (
+                <p style={{ marginTop: "var(--space-2)", fontSize: 12, color: "var(--text-muted)" }}>
+                  This account trades on-chain, so this limit is pushed directly to its Guard contract and enforced
+                  for every trade on that token - not just ones placed through this dashboard.
+                </p>
+              )}
             </div>
           </Panel>
         )}

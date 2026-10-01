@@ -12,6 +12,8 @@ export interface NewReservationInput {
 export interface NewAccountRuleInput {
   ruleType: RuleType;
   param: Decimal;
+  /** See RuleVersion.tokenAddress - only meaningful for MAX_POSITION_SIZE on EVM spot venues. */
+  tokenAddress?: string | null;
 }
 
 export interface NewAccountInput {
@@ -69,6 +71,26 @@ export interface ProvisionedEvmSafe {
  */
 export interface EvmSafeProvisioner {
   provisionSafe(ownerWalletAddress: string): Promise<ProvisionedEvmSafe>;
+}
+
+/** What changed about one rule - enough for an EvmGuardRuleSyncer to decide which on-chain call applies. */
+export interface EvmRuleSyncInput {
+  safeAddress: string;
+  ruleType: RuleType;
+  param: Decimal;
+  /** Required for MAX_POSITION_SIZE (the Guard's per-token limit); ignored otherwise. */
+  tokenAddress?: string | null;
+}
+
+/**
+ * Pushes a changed risk rule on-chain to a trader's already-deployed Guard, so it's enforced on
+ * the exchange's own UI too, not just through MyPropGuard's dashboard. Only rule types the
+ * relevant Guard contract actually understands are supported - MAX_POSITION_SIZE (per-token) and
+ * MAX_TRADE_FREQUENCY for the spot Guards (PancakeSwap/Uniswap); unsupported combinations should
+ * be rejected by the caller before reaching this port, not silently ignored here.
+ */
+export interface EvmGuardRuleSyncer {
+  syncRule(input: EvmRuleSyncInput): Promise<void>;
 }
 
 /**
