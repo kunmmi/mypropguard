@@ -1,0 +1,229 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
+import {Test} from "forge-std/Test.sol";
+import {PancakeSwapLimitGuard} from "../src/PancakeSwapLimitGuard.sol";
+import {Enum} from "safe-smart-account/contracts/interfaces/Enum.sol";
+
+/// @notice Exercises PancakeSwapLimitGuard's V2 and V3 decode paths against calldata shaped
+/// exactly like real PancakeSwap V2 Router / V3 SmartRouter calls (struct layouts and selector
+/// confirmations in research_notes/EVM on-chain trading risk enforcement/
+/// pancakeswap_router_and_frontend_routing.md and v3_and_universal_router_abi.md).
+contract PancakeSwapLimitGuardTest is Test {
+    PancakeSwapLimitGuard guard;
+
+    address admin = address(0xA11CE);
+    address v2Router = address(0xCAFE);
+    address v3RouterNoDeadline = address(0xBEE1); // SwapRouter02-style
+    address v3RouterWithDeadline = address(0xBEE2); // original SwapRouter-style
+    address safeAccount = address(0x5AFE);
+    address otherTarget = address(0xBEEF);
+    address usdt = address(0x55d398326f99059fF775485246999027B3197955);
+    address busd = address(0xe9e7CEA3DedcA5984780Bafc599bD69ADd087D56);
+
+    function setUp() public {
+        guard = new PancakeSwapLimitGuard(admin, v2Router);
+        vm.startPrank(admin);
+        guard.setRouterKind(v3RouterNoDeadline, PancakeSwapLimitGuard.RouterKind.V3NoDeadline);
+        guard.setRouterKind(v3RouterWithDeadline, PancakeSwapLimitGuard.RouterKind.V3WithDeadline);
+        vm.stopPrank();
+    }
+
+    // ---- helpers -----------------------------------------------------------------------
+
+    function _swapExactTokensForTokens(uint256 amountIn, address tokenIn, address tokenOut) private view returns (bytes memory) {
+        address[] memory path = new address[](2);
+        path[0] = tokenIn;
+        path[1] = tokenOut;
+        return abi.encodeWithSignature(
+            "swapExactTokensForTokens(uint256,uint256,address[],address,uint256)", amountIn, 0, path, safeAccount, block.timestamp + 300
+        );
+    }
+
+    function _exactInputSingleNoDeadline(address tokenIn, address tokenOut, uint256 amountIn) private view returns (bytes memory) {
+        return abi.encodeWithSignature(
+            "exactInputSingle((address,address,uint24,address,uint256,uint256,uint160))",
+            tokenIn, tokenOut, uint24(3000), safeAccount, amountIn, uint256(0), uint160(0)
+        );
+    }
+
+    function _exactInputSingleWithDeadline(address tokenIn, address tokenOut, uint256 amountIn) private view returns (bytes memory) {
+        return abi.encodeWithSignature(
+            "exactInputSingle((address,address,uint24,address,uint256,uint256,uint256,uint160))",
+            tokenIn, tokenOut, uint24(3000), safeAccount, block.timestamp + 300, amountIn, uint256(0), uint160(0)
+        );
+    }
+
+    function _exactInputNoDeadline(address tokenIn, address tokenOut, uint256 amountIn) private view returns (bytes memory) {
+        bytes memory path = abi.encodePacked(tokenIn, uint24(3000), tokenOut);
+        return abi.encodeWithSignature("exactInput((bytes,address,uint256,uint256))", path, safeAccount, amountIn, uint256(0));
+    }
+
+    function _checkAsSafe(address to, uint256 value, bytes memory data) private {
+        vm.prank(safeAccount);
+        guard.checkTransaction(to, value, data, Enum.Operation.Call, 0, 0, 0, address(0), payable(address(0)), "", address(0));
+    }
+
+    function _setLimits(uint256 tradesPerDay, address token, uint256 amount) private {
+        vm.startPrank(admin);
+        guard.setMaxTradesPerDay(safeAccount, tradesPerDay);
+        if (token != address(0) || amount != 0) guard.setTokenLimit(safeAccount, token, amount);
+        vm.stopPrank();
+    }
+
+    // ---- V2 regression tests (unchanged behavior from the old V2-only contract) -----------
+
+    function test_V2_AllowsTradeWithinLimits() public {
+        _setLimits(5, usdt, 1000e18);
+        _checkAsSafe(v2Router, 0, _swapExactTokensForTokens(500e18, usdt, busd));
+        (, uint256 tradesToday) = guard.tradeState(safeAccount);
+        assertEq(tradesToday, 1);
+    }
+
+    function test_V2_RevertsWhenAmountExceeded() public {
+        _setLimits(5, usdt, 1000e18);
+        vm.expectRevert(abi.encodeWithSelector(PancakeSwapLimitGuard.TradeAmountExceeded.selector, usdt, 2000e18, 1000e18));
+        _checkAsSafe(v2Router, 0, _swapExactTokensForTokens(2000e18, usdt, busd));
+    }
+
+    function test_IgnoresUnrecognizedRouterAddress() public {
+        // No limits configured at all - must not revert, since address(0xBEEF) was never
+        // registered with any RouterKind.
+        _checkAsSafe(otherTarget, 0, hex"deadbeef");
+    }
+
+    // ---- V3 direct calls, both struct shapes ---------------------------------------------
+
+    function test_V3NoDeadline_AllowsDirectExactInputSingleWithinLimit() public {
+        _setLimits(5, usdt, 1000e18);
+        _checkAsSafe(v3RouterNoDeadline, 0, _exactInputSingleNoDeadline(usdt, busd, 500e18));
+        (, uint256 tradesToday) = guard.tradeState(safeAccount);
+        assertEq(tradesToday, 1);
+    }
+
+    function test_V3NoDeadline_RevertsWhenExactInputSingleExceedsLimit() public {
+        _setLimits(5, usdt, 1000e18);
+        vm.expectRevert(abi.encodeWithSelector(PancakeSwapLimitGuard.TradeAmountExceeded.selector, usdt, 2000e18, 1000e18));
+        _checkAsSafe(v3RouterNoDeadline, 0, _exactInputSingleNoDeadline(usdt, busd, 2000e18));
+    }
+
+    function test_V3WithDeadline_DecodesCorrectlyDespiteExtraField() public {
+        // The whole point of tracking RouterKind per address: this struct has an extra
+        // `deadline` field before amountIn - decoding it with the no-deadline shape would read
+        // the deadline timestamp as if it were amountIn (a huge, wrong number). Confirm the
+        // correct shape is picked and amountIn is read correctly.
+        _setLimits(5, usdt, 1000e18);
+        _checkAsSafe(v3RouterWithDeadline, 0, _exactInputSingleWithDeadline(usdt, busd, 500e18));
+        (, uint256 tradesToday) = guard.tradeState(safeAccount);
+        assertEq(tradesToday, 1);
+    }
+
+    function test_V3WithDeadline_RevertsWhenExceedsLimit() public {
+        _setLimits(5, usdt, 1000e18);
+        vm.expectRevert(abi.encodeWithSelector(PancakeSwapLimitGuard.TradeAmountExceeded.selector, usdt, 2000e18, 1000e18));
+        _checkAsSafe(v3RouterWithDeadline, 0, _exactInputSingleWithDeadline(usdt, busd, 2000e18));
+    }
+
+    // ---- V3 multicall wrapping (all three overloads) ---------------------------------------
+
+    function test_V3_DecodesExactInputSingleWrappedInPlainMulticall() public {
+        _setLimits(5, usdt, 1000e18);
+        bytes[] memory calls = new bytes[](1);
+        calls[0] = _exactInputSingleNoDeadline(usdt, busd, 2000e18);
+        bytes memory data = abi.encodeWithSignature("multicall(bytes[])", calls);
+
+        vm.expectRevert(abi.encodeWithSelector(PancakeSwapLimitGuard.TradeAmountExceeded.selector, usdt, 2000e18, 1000e18));
+        _checkAsSafe(v3RouterNoDeadline, 0, data);
+    }
+
+    function test_V3_DecodesExactInputSingleWrappedInDeadlineMulticall() public {
+        _setLimits(5, usdt, 1000e18);
+        bytes[] memory calls = new bytes[](1);
+        calls[0] = _exactInputSingleNoDeadline(usdt, busd, 2000e18);
+        bytes memory data = abi.encodeWithSignature("multicall(uint256,bytes[])", block.timestamp + 300, calls);
+
+        vm.expectRevert(abi.encodeWithSelector(PancakeSwapLimitGuard.TradeAmountExceeded.selector, usdt, 2000e18, 1000e18));
+        _checkAsSafe(v3RouterNoDeadline, 0, data);
+    }
+
+    function test_V3_DecodesExactInputSingleWrappedInPrevBlockhashMulticall() public {
+        _setLimits(5, usdt, 1000e18);
+        bytes[] memory calls = new bytes[](1);
+        calls[0] = _exactInputSingleNoDeadline(usdt, busd, 2000e18);
+        bytes memory data = abi.encodeWithSignature("multicall(bytes32,bytes[])", blockhash(block.number - 1), calls);
+
+        vm.expectRevert(abi.encodeWithSelector(PancakeSwapLimitGuard.TradeAmountExceeded.selector, usdt, 2000e18, 1000e18));
+        _checkAsSafe(v3RouterNoDeadline, 0, data);
+    }
+
+    function test_V3_MultipleOrdersInOneMulticallAreEachChecked() public {
+        _setLimits(1, usdt, 1000e18);
+        bytes[] memory calls = new bytes[](2);
+        calls[0] = _exactInputSingleNoDeadline(usdt, busd, 100e18);
+        calls[1] = _exactInputSingleNoDeadline(usdt, busd, 100e18);
+        bytes memory data = abi.encodeWithSignature("multicall(bytes[])", calls);
+
+        // Two swaps in one batch against a 1/day limit - must revert on the second, not
+        // silently allow a batch to slip two trades past a one-trade limit.
+        vm.expectRevert(abi.encodeWithSelector(PancakeSwapLimitGuard.TradeCountExceeded.selector, 2, 1));
+        _checkAsSafe(v3RouterNoDeadline, 0, data);
+    }
+
+    // ---- exactInput (multi-hop, packed path) -----------------------------------------------
+
+    function test_V3_ExactInputDecodesFirstTokenFromPackedPath() public {
+        _setLimits(5, usdt, 1000e18);
+        vm.expectRevert(abi.encodeWithSelector(PancakeSwapLimitGuard.TradeAmountExceeded.selector, usdt, 2000e18, 1000e18));
+        _checkAsSafe(v3RouterNoDeadline, 0, _exactInputNoDeadline(usdt, busd, 2000e18));
+    }
+
+    // ---- amountIn == 0 self-balance sentinel: must be rejected, never silently allowed -----
+
+    function test_V3_RevertsOnZeroAmountInSentinel() public {
+        _setLimits(5, usdt, 1000e18);
+        vm.expectRevert(PancakeSwapLimitGuard.ZeroAmountInNotAllowed.selector);
+        _checkAsSafe(v3RouterNoDeadline, 0, _exactInputSingleNoDeadline(usdt, busd, 0));
+    }
+
+    // ---- fail-closed / admin-only ---------------------------------------------------------
+
+    function test_RevertsWhenTradeCountLimitNotConfigured() public {
+        vm.expectRevert(abi.encodeWithSelector(PancakeSwapLimitGuard.LimitsNotConfigured.selector, safeAccount));
+        _checkAsSafe(v3RouterNoDeadline, 0, _exactInputSingleNoDeadline(usdt, busd, 100e18));
+    }
+
+    function test_OnlyAdminCanConfigureRoutersOrLimits() public {
+        vm.expectRevert(PancakeSwapLimitGuard.NotAdmin.selector);
+        vm.prank(safeAccount);
+        guard.setRouterKind(address(0x1234), PancakeSwapLimitGuard.RouterKind.V2);
+
+        vm.expectRevert(PancakeSwapLimitGuard.NotAdmin.selector);
+        vm.prank(safeAccount);
+        guard.setMaxTradesPerDay(safeAccount, 5);
+    }
+
+    function test_RevertsOnDelegateCallToAnyRecognizedRouter() public {
+        _setLimits(5, usdt, 1000e18);
+        vm.expectRevert(PancakeSwapLimitGuard.DelegateCallNotAllowed.selector);
+        vm.prank(safeAccount);
+        guard.checkTransaction(
+            v3RouterNoDeadline, 0, _exactInputSingleNoDeadline(usdt, busd, 100e18), Enum.Operation.DelegateCall, 0, 0, 0, address(0), payable(address(0)), "", address(0)
+        );
+    }
+
+    function test_ModuleInitiatedV3TradesAreEnforcedTheSameAsOwnerInitiated() public {
+        _setLimits(5, usdt, 100e18);
+        vm.expectRevert(abi.encodeWithSelector(PancakeSwapLimitGuard.TradeAmountExceeded.selector, usdt, 200e18, 100e18));
+        vm.prank(safeAccount);
+        guard.checkModuleTransaction(v3RouterNoDeadline, 0, _exactInputSingleNoDeadline(usdt, busd, 200e18), Enum.Operation.Call, address(0xD00D));
+    }
+
+    function test_RemovingARouterByResettingToNoneStopsEnforcement() public {
+        _setLimits(5, usdt, 1000e18);
+        vm.prank(admin);
+        guard.setRouterKind(v3RouterNoDeadline, PancakeSwapLimitGuard.RouterKind.None);
+
+        // Must not revert even for a huge amount - this address is no longer a recognized router.
+        _checkAsSafe(v3RouterNoDeadline, 0, _exactInputSingleNoDeadline(usdt, busd, 999_999e18));
+    }
+}

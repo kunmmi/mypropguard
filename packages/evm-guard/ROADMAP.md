@@ -6,35 +6,48 @@ at the bottom for why, and what unlocks it.
 
 ## Done
 
-| # | Chain | Exchange | Router covered | Rules enforced | Proof |
+| # | Chain | Exchange | Router(s) covered | Rules enforced | Proof |
 |---|---|---|---|---|---|
 | 1 | Arbitrum | GMX v2 (Classic Trading) | ExchangeRouter | max position size, max trades/day | 12 unit tests + 2 live-fork tests against real GMX contract |
-| 2 | BSC | PancakeSwap | V2 Router only | max $ per trade (per token), max trades/day | 13 unit tests + 3 live-fork tests, incl. one complete real swap |
-| 3 | Ethereum | Uniswap | V2 Router only | max $ per trade (per token), max trades/day | 13 unit tests + 3 live-fork tests, incl. one complete real swap |
+| 2 | BSC | PancakeSwap | V2 Router + V3 SmartRouter | max $ per trade (per token), max trades/day | 18 unit tests + 4 live-fork tests, incl. 2 complete real swaps |
+| 3 | Ethereum | Uniswap | V2 Router + V3 SwapRouter + SwapRouter02 | max $ per trade (per token), max trades/day | 18 unit tests + 4 live-fork tests, incl. 2 complete real swaps |
 
 All three: one Guard contract per exchange, shared across every MyPropGuard Safe, admin-only
 configuration (trader can't loosen their own limits), fail-closed if limits were never set.
 Uniswap's Guard is near-identical code to PancakeSwap's, confirmed safe to duplicate rather than
-share since PancakeSwap's V2 Router is a line-by-line fork of Uniswap's own.
+share since PancakeSwap's routers are line-by-line forks of Uniswap's own.
 
-## Next: close the V3 / Universal Router gap (both chains)
+Items 2 and 3 now cover V2 AND V3 (both struct generations - with/without a `deadline` field,
+picked per registered router address via a `RouterKind` registry, since a Safe can only have one
+Guard active and decoding the wrong struct shape silently misaligns every field after
+`recipient`). The `amountIn == 0` "spend my whole balance" sentinel is rejected outright rather
+than silently mis-checked as zero.
 
-Both PancakeSwap and Uniswap have a V3 SmartRouter/Universal Router path that the V1 Guards
-don't cover yet - a trade routed through either (which the official frontends sometimes pick for
-better pricing) currently passes through unchecked. This needs:
+## Next: Universal Router (both chains) - currently blocked on real gaps, not just unstarted
 
-1. Direct GitHub source reads of PancakeSwap's `MulticallExtended`/Universal Router and Uniswap's
-   own Universal Router, to pin down the exact (and possibly differing) multicall selector
-   variants and command-ID encodings - flagged as unconfirmed gaps in the existing research
-   notes.
-2. A Guard (or an extension of the existing one) that handles three calldata shapes instead of
-   one: bare top-level call, optionally-multicall-wrapped call, and Universal Router's
-   `execute(commands, inputs)` batch format.
-3. Handle the `amountIn == 0` ("use my whole balance") edge case flagged in the PancakeSwap
-   research - a naive Guard reading `amountIn` from calldata would miss the real spend amount in
-   this case.
-4. Same test bar: unit tests + live fork tests with at least one real successful swap through
-   each additional router.
+Deliberately NOT built yet, and not simply because of time - real research gaps make it unsafe
+to ship with confidence right now (see `research_notes/EVM on-chain trading risk enforcement/
+v3_and_universal_router_abi.md`):
+
+1. At least two live Ethereum Universal Router deployments decode the same command IDs into
+   different tuple shapes (5-field vs. 6-field) - which one applies depends on which deployed
+   address is the call target, and this needs to be gotten exactly right or a Guard would
+   misread the real trade size.
+2. The newest deployment has a third entry point, `executeSigned(...)`, whose
+   authorization/attribution model (who can trigger it, whether it can relay someone else's
+   pre-signed intent) is not understood yet - shipping without understanding this risks leaving
+   an entire unblocked execution path.
+3. PancakeSwap's Universal Router has its own extra command IDs beyond the ones shared with
+   Uniswap's - these need explicit handling, not an "unknown command = assume safe" default.
+4. PancakeSwap's exact `MulticallExtended` selectors (relevant to its V3 SmartRouter, separately
+   from Universal Router) were only secondary-sourced, not confirmed against primary GitHub/BscScan
+   source.
+
+Before writing any Universal Router Guard code: close gaps 1-2 with direct Sourcify/Etherscan
+bytecode reads (not just GitHub tags, since the research found real version drift), and get an
+explicit answer on `executeSigned`'s authorization model. Shipping with these open would risk
+the worst outcome for a security product: claiming a trade is blocked when it actually wasn't
+decoded correctly, or claiming coverage of an execution path that was never actually blocked.
 
 ## Open question: GMGN
 

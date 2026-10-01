@@ -78,55 +78,85 @@ real GMX logic," not on the exact revert reason.)
 
 ## PancakeSwap (BSC)
 
-`PancakeSwapV2LimitGuard.sol` does the same job as the GMX Guard, for PancakeSwap's **V2
-Router** on BSC (`0x10ED43C718714eb63d5aA57B78B54704E256024E` as of Oct 2026). Since spot swaps
-have no "position" or "leverage" concept, the two enforced rules are **max amount of a given
-input token spent per trade** (in that token's own units - no price oracle) and **max trades
-per day**.
+`PancakeSwapLimitGuard.sol` does the same job as the GMX Guard, for PancakeSwap on BSC. Since
+spot swaps have no "position" or "leverage" concept, the two enforced rules are **max amount of
+a given input token spent per trade** (in that token's own units - no price oracle) and **max
+trades per day**.
 
-**Scope and what's confirmed vs. not**, per
-`research_notes/EVM on-chain trading risk enforcement/pancakeswap_router_and_frontend_routing.md`:
-- Only the **V2 Router** is covered. PancakeSwap also has a V3 SmartRouter and a Universal
-  Router, both with a more complex, optionally-multicall-wrapped calldata shape - a trade routed
-  through either of those (which pancakeswap.finance's own UI sometimes picks for better
-  pricing) is **not yet covered** by this Guard.
+Covers **both the V2 Router** (`0x10ED43C718714eb63d5aA57B78B54704E256024E`) **and the V3
+SmartRouter** (`0x13f4EA83D0bd40E75C8222255bc855a974568Dd4`), including swaps wrapped in any of
+the three `multicall` overloads V3 routers support. A small on-chain registry
+(`routerKind(address) => RouterKind`) tracks which decode logic applies to which router address -
+only MyPropGuard's admin can add/remove entries. **Not covered**: PancakeSwap's Universal Router
+(Infinity) - see "Universal Router: deliberately not covered" below.
+
+**On PooCoin/GMGN**, per
+`research_notes/EVM on-chain trading risk enforcement/pancakeswap_router_and_frontend_routing.md`
+and the follow-up `gmgn_bsc_routing_confirmed.md`:
 - **PooCoin**: community evidence suggests it calls PancakeSwap's router directly (no PooCoin
   contract in between) - if true, PooCoin trades would already be covered. Not confirmed from a
   primary source.
-- **GMGN**: documented to run its own backend routing/quoting layer, which strongly suggests
-  (but doesn't confirm) it uses its own intermediary contract on BSC rather than calling
-  PancakeSwap's router directly from the trader's Safe - if so, GMGN trades would **not** be
-  covered by this Guard at all, the same way an unrecognized `to` address is never covered.
-  Confirming this needs inspecting a real GMGN BSC transaction's `to` address on BscScan, which
-  wasn't possible with this research pass's tools.
+- **GMGN**: evidence leans toward GMGN using its own backend-mediated execution path (its live
+  BSC trading UI requires a site account login before it'll even quote a trade - unlike
+  PancakeSwap/Uniswap, which only require a connected wallet - consistent with, though not proof
+  of, a GMGN-controlled intermediary contract). Treat GMGN trades as **not covered** until this
+  is confirmed via a real GMGN account + transaction inspection, deliberately not pursued further
+  since that's a bigger step than research.
 
-**Verified**: 13 unit tests (same coverage pattern as the GMX Guard: within-limit trades, both
-ERC-20-input and native-BNB-input swap shapes, per-token vs. "not yet configured" limits,
-daily-count enforcement and reset, ignoring non-swap router calls like `addLiquidity`,
-`delegatecall` blocking, module-path parity, admin-only configuration) plus 3 tests against a
-**live BSC mainnet fork** calling the real V2 Router - one of which is a complete, successful
-real swap (0.1 BNB for BUSD against live liquidity, confirmed by checking the trader's real
-BUSD balance afterward, not just a revert-reason check).
+**Verified**: 18 unit tests (within-limit trades for both V2 and V3, both struct shapes - with
+and without a `deadline` field - all three V3 `multicall` wrapping overloads, multi-hop
+`exactInput`'s packed-path token extraction, rejecting the `amountIn == 0`
+"spend-my-whole-balance" sentinel outright rather than silently mis-checking it as zero,
+ignoring unrecognized router addresses, `delegatecall` blocking, module-path parity, admin-only
+configuration) plus 4 tests against a **live BSC mainnet fork** calling the real V2 Router and
+V3 SmartRouter - two of which are complete, successful real swaps (0.1 BNB for BUSD via V2, and
+0.1 WBNB for BUSD via V3's `exactInputSingle`), confirmed via the trader's real BUSD balance.
 
 ## Uniswap (Ethereum)
 
-`UniswapV2LimitGuard.sol` is the same logic as the PancakeSwap Guard, pointed at Uniswap's real
-V2 Router on Ethereum mainnet (`0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D`, stable and
-unchanged since June 2020). This is possible because PancakeSwap's V2 Router is a confirmed
-near-exact fork of Uniswap's own `UniswapV2Router02.sol` (line-by-line source diff - same 446
-lines, same logic order, only cosmetic differences - see
-`research_notes/Uniswap V2 Router Ethereum parity/`), so the same decode logic applies to both
-with only the router/native-token addresses changed. Kept as a separate contract rather than a
-shared parameterized one, same reasoning as keeping the GMX and PancakeSwap Guards separate.
+`UniswapLimitGuard.sol` is the same logic as the PancakeSwap Guard, pointed at Uniswap's real
+contracts on Ethereum mainnet. This is possible because PancakeSwap's routers are confirmed
+near-exact forks of Uniswap's own (line-by-line source diffs - see
+`research_notes/Uniswap V2 Router Ethereum parity/` and
+`research_notes/EVM on-chain trading risk enforcement/v3_and_universal_router_abi.md`), so the
+same decode logic applies to both with only addresses changed. Kept as a separate contract
+rather than a shared parameterized one, same reasoning as keeping the GMX Guard separate.
 
-Same scope note as PancakeSwap: only the **V2 Router** is covered; Uniswap's own V3 SwapRouter
-and Universal Router (more complex, optionally-wrapped calldata) are not yet covered - see
-`ROADMAP.md`.
+Covers the **V2 Router** (`0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D`, stable since June 2020)
+and **both V3 router generations**: the original `SwapRouter` (`0xE592427A0AEce92De3Edee1F18E0157C05861564`,
+whose `ExactInputSingleParams`/`ExactInputParams` structs include a `deadline` field) and
+`SwapRouter02` (`0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45`, which omits it entirely - decoding
+one shape against the other's calldata silently misaligns every field after `recipient`, which is
+exactly why each registered router carries its own `RouterKind`). **Not covered**: Uniswap's own
+Universal Router - see below.
 
-**Verified**: 13 unit tests (identical coverage pattern to the PancakeSwap suite) plus 3 tests
-against a **live Ethereum mainnet fork** calling the real V2 Router - one of which is a
-complete, successful real swap (0.1 ETH for DAI against live liquidity, confirmed by checking
-the trader's real DAI balance afterward).
+**Verified**: 18 unit tests (identical coverage pattern to the PancakeSwap suite, plus a
+dedicated test proving the with-deadline struct decodes correctly despite the extra field) plus
+4 tests against a **live Ethereum mainnet fork** calling the real V2 Router and real
+`SwapRouter02` - two of which are complete, successful real swaps (0.1 ETH for DAI via V2, and
+0.1 WETH for DAI via V3's `exactInputSingle`), confirmed via the trader's real DAI balance - the
+V3 one in particular is strong proof the "no-deadline" 7-field struct genuinely matches
+`SwapRouter02`'s live deployed bytecode, not just our own re-derivation of its published source.
+
+## Universal Router: deliberately not covered (both chains)
+
+Per `research_notes/EVM on-chain trading risk enforcement/v3_and_universal_router_abi.md`,
+Uniswap's (and PancakeSwap's) Universal Router is not one stable ABI:
+- At least two live Ethereum-mainnet deployments decode the *same* command IDs
+  (`V2_SWAP_EXACT_IN`, `V3_SWAP_EXACT_IN`, etc.) into **different tuple shapes** (a 5-field vs.
+  6-field input encoding) - a Guard must know which deployed address it's looking at to decode
+  correctly, and getting this wrong silently misreads the real trade size.
+- The newest deployment has a **third top-level entry point**, `executeSigned(...)`, whose
+  authorization/attribution semantics (who can trigger it, whether it can relay someone else's
+  pre-signed intent) were not confirmed in this research pass.
+- PancakeSwap's Universal Router adds its own extra command IDs (`INFI_SWAP`,
+  `STABLE_SWAP_EXACT_IN`, etc.) that aren't in Uniswap's set and must be explicitly handled, not
+  assumed safe-by-default.
+
+Shipping a Guard against Universal Router with these specific gaps unresolved risks creating
+**false confidence** - claiming a trade is blocked/limited when the real calldata shape wasn't
+actually understood. That's a worse outcome than plainly not supporting it yet, so it's left out
+until the gaps above are closed (see `ROADMAP.md`).
 
 ## Development
 
