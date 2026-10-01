@@ -108,6 +108,26 @@ daily-count enforcement and reset, ignoring non-swap router calls like `addLiqui
 real swap (0.1 BNB for BUSD against live liquidity, confirmed by checking the trader's real
 BUSD balance afterward, not just a revert-reason check).
 
+## Uniswap (Ethereum)
+
+`UniswapV2LimitGuard.sol` is the same logic as the PancakeSwap Guard, pointed at Uniswap's real
+V2 Router on Ethereum mainnet (`0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D`, stable and
+unchanged since June 2020). This is possible because PancakeSwap's V2 Router is a confirmed
+near-exact fork of Uniswap's own `UniswapV2Router02.sol` (line-by-line source diff - same 446
+lines, same logic order, only cosmetic differences - see
+`research_notes/Uniswap V2 Router Ethereum parity/`), so the same decode logic applies to both
+with only the router/native-token addresses changed. Kept as a separate contract rather than a
+shared parameterized one, same reasoning as keeping the GMX and PancakeSwap Guards separate.
+
+Same scope note as PancakeSwap: only the **V2 Router** is covered; Uniswap's own V3 SwapRouter
+and Universal Router (more complex, optionally-wrapped calldata) are not yet covered - see
+`ROADMAP.md`.
+
+**Verified**: 13 unit tests (identical coverage pattern to the PancakeSwap suite) plus 3 tests
+against a **live Ethereum mainnet fork** calling the real V2 Router - one of which is a
+complete, successful real swap (0.1 ETH for DAI against live liquidity, confirmed by checking
+the trader's real DAI balance afterward).
+
 ## Development
 
 ```bash
@@ -119,7 +139,9 @@ forge build
 forge test                                            # unit tests, no network needed
 forge test --match-contract GmxForkIntegrationTest          # needs network access (forks Arbitrum mainnet)
 forge test --match-contract PancakeSwapForkIntegrationTest  # needs network access (forks BSC mainnet)
+forge test --match-contract UniswapForkIntegrationTest      # needs network access (forks Ethereum mainnet)
 ```
 
-Set `ARBITRUM_RPC_URL` / `BSC_RPC_URL` to override the default public RPCs
-(`https://arb1.arbitrum.io/rpc` / `https://bsc-dataseed.binance.org`) used by the fork tests.
+Set `ARBITRUM_RPC_URL` / `BSC_RPC_URL` / `ETH_RPC_URL` to override the default public RPCs
+(`https://arb1.arbitrum.io/rpc` / `https://bsc-dataseed.binance.org` / `https://ethereum.publicnode.com`)
+used by the fork tests.

@@ -10,26 +10,14 @@ at the bottom for why, and what unlocks it.
 |---|---|---|---|---|---|
 | 1 | Arbitrum | GMX v2 (Classic Trading) | ExchangeRouter | max position size, max trades/day | 12 unit tests + 2 live-fork tests against real GMX contract |
 | 2 | BSC | PancakeSwap | V2 Router only | max $ per trade (per token), max trades/day | 13 unit tests + 3 live-fork tests, incl. one complete real swap |
+| 3 | Ethereum | Uniswap | V2 Router only | max $ per trade (per token), max trades/day | 13 unit tests + 3 live-fork tests, incl. one complete real swap |
 
-Both: one Guard contract per exchange, shared across every MyPropGuard Safe, admin-only
+All three: one Guard contract per exchange, shared across every MyPropGuard Safe, admin-only
 configuration (trader can't loosen their own limits), fail-closed if limits were never set.
+Uniswap's Guard is near-identical code to PancakeSwap's, confirmed safe to duplicate rather than
+share since PancakeSwap's V2 Router is a line-by-line fork of Uniswap's own.
 
-## Next: Ethereum - Uniswap V2
-
-Same shape as PancakeSwap (literally the router PancakeSwap forked), so this should be the
-fastest of the remaining items. Steps, same process as the first two:
-
-1. Research Uniswap's V2 Router (confirm current mainnet address, confirm ABI matches
-   PancakeSwap's - expected to be near-identical since PancakeSwap V2 is a direct fork -
-   confirm no EOA-only gating, same standard as prior research passes).
-2. Build `UniswapV2LimitGuard.sol` - almost certainly a near-copy of `PancakeSwapV2LimitGuard.sol`
-   with the router address and WETH constant swapped in (Ethereum's "native-in" functions are
-   named `...ETH...` already, same convention).
-3. Unit tests mirroring the PancakeSwap suite.
-4. Live Ethereum-mainnet-fork tests against the real deployed Uniswap V2 Router, including at
-   least one complete real swap (same bar as the PancakeSwap proof).
-
-## After that: close the V3 / Universal Router gap (both chains)
+## Next: close the V3 / Universal Router gap (both chains)
 
 Both PancakeSwap and Uniswap have a V3 SmartRouter/Universal Router path that the V1 Guards
 don't cover yet - a trade routed through either (which the official frontends sometimes pick for
