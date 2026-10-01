@@ -1,11 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { RuleType, type AgentWalletProvisioner } from "@mypropguard/domain";
+import { RuleType, type AgentWalletProvisioner, type EvmSafeProvisioner } from "@mypropguard/domain";
 import { InMemoryRiskLedgerStore } from "@mypropguard/test-fixtures";
 import { buildApp } from "../src/app.js";
 
 function fakeAgentWalletProvisioner(walletId: string, walletAddress: string): AgentWalletProvisioner {
   return {
     provisionWallet: async () => ({ walletId, walletAddress }),
+  };
+}
+
+function fakeEvmSafeProvisioner(safeAddress: string, chainId: number): EvmSafeProvisioner {
+  return {
+    provisionSafe: async () => ({ safeAddress, chainId }),
   };
 }
 
@@ -26,7 +32,12 @@ describe("POST /v1/accounts", () => {
     });
 
     expect(response.statusCode).toBe(201);
-    expect(response.json()).toEqual({ accountId: "acct_new_1", protectionOn: false, agentWalletAddress: null });
+    expect(response.json()).toEqual({
+      accountId: "acct_new_1",
+      protectionOn: false,
+      agentWalletAddress: null,
+      evmSafeAddress: null,
+    });
 
     const protectionResponse = await app.inject({ method: "GET", url: "/v1/protection/acct_new_1" });
     expect(protectionResponse.json().maxLossToday).toBe("500");
@@ -60,6 +71,51 @@ describe("POST /v1/accounts", () => {
     });
 
     expect(response.json().agentWalletAddress).toBeNull();
+  });
+
+  it("provisions a real Safe when an EVM Safe provisioner is configured for the request's chain", async () => {
+    const store = new InMemoryRiskLedgerStore();
+    const app = buildApp({ store, evmSafeProvisioners: { 42161: fakeEvmSafeProvisioner("0xSAFE123", 42161) } });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/accounts",
+      payload: {
+        accountId: "acct_evm_1",
+        ownerUserId: "user_evm",
+        venue: "arbitrum-gmx",
+        initialEquity: "1000",
+        evmOwnerWalletAddress: "0xTRADERWALLET",
+        evmChainId: 42161,
+      },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(response.json().evmSafeAddress).toBe("0xSAFE123");
+
+    const listResponse = await app.inject({ method: "GET", url: "/v1/accounts?ownerUserId=user_evm" });
+    expect(listResponse.json().accounts[0].evmSafeAddress).toBe("0xSAFE123");
+  });
+
+  it("does not provision a Safe when no provisioner is configured for the request's chain", async () => {
+    const store = new InMemoryRiskLedgerStore();
+    const app = buildApp({ store, evmSafeProvisioners: { 1: fakeEvmSafeProvisioner("0xSAFE_ETH", 1) } });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/accounts",
+      payload: {
+        accountId: "acct_evm_2",
+        ownerUserId: "user_evm_2",
+        venue: "bsc-pancakeswap",
+        initialEquity: "1000",
+        evmOwnerWalletAddress: "0xTRADERWALLET2",
+        evmChainId: 56, // no provisioner configured for BSC in this test
+      },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(response.json().evmSafeAddress).toBeNull();
   });
 
   it("defaults to hyperliquid venue and an empty rule set", async () => {

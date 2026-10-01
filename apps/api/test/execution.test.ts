@@ -314,6 +314,9 @@ describe("per-account wallet resolution", () => {
       createdAt: new Date(),
       agentWalletId: "wallet_own",
       agentWalletAddress: "0xOWNWALLET",
+      evmOwnerWalletAddress: null,
+      evmSafeAddress: null,
+      evmChainId: null,
     });
 
     const hasher = new PlaceholderActionHasher();
@@ -357,6 +360,9 @@ describe("per-account wallet resolution", () => {
       createdAt: new Date(),
       agentWalletId: null,
       agentWalletAddress: null,
+      evmOwnerWalletAddress: null,
+      evmSafeAddress: null,
+      evmChainId: null,
     });
 
     const hasher = new PlaceholderActionHasher();
@@ -399,6 +405,9 @@ describe("per-account wallet resolution", () => {
       createdAt: new Date(),
       agentWalletId: "wallet_own_submit",
       agentWalletAddress: "0xOWNWALLETSUBMIT",
+      evmOwnerWalletAddress: null,
+      evmSafeAddress: null,
+      evmChainId: null,
     });
 
     const hasher = new PlaceholderActionHasher();

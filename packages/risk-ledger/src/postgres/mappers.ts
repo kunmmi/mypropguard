@@ -11,6 +11,9 @@ export function rowToProtectedAccount(row: Record<string, unknown>): ProtectedAc
     createdAt: new Date(row.created_at as string),
     agentWalletId: (row.agent_wallet_id as string | null) ?? null,
     agentWalletAddress: (row.agent_wallet_address as string | null) ?? null,
+    evmOwnerWalletAddress: (row.evm_owner_wallet_address as string | null) ?? null,
+    evmSafeAddress: (row.evm_safe_address as string | null) ?? null,
+    evmChainId: (row.evm_chain_id as number | null) ?? null,
   };
 }
 

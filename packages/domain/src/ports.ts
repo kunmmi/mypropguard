@@ -24,6 +24,17 @@ export interface NewAccountInput {
   /** Set when an AgentWalletProvisioner was used to create this account's own signing wallet. Null in the offline scaffold. */
   agentWalletId?: string | null;
   agentWalletAddress?: string | null;
+  /**
+   * Set when an EvmSafeProvisioner was used (EVM-chain venues only, e.g. "arbitrum-gmx",
+   * "bsc-pancakeswap", "ethereum-uniswap") - the trader's own wallet address, which becomes the
+   * sole owner of the provisioned Safe. Unlike agentWalletAddress (a MyPropGuard-managed Privy
+   * wallet), this address belongs to the trader and MyPropGuard never holds its key.
+   */
+  evmOwnerWalletAddress?: string | null;
+  /** The Safe address provisioned for this account - what the trader connects to the exchange's own UI with. Null in the offline scaffold or for non-EVM venues. */
+  evmSafeAddress?: string | null;
+  /** Which EVM chain the Safe above was deployed on (e.g. 42161 for Arbitrum, 56 for BSC, 1 for Ethereum). Null unless evmSafeAddress is set. */
+  evmChainId?: number | null;
 }
 
 export interface ProvisionedAgentWallet {
@@ -41,6 +52,23 @@ export interface ProvisionedAgentWallet {
  */
 export interface AgentWalletProvisioner {
   provisionWallet(): Promise<ProvisionedAgentWallet>;
+}
+
+export interface ProvisionedEvmSafe {
+  safeAddress: string;
+  chainId: number;
+}
+
+/**
+ * Deploys a Safe for a trader with MyPropGuard's risk Guard already attached - the EVM-chain
+ * equivalent of AgentWalletProvisioner, for venues like "arbitrum-gmx"/"bsc-pancakeswap"/
+ * "ethereum-uniswap" (see packages/evm-guard). Unlike AgentWalletProvisioner, MyPropGuard never
+ * holds a key for the resulting account: `ownerWalletAddress` becomes the Safe's sole owner, and
+ * the trader keeps trading directly through the exchange's own UI from that point on.
+ * packages/evm's SafeDeployer wraps the real on-chain deployment this calls into.
+ */
+export interface EvmSafeProvisioner {
+  provisionSafe(ownerWalletAddress: string): Promise<ProvisionedEvmSafe>;
 }
 
 /**

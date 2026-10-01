@@ -34,6 +34,9 @@ describe("listAccounts", () => {
       initialRules: [],
       agentWalletId: "wallet_1",
       agentWalletAddress: "0xabc",
+      evmOwnerWalletAddress: null,
+      evmSafeAddress: null,
+      evmChainId: null,
     });
 
     const accounts = await listAccounts(store, "owner_wallet");

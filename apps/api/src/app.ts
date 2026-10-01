@@ -3,6 +3,7 @@ import cors from "@fastify/cors";
 import type {
   ActionHasher,
   AgentWalletProvisioner,
+  EvmSafeProvisioner,
   ExecutionSequencer,
   OrderCanceller,
   OrderLifecycleReader,
@@ -45,6 +46,13 @@ export interface AppDeps {
   orderLifecycleFactory?: (walletId: string) => OrderSubmitter & OrderCanceller & OrderLifecycleReader;
   /** Optional: when configured, POST /v1/accounts provisions a real signing wallet for the new account. Null/absent in the offline scaffold - accounts just get no wallet. */
   agentWalletProvisioner?: AgentWalletProvisioner;
+  /**
+   * EVM-chain Safe provisioning (see packages/evm-guard, packages/evm), keyed by chain id (e.g.
+   * 42161 for Arbitrum, 56 for BSC, 1 for Ethereum). POST /v1/accounts uses the entry matching
+   * the request's evmChainId, if both that and evmOwnerWalletAddress are provided. Absent
+   * entirely in the offline scaffold and for any chain not yet configured.
+   */
+  evmSafeProvisioners?: Record<number, EvmSafeProvisioner>;
   /**
    * When configured, every route requires a valid Supabase bearer token and
    * populates request.userId - route handlers then use it to derive

@@ -34,6 +34,9 @@ function seedOwnedAccount(store: InMemoryRiskLedgerStore, accountId: string, own
     createdAt: new Date(),
     agentWalletId: null,
     agentWalletAddress: null,
+    evmOwnerWalletAddress: null,
+    evmSafeAddress: null,
+    evmChainId: null,
   });
 }
 

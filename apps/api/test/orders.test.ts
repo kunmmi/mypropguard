@@ -252,6 +252,9 @@ describe("POST /v1/orders", () => {
       createdAt: new Date(),
       agentWalletId: "wallet_orders_10",
       agentWalletAddress: "0xORDERSWALLET10",
+      evmOwnerWalletAddress: null,
+      evmSafeAddress: null,
+      evmChainId: null,
     });
 
     let cancelledArgs: [string, string] | null = null;

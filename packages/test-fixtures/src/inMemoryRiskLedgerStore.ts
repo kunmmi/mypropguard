@@ -82,6 +82,9 @@ export class InMemoryRiskLedgerStore implements RiskLedgerStore {
       createdAt: new Date(),
       agentWalletId: input.agentWalletId ?? null,
       agentWalletAddress: input.agentWalletAddress ?? null,
+      evmOwnerWalletAddress: input.evmOwnerWalletAddress ?? null,
+      evmSafeAddress: input.evmSafeAddress ?? null,
+      evmChainId: input.evmChainId ?? null,
     });
     this.heads.set(input.accountId, {
       accountId: input.accountId,

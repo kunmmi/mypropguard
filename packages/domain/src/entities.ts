@@ -23,6 +23,17 @@ export interface ProtectedAccount {
    */
   agentWalletId: string | null;
   agentWalletAddress: string | null;
+  /**
+   * For EVM-chain venues only (e.g. "arbitrum-gmx", "bsc-pancakeswap", "ethereum-uniswap"): the
+   * trader's own wallet address, which owns the provisioned Safe below. MyPropGuard never holds
+   * this address's key - contrast with agentWalletAddress, which MyPropGuard's Privy wallet
+   * fully controls.
+   */
+  evmOwnerWalletAddress: string | null;
+  /** The Safe address provisioned for this account - what the trader connects to the exchange's own UI with (see packages/evm-guard). Null for non-EVM venues. */
+  evmSafeAddress: string | null;
+  /** Which EVM chain evmSafeAddress was deployed on. Null unless evmSafeAddress is set. */
+  evmChainId: number | null;
 }
 
 /**

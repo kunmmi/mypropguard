@@ -184,6 +184,9 @@ importers:
       '@mypropguard/domain':
         specifier: workspace:*
         version: link:../../packages/domain
+      '@mypropguard/evm':
+        specifier: workspace:*
+        version: link:../../packages/evm
       '@mypropguard/execution':
         specifier: workspace:*
         version: link:../../packages/execution
@@ -205,6 +208,9 @@ importers:
       tsx:
         specifier: ^4.19.2
         version: 4.23.13
+      viem:
+        specifier: ^2.56.5
+        version: 2.56.5(typescript@5.9.3)(zod@3.25.76)
       zod:
         specifier: ^3.24.1
         version: 3.25.76

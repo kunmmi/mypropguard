@@ -10,6 +10,7 @@
     { "path": "../../packages/contracts" },
     { "path": "../../packages/risk-ledger" },
     { "path": "../../packages/hyperliquid" },
-    { "path": "../../packages/execution" }
+    { "path": "../../packages/execution" },
+    { "path": "../../packages/evm" }
   ]
 }

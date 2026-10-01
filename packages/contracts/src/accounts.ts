@@ -25,6 +25,14 @@ export const createAccountRequestSchema = z.object({
       }),
     )
     .default([]),
+  /**
+   * EVM-chain venues only (e.g. "arbitrum-gmx"/"bsc-pancakeswap"/"ethereum-uniswap"): the
+   * trader's own wallet address and which chain to provision a Safe on. Both required together -
+   * omitting them on an EVM venue just skips Safe provisioning (same as the offline scaffold
+   * omitting agentWalletProvisioner for Hyperliquid).
+   */
+  evmOwnerWalletAddress: z.string().min(1).optional(),
+  evmChainId: z.number().int().positive().optional(),
 });
 export type CreateAccountRequest = z.infer<typeof createAccountRequestSchema>;
 
@@ -33,6 +41,8 @@ export const createAccountResponseSchema = z.object({
   protectionOn: z.boolean(),
   /** The address to approve as a Hyperliquid agent, if an AgentWalletProvisioner is configured. Null in the offline scaffold. */
   agentWalletAddress: z.string().nullable(),
+  /** The Safe address provisioned for this account, if an EvmSafeProvisioner was configured for evmChainId. Null for non-EVM venues or the offline scaffold. */
+  evmSafeAddress: z.string().nullable().optional(),
 });
 export type CreateAccountResponse = z.infer<typeof createAccountResponseSchema>;
 
@@ -43,6 +53,7 @@ export const protectedAccountSchema = z.object({
   protectionEnabled: z.boolean(),
   createdAt: isoDateTime,
   agentWalletAddress: z.string().nullable(),
+  evmSafeAddress: z.string().nullable().optional(),
 });
 export type ProtectedAccountResponse = z.infer<typeof protectedAccountSchema>;
 

@@ -33,6 +33,21 @@ export function registerAccountRoutes(app: FastifyInstance, deps: AppDeps): void
       agentWallet = { walletId: provisioned.walletId, walletAddress: provisioned.walletAddress };
     }
 
+    // EVM-chain venues: deploy a Safe (with MyPropGuard's risk Guard already attached - see
+    // packages/evm-guard/src/SafeGuardSetup.sol) for the trader's own wallet, same
+    // fail-the-whole-creation-rather-than-leave-it-half-done reasoning as agentWallet above.
+    // Requires BOTH evmOwnerWalletAddress and evmChainId, and a provisioner actually configured
+    // for that chain - any of those missing just skips Safe provisioning (same as the offline
+    // scaffold omitting agentWalletProvisioner).
+    let evmSafe: { safeAddress: string } | null = null;
+    if (body.evmOwnerWalletAddress && body.evmChainId) {
+      const provisioner = deps.evmSafeProvisioners?.[body.evmChainId];
+      if (provisioner) {
+        const provisioned = await provisioner.provisionSafe(body.evmOwnerWalletAddress);
+        evmSafe = { safeAddress: provisioned.safeAddress };
+      }
+    }
+
     // Never trust a client-supplied ownerUserId when the caller is
     // authenticated - always create the account under the real logged-in
     // user, regardless of what the request body claims.
@@ -47,6 +62,9 @@ export function registerAccountRoutes(app: FastifyInstance, deps: AppDeps): void
         initialRules: body.initialRules.map((rule) => ({ ruleType: rule.ruleType, param: new Decimal(rule.param) })),
         agentWalletId: agentWallet?.walletId ?? null,
         agentWalletAddress: agentWallet?.walletAddress ?? null,
+        evmOwnerWalletAddress: body.evmOwnerWalletAddress ?? null,
+        evmSafeAddress: evmSafe?.safeAddress ?? null,
+        evmChainId: body.evmChainId ?? null,
       });
     } catch (error) {
       if (error instanceof AccountAlreadyExistsError) {
@@ -59,6 +77,7 @@ export function registerAccountRoutes(app: FastifyInstance, deps: AppDeps): void
       accountId: body.accountId,
       protectionOn: false,
       agentWalletAddress: agentWallet?.walletAddress ?? null,
+      evmSafeAddress: evmSafe?.safeAddress ?? null,
     };
     return reply.status(201).send(createAccountResponseSchema.parse(response));
   });
@@ -92,6 +111,7 @@ export function registerAccountRoutes(app: FastifyInstance, deps: AppDeps): void
         protectionEnabled: a.protectionEnabled,
         createdAt: a.createdAt.toISOString(),
         agentWalletAddress: a.agentWalletAddress,
+        evmSafeAddress: a.evmSafeAddress,
       })),
     };
     return reply.send(listAccountsResponseSchema.parse(response));
