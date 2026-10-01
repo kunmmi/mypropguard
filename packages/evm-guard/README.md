@@ -76,6 +76,38 @@ real GMX logic," not on the exact revert reason.)
   `docs.gmx.io/docs/api/contracts-v2/` before any real deployment, don't trust this README's
   address indefinitely.
 
+## PancakeSwap (BSC)
+
+`PancakeSwapV2LimitGuard.sol` does the same job as the GMX Guard, for PancakeSwap's **V2
+Router** on BSC (`0x10ED43C718714eb63d5aA57B78B54704E256024E` as of Oct 2026). Since spot swaps
+have no "position" or "leverage" concept, the two enforced rules are **max amount of a given
+input token spent per trade** (in that token's own units - no price oracle) and **max trades
+per day**.
+
+**Scope and what's confirmed vs. not**, per
+`research_notes/EVM on-chain trading risk enforcement/pancakeswap_router_and_frontend_routing.md`:
+- Only the **V2 Router** is covered. PancakeSwap also has a V3 SmartRouter and a Universal
+  Router, both with a more complex, optionally-multicall-wrapped calldata shape - a trade routed
+  through either of those (which pancakeswap.finance's own UI sometimes picks for better
+  pricing) is **not yet covered** by this Guard.
+- **PooCoin**: community evidence suggests it calls PancakeSwap's router directly (no PooCoin
+  contract in between) - if true, PooCoin trades would already be covered. Not confirmed from a
+  primary source.
+- **GMGN**: documented to run its own backend routing/quoting layer, which strongly suggests
+  (but doesn't confirm) it uses its own intermediary contract on BSC rather than calling
+  PancakeSwap's router directly from the trader's Safe - if so, GMGN trades would **not** be
+  covered by this Guard at all, the same way an unrecognized `to` address is never covered.
+  Confirming this needs inspecting a real GMGN BSC transaction's `to` address on BscScan, which
+  wasn't possible with this research pass's tools.
+
+**Verified**: 13 unit tests (same coverage pattern as the GMX Guard: within-limit trades, both
+ERC-20-input and native-BNB-input swap shapes, per-token vs. "not yet configured" limits,
+daily-count enforcement and reset, ignoring non-swap router calls like `addLiquidity`,
+`delegatecall` blocking, module-path parity, admin-only configuration) plus 3 tests against a
+**live BSC mainnet fork** calling the real V2 Router - one of which is a complete, successful
+real swap (0.1 BNB for BUSD against live liquidity, confirmed by checking the trader's real
+BUSD balance afterward, not just a revert-reason check).
+
 ## Development
 
 ```bash
@@ -84,9 +116,10 @@ curl -L https://foundry.paradigm.xyz | bash
 foundryup
 
 forge build
-forge test                                    # unit tests, no network needed
-forge test --match-contract GmxForkIntegrationTest   # needs network access (forks Arbitrum mainnet)
+forge test                                            # unit tests, no network needed
+forge test --match-contract GmxForkIntegrationTest          # needs network access (forks Arbitrum mainnet)
+forge test --match-contract PancakeSwapForkIntegrationTest  # needs network access (forks BSC mainnet)
 ```
 
-Set `ARBITRUM_RPC_URL` to override the default public RPC (`https://arb1.arbitrum.io/rpc`) used
-by the fork tests.
+Set `ARBITRUM_RPC_URL` / `BSC_RPC_URL` to override the default public RPCs
+(`https://arb1.arbitrum.io/rpc` / `https://bsc-dataseed.binance.org`) used by the fork tests.
