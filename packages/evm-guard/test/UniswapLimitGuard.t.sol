@@ -23,6 +23,10 @@ contract UniswapLimitGuardTest is Test {
     address weth = address(0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2);
 
     function setUp() public {
+        // Real chains are never anywhere near the Unix epoch - run tests at a realistic
+        // timestamp so "day 0" (the never-frozen sentinel) isn't reachable here either,
+        // matching real conditions rather than Foundry's own near-zero default clock.
+        vm.warp(1_700_000_000);
         guard = new UniswapLimitGuard(admin, v2Router, weth);
         vm.startPrank(admin);
         guard.setRouterKind(v3RouterNoDeadline, UniswapLimitGuard.RouterKind.V3NoDeadline);

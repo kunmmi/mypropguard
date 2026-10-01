@@ -23,6 +23,10 @@ contract PancakeSwapLimitGuardTest is Test {
     address wbnb = address(0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c);
 
     function setUp() public {
+        // Real chains are never anywhere near the Unix epoch - run tests at a realistic
+        // timestamp so "day 0" (the never-frozen sentinel) isn't reachable here either,
+        // matching real conditions rather than Foundry's own near-zero default clock.
+        vm.warp(1_700_000_000);
         guard = new PancakeSwapLimitGuard(admin, v2Router, wbnb);
         vm.startPrank(admin);
         guard.setRouterKind(v3RouterNoDeadline, PancakeSwapLimitGuard.RouterKind.V3NoDeadline);

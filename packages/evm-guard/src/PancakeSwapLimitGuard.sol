@@ -288,7 +288,12 @@ contract PancakeSwapLimitGuard is BaseGuard {
     /// token rather than returning to the base asset.
     function _checkAndRecord(address account, address inputToken, address outputToken, uint256 inputAmount, uint256 tradeLimit) private {
         bool isExit = outputToken == NATIVE_BNB || outputToken == wrappedNative;
-        if (!isExit && frozenThroughDay[account] == block.timestamp / 1 days) {
+        // The != 0 guard matters: frozenThroughDay defaults to 0 for every never-frozen account,
+        // and 0 is also what block.timestamp / 1 days would equal on a chain whose clock is at or
+        // near the Unix epoch (a real mainnet never is, but a local test chain's default
+        // timestamp can be) - without this, every untouched account would appear "frozen through
+        // day 0" by coincidence rather than by having ever actually been frozen.
+        if (!isExit && frozenThroughDay[account] != 0 && frozenThroughDay[account] == block.timestamp / 1 days) {
             revert AccountIsFrozen(account);
         }
 
