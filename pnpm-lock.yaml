@@ -276,6 +276,25 @@ importers:
         specifier: ^2.1.8
         version: 2.1.9(@types/node@22.20.3)
 
+  packages/evm:
+    dependencies:
+      '@mypropguard/domain':
+        specifier: workspace:*
+        version: link:../domain
+      viem:
+        specifier: ^2.56.5
+        version: 2.56.5(typescript@5.9.3)(zod@3.25.76)
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.2
+        version: 22.20.3
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.20.3)
+
   packages/execution:
     dependencies:
       '@mypropguard/domain':

@@ -75,26 +75,25 @@ collateral - the same limitation the plain fork-integration tests already had.
 
 ## Then: wire this into the actual MyPropGuard product
 
-Everything above lives only in `packages/evm-guard` as standalone, tested Solidity - none of it
-is connected to MyPropGuard's real account/rule system yet (contrast with the Hyperliquid side,
-where `apps/api` actually provisions wallets and signs real orders). To make this a real,
-usable feature:
+Everything above lives only in `packages/evm-guard` as standalone, tested Solidity - connected to
+real TypeScript orchestration code now (`packages/evm`), but not yet to MyPropGuard's actual
+account/rule system in `apps/api`/Postgres (contrast with the Hyperliquid side, where `apps/api`
+actually provisions wallets and signs real orders). To make this a real, usable feature:
 
-1. **Provisioning**: when a user creates an EVM-chain account in MyPropGuard, deploy a real Safe
-   for them (via Safe's `SafeProxyFactory`, with `SafeGuardSetup.sol` attaching the Guard
-   atomically - see above) with the relevant Guard attached, instead of a Privy-managed EOA. The
-   deployment mechanics (no trader signature needed, Guard live from block zero, deployer gains
-   no control over the Safe afterward) are now proven on-chain via Foundry tests - what's missing
-   is doing this from `apps/api` instead of a test, and persisting the Safe address per account
-   in Postgres.
-2. **Rule sync**: when a user sets/changes a rule in MyPropGuard's existing Postgres-backed rule
-   system, call the Guard's `setLimits`/`setTokenLimit`/`setMaxTradesPerDay` on-chain from
-   `apps/api` (this needs a funded admin wallet on each chain to pay gas for these calls - a new
-   operational requirement, unlike Hyperliquid's gas-free signing model - and a decision on which
-   TS library to call it with, e.g. viem).
+1. **Provisioning**: done at the library level - `packages/evm`'s `SafeDeployer` deploys a real
+   Safe with the Guard already attached, zero trader signature, verified against a real local
+   Anvil chain (`packages/evm/test/safeFlow.anvil.test.ts`). What's missing: calling it from an
+   actual `apps/api` route instead of a test, and persisting the resulting Safe address per
+   account in Postgres (a new column/table - `protected_accounts` currently only has Privy
+   wallet fields, which don't fit a Safe address).
+2. **Rule sync**: done at the library level - `packages/evm`'s `GmxGuardClient`/`SpotGuardClient`
+   call each Guard's admin-only rule functions, verified the same way. What's missing: triggering
+   these calls from `apps/api` when a user sets/changes a rule in Postgres, and provisioning a
+   funded admin wallet per chain to pay the gas for these calls (a new operational requirement,
+   unlike Hyperliquid's gas-free signing model).
 3. **Dashboard**: a new "EVM accounts" panel showing the Safe's address (what the trader actually
    connects to GMX/PancakeSwap/Uniswap's own UI with), current limits, and trade history read
-   back from the Guard's emitted events.
+   back from the Guard's emitted events. Not started.
 4. **Real funded proof**: the same bar as the Hyperliquid mainnet proof - a real Safe, real
    funds, a real trade through the real exchange UI, with a rule violation genuinely reverting
    on-chain. The *mechanism* is now proven on forks (see above); this step is specifically about
