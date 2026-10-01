@@ -9,7 +9,12 @@ import type {
   OrderSubmitter,
   SignerGateway,
 } from "@mypropguard/domain";
-import { createPool, PgExecutionSequencer, PgRiskLedgerStore } from "@mypropguard/risk-ledger";
+import {
+  createPool,
+  PgExecutionSequencer,
+  PgRiskLedgerStore,
+  reconcileAllEvmAccountsWithDailyLossRule,
+} from "@mypropguard/risk-ledger";
 import {
   HyperliquidInfoClient,
   HyperliquidActionHasher,
@@ -242,6 +247,34 @@ const app = buildApp({
   evmGuardSyncers,
   evmEquityReaders,
 });
+
+// Max-daily-loss freezing is equity-based, not just realized P&L from trades - an account can
+// breach its budget purely from a token's price dropping while held, with no new trade to trigger
+// a recheck. A clock-based sweep is therefore necessary, not just a nice-to-have: without it,
+// freeze state only ever updates when a rule is added or removed. Only sweeps when at least one
+// EVM equity reader is configured (currently BSC only - see PancakeSwapEquityReader above), and
+// only reconciles accounts that actually have an active MAX_DAILY_LOSS rule, not every EVM
+// account, so idle accounts cost nothing. 5 minutes balances catching a breach reasonably quickly
+// against RPC/gas cost; override via EVM_DAILY_LOSS_SWEEP_INTERVAL_MS if that tradeoff needs tuning.
+if (Object.keys(evmEquityReaders).length > 0) {
+  const sweepIntervalMs = Number(process.env.EVM_DAILY_LOSS_SWEEP_INTERVAL_MS ?? 5 * 60 * 1000);
+  setInterval(() => {
+    reconcileAllEvmAccountsWithDailyLossRule(store, evmEquityReaders, evmGuardSyncers)
+      .then((results) => {
+        const failures = results.filter((r) => r.error);
+        if (failures.length > 0) {
+          // eslint-disable-next-line no-console
+          console.error(`Max-daily-loss sweep: ${failures.length}/${results.length} accounts failed to reconcile.`, failures);
+        }
+      })
+      .catch((error) => {
+        // eslint-disable-next-line no-console
+        console.error("Max-daily-loss sweep failed entirely:", error);
+      });
+  }, sweepIntervalMs);
+  // eslint-disable-next-line no-console
+  console.log(`Max-daily-loss sweep enabled, running every ${sweepIntervalMs}ms.`);
+}
 
 const port = Number(process.env.PORT ?? 3000);
 app

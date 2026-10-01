@@ -215,8 +215,27 @@ and both not-configured error cases; 3 new `apps/api` tests cover the HTTP route
 tests continue to pass (63 `apps/api`, 27 `packages/risk-ledger` in-memory, 12 `packages/evm` unit
 tests not requiring a live chain).
 
-**Still not live in production**: nothing calls `/reconcile-evm` automatically yet - it has to be
-invoked (e.g. from the dashboard, or a periodic job) for an account's equity to actually update.
-There is also no periodic/automatic trigger built, mirroring Hyperliquid's own `/reconcile`, which
-likewise only updates on a manual dashboard click today (see "What's Not Done Yet" in the milestone
-report).
+## Done: periodic sweep - this is what actually makes max daily loss live, unattended
+
+Closes the last gap: `apps/api/src/server.ts` now runs a `setInterval` sweep
+(`reconcileAllEvmAccountsWithDailyLossRule`) every 5 minutes (override with
+`EVM_DAILY_LOSS_SWEEP_INTERVAL_MS`) that reconciles every EVM account with an active
+MAX_DAILY_LOSS rule and re-checks its freeze state - without this, equity only ever updated when a
+rule was added or removed, which would never catch a trader losing money purely by holding a token
+whose price drops (no new trade to trigger a recheck). A clock-based sweep is necessary for exactly
+this reason, not just a convenience: the loss here is equity-based, not realized-P&L-from-trades.
+
+Only reconciles accounts that actually have the rule active (`RiskLedgerStore.
+listAccountsWithActiveRuleType`, a new cross-account query backed by a single JOIN in Postgres), so
+accounts not using this feature cost nothing. One account's failure (e.g. an RPC hiccup) is caught
+and logged without aborting the sweep for everyone else. The sweep is a no-op entirely when no EVM
+equity reader is configured.
+
+**Proof:** 3 new `packages/risk-ledger` tests for `listAccountsWithActiveRuleType` (matches,
+excludes deactivated rules, empty case) and 4 for the sweep itself (reconciles the right accounts,
+skips chains with no reader, no-op with nothing configured, one failure doesn't block the rest) -
+all passing alongside the full existing suite (63 `apps/api`, 34 `packages/risk-ledger` in-memory).
+
+Max daily loss for BSC/PancakeSwap accounts is now built end to end: schema → freeze mechanism →
+decision logic → live equity feed → automatic periodic enforcement. Ethereum/Uniswap still lacks
+only the equity reader (no Uniswap-specific pricing built yet) to reach the same state.

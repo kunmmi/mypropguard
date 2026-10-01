@@ -11,6 +11,7 @@ import {
   type OrderReservation,
   type ProtectedAccount,
   type RiskLedgerStore,
+  type RuleType,
 } from "@mypropguard/domain";
 import {
   rowToAccountRiskHead,
@@ -163,6 +164,16 @@ export class PgRiskLedgerStore implements RiskLedgerStore {
   async findAccountById(accountId: string): Promise<ProtectedAccount | null> {
     const result = await this.pool.query("SELECT * FROM protected_accounts WHERE account_id = $1", [accountId]);
     return result.rows[0] ? rowToProtectedAccount(result.rows[0]) : null;
+  }
+
+  async listAccountsWithActiveRuleType(ruleType: RuleType): Promise<readonly ProtectedAccount[]> {
+    const result = await this.pool.query(
+      `SELECT DISTINCT pa.* FROM protected_accounts pa
+       JOIN rule_versions rv ON rv.account_id = pa.account_id
+       WHERE rv.rule_type = $1 AND rv.is_active = true`,
+      [ruleType],
+    );
+    return result.rows.map(rowToProtectedAccount);
   }
 
   async createAccount(input: NewAccountInput): Promise<void> {

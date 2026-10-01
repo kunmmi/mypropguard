@@ -217,6 +217,12 @@ export interface RiskLedgerStore {
   listAccounts(ownerUserId: string): Promise<readonly ProtectedAccount[]>;
   /** Looks up one account by id - e.g. to find its provisioned agent wallet before signing. Null if it doesn't exist. */
   findAccountById(accountId: string): Promise<ProtectedAccount | null>;
+  /**
+   * Cross-account lookup for a periodic sweep (e.g. reconcileAllEvmAccountsWithDailyLossRule) -
+   * every account, regardless of owner, with at least one currently-active rule of the given
+   * type. Read-only, no per-account lock needed.
+   */
+  listAccountsWithActiveRuleType(ruleType: RuleType): Promise<readonly ProtectedAccount[]>;
 }
 
 export class AccountAlreadyExistsError extends Error {

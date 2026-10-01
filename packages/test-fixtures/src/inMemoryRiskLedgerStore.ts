@@ -11,6 +11,7 @@ import {
   type OrderReservation,
   type ProtectedAccount,
   type RiskLedgerStore,
+  type RuleType,
   type RuleVersion,
   type StateCheckpoint,
 } from "@mypropguard/domain";
@@ -67,6 +68,15 @@ export class InMemoryRiskLedgerStore implements RiskLedgerStore {
 
   async findAccountById(accountId: string): Promise<ProtectedAccount | null> {
     return this.accounts.get(accountId) ?? null;
+  }
+
+  async listAccountsWithActiveRuleType(ruleType: RuleType): Promise<readonly ProtectedAccount[]> {
+    const matchingAccountIds = new Set(
+      [...this.rules.entries()]
+        .filter(([, rules]) => rules.some((r) => r.ruleType === ruleType && r.isActive))
+        .map(([accountId]) => accountId),
+    );
+    return [...this.accounts.values()].filter((a) => matchingAccountIds.has(a.accountId));
   }
 
   async createAccount(input: NewAccountInput): Promise<void> {
