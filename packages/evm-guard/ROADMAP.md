@@ -81,10 +81,12 @@ where `apps/api` actually provisions wallets and signs real orders). To make thi
 usable feature:
 
 1. **Provisioning**: when a user creates an EVM-chain account in MyPropGuard, deploy a real Safe
-   for them (via Safe's `SafeProxyFactory`) with the relevant Guard(s) attached, instead of a
-   Privy-managed EOA. The Safe-deployment mechanics are now proven (see above) - what's missing
-   is doing this from `apps/api` instead of a Foundry test, and persisting the Safe address per
-   account in Postgres.
+   for them (via Safe's `SafeProxyFactory`, with `SafeGuardSetup.sol` attaching the Guard
+   atomically - see above) with the relevant Guard attached, instead of a Privy-managed EOA. The
+   deployment mechanics (no trader signature needed, Guard live from block zero, deployer gains
+   no control over the Safe afterward) are now proven on-chain via Foundry tests - what's missing
+   is doing this from `apps/api` instead of a test, and persisting the Safe address per account
+   in Postgres.
 2. **Rule sync**: when a user sets/changes a rule in MyPropGuard's existing Postgres-backed rule
    system, call the Guard's `setLimits`/`setTokenLimit`/`setMaxTradesPerDay` on-chain from
    `apps/api` (this needs a funded admin wallet on each chain to pay gas for these calls - a new

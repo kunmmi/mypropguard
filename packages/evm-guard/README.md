@@ -27,7 +27,10 @@ accounting this Guard has no way to compute from calldata alone):
 
 1. MyPropGuard provisions a Safe for the trader (one owner: the trader; one Guard: this
    contract, shared across all MyPropGuard accounts — see `GmxPositionLimitGuard.sol`'s
-   per-account state keyed by the calling Safe's address).
+   per-account state keyed by the calling Safe's address). The trader never signs anything for
+   this step — see `SafeGuardSetup.sol` below for how MyPropGuard's own backend deploys the Safe
+   *and* attaches the Guard in one atomic transaction, with the trader set as sole owner from
+   the start.
 2. MyPropGuard's backend (the `admin` address at deploy time) calls `setLimits(account, ...)` —
    the trader themselves cannot loosen their own limits; a Safe with no limits configured fails
    closed (`LimitsNotConfigured`), never silently allows unlimited trading.
@@ -156,6 +159,32 @@ V3 one in particular is strong proof the "no-deadline" 7-field struct genuinely 
 **`test/UniswapSafeEndToEnd.t.sol`** — same real-Safe, real-`execTransaction`, complete
 successful-swap proof as PancakeSwap's, against Uniswap's real V2 Router on the live Ethereum
 fork.
+
+## Deploying for a trader without their signature: `SafeGuardSetup.sol`
+
+`GuardManager.setGuard` is `authorized` (self-call only - `msg.sender` must be the Safe itself),
+which would normally mean attaching a Guard needs a real `execTransaction` signed by an owner.
+But the trader hasn't signed anything yet at the moment MyPropGuard creates their Safe - and
+requiring them to sign a second transaction right after creation just to turn protection on
+would be exactly the kind of avoidable friction this product is trying to remove.
+
+`SafeGuardSetup.sol` is a tiny helper (one function, no state) that exploits the standard Safe
+pattern for this: `Safe.setup()` itself takes a `to`/`data` pair that it `delegatecall`s as part
+of the *same* creation transaction. Passing `to = address(SafeGuardSetup)` and
+`data = abi.encodeWithSelector(SafeGuardSetup.setupGuard.selector, guardAddress)` makes the new
+Safe delegatecall into `setupGuard`, which then calls `setGuard` - running in the Safe's own
+execution context, so `msg.sender == address(this)` is satisfied without any owner signature.
+MyPropGuard's backend (paying its own gas) ends up as the Safe's *deployer*, never an owner or
+controller of it - the trader is the sole owner from block zero, with the Guard already active.
+
+**Verified** (`test/SafeGuardSetup.t.sol`, 3 tests on a live Arbitrum fork): a deployer address
+that is explicitly NOT the trader creates a Safe with the Guard already attached, confirmed by
+reading the Safe's own `GUARD_STORAGE_SLOT` directly (not just trusting an event); the Guard is
+live from the very first transaction attempt (an unconfigured brand-new Safe's first trade
+reverts with `LimitsNotConfigured`, proving there's no unguarded window right after creation);
+and the deployer itself cannot act as the Safe afterward (only the trader, as sole owner, can
+approve/execute transactions) - confirming MyPropGuard's backend gains no control over the
+trader's funds by deploying for them.
 
 ## Universal Router: deliberately not covered (both chains)
 
