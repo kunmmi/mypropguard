@@ -59,6 +59,20 @@ someone sharing a real GMGN BSC transaction hash, or creating a real GMGN accoun
 a trade's wallet-confirmation payload directly - deliberately not done without explicit sign-off,
 since it's a bigger step than research.
 
+## Done: real Safe + execTransaction end-to-end proof (all three exchanges)
+
+Closed a gap this roadmap used to list as outstanding. `test/GmxSafeEndToEnd.t.sol`,
+`test/PancakeSwapSafeEndToEnd.t.sol`, and `test/UniswapSafeEndToEnd.t.sol` each deploy a genuine,
+unmodified Safe (real `SafeProxyFactory` + `Safe` singleton, same bytecode Safe ships) on the
+relevant live mainnet fork, attach the Guard via the Safe's own `setGuard` (a real
+`execTransaction`, not a shortcut), then drive further real `execTransaction` calls signed via
+Safe's native approved-hash scheme - not `vm.prank`-ing straight into `checkTransaction` the way
+every earlier test in this package did. PancakeSwap and Uniswap's within-limit cases complete a
+full, successful real swap through the real Safe (trader's real token balance increases); GMX's
+within-limit case proves the Guard let it through (confirmed by the revert NOT carrying the
+Guard's own error selector) before GMX's own logic rejects it deeper in for lack of real
+collateral - the same limitation the plain fork-integration tests already had.
+
 ## Then: wire this into the actual MyPropGuard product
 
 Everything above lives only in `packages/evm-guard` as standalone, tested Solidity - none of it
@@ -68,17 +82,22 @@ usable feature:
 
 1. **Provisioning**: when a user creates an EVM-chain account in MyPropGuard, deploy a real Safe
    for them (via Safe's `SafeProxyFactory`) with the relevant Guard(s) attached, instead of a
-   Privy-managed EOA.
+   Privy-managed EOA. The Safe-deployment mechanics are now proven (see above) - what's missing
+   is doing this from `apps/api` instead of a Foundry test, and persisting the Safe address per
+   account in Postgres.
 2. **Rule sync**: when a user sets/changes a rule in MyPropGuard's existing Postgres-backed rule
    system, call the Guard's `setLimits`/`setTokenLimit`/`setMaxTradesPerDay` on-chain from
    `apps/api` (this needs a funded admin wallet on each chain to pay gas for these calls - a new
-   operational requirement, unlike Hyperliquid's gas-free signing model).
+   operational requirement, unlike Hyperliquid's gas-free signing model - and a decision on which
+   TS library to call it with, e.g. viem).
 3. **Dashboard**: a new "EVM accounts" panel showing the Safe's address (what the trader actually
    connects to GMX/PancakeSwap/Uniswap's own UI with), current limits, and trade history read
    back from the Guard's emitted events.
 4. **Real funded proof**: the same bar as the Hyperliquid mainnet proof - a real Safe, real
    funds, a real trade through the real exchange UI, with a rule violation genuinely reverting
-   on-chain. Not attempted yet; this is the final verification step once 1-3 exist.
+   on-chain. The *mechanism* is now proven on forks (see above); this step is specifically about
+   doing it with real money on real mainnet, which needs the account owner's own funded wallet -
+   prepare it, have them run it, same pattern as the Hyperliquid mainnet proof.
 
 ## Deferred: max leverage, max daily loss (leveraged/perps risk enforcement)
 

@@ -62,10 +62,18 @@ reverts deeper inside GMX's own account/collateral validation, which is expected
 funded trading account — the test asserts on gas-consumed as a robust proxy for "this reached
 real GMX logic," not on the exact revert reason.)
 
+**`test/GmxSafeEndToEnd.t.sol`** — closes the "no real Safe" gap from earlier passes: deploys a
+genuine, unmodified Safe (via a real `SafeProxyFactory`/`Safe` singleton pair, same bytecode Safe
+itself ships) on the same live Arbitrum fork, attaches this Guard via the Safe's own `setGuard`
+(a real `execTransaction` call, not a shortcut), then drives further real `execTransaction` calls
+against GMX exactly as a trader's wallet would — using Safe's native approved-hash signature
+scheme, not a `vm.prank` shortcut around `checkTransaction`. Confirms: an oversized order reverts
+the whole Safe transaction with the Guard's own `PositionSizeExceeded` error; a within-limit
+order is let through by the Guard (proven by the revert, when GMX's own logic rejects it deeper
+in for lack of real collateral, NOT carrying the Guard's error selector) — exactly the two
+outcomes this Guard exists to produce.
+
 **Not yet done / explicitly out of scope for this pass:**
-- No real Safe deployment + `execTransaction` end-to-end test (tests call `checkTransaction`
-  directly with `vm.prank`, exercising this Guard's own logic — Safe's `GuardManager` plumbing
-  that invokes the Guard this way is Safe's own separately-audited code, not re-tested here).
 - No real funded-account test actually placing and confirming a GMX order (would need real
   WETH collateral and a funded Safe — the next real-money-adjacent step, same caution as the
   Hyperliquid mainnet proof elsewhere in this repo: prepare it, have the account owner run it).
@@ -112,6 +120,13 @@ configuration) plus 4 tests against a **live BSC mainnet fork** calling the real
 V3 SmartRouter - two of which are complete, successful real swaps (0.1 BNB for BUSD via V2, and
 0.1 WBNB for BUSD via V3's `exactInputSingle`), confirmed via the trader's real BUSD balance.
 
+**`test/PancakeSwapSafeEndToEnd.t.sol`** — the same real-Safe proof as GMX's: a genuine Safe
+deployed on the live BSC fork, Guard attached via its own `setGuard`, real `execTransaction`
+calls signed via Safe's native approved-hash scheme. Since a V2 swap needs no pre-existing
+collateral/account setup (unlike GMX), the within-limit case here completes a full, successful
+real swap through the real Safe - the trader's real BUSD balance increases - not just "the Guard
+let it through before something else failed."
+
 ## Uniswap (Ethereum)
 
 `UniswapLimitGuard.sol` is the same logic as the PancakeSwap Guard, pointed at Uniswap's real
@@ -137,6 +152,10 @@ dedicated test proving the with-deadline struct decodes correctly despite the ex
 0.1 WETH for DAI via V3's `exactInputSingle`), confirmed via the trader's real DAI balance - the
 V3 one in particular is strong proof the "no-deadline" 7-field struct genuinely matches
 `SwapRouter02`'s live deployed bytecode, not just our own re-derivation of its published source.
+
+**`test/UniswapSafeEndToEnd.t.sol`** — same real-Safe, real-`execTransaction`, complete
+successful-swap proof as PancakeSwap's, against Uniswap's real V2 Router on the live Ethereum
+fork.
 
 ## Universal Router: deliberately not covered (both chains)
 
