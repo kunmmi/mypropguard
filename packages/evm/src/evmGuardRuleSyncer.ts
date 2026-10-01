@@ -50,6 +50,10 @@ export class EvmChainGuardRuleSyncer implements EvmGuardRuleSyncerPort {
     throw new Error(`EvmChainGuardRuleSyncer does not support rule type ${input.ruleType}`);
   }
 
+  async setFrozen(safeAddress: string, isFrozen: boolean): Promise<void> {
+    await this.guardClient.setFrozen(safeAddress as Address, isFrozen);
+  }
+
   private async readDecimals(token: Address): Promise<number> {
     const decimals = await this.publicClient.readContract({
       address: token,

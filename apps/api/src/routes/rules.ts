@@ -11,7 +11,7 @@ import {
   type DeactivateRuleResponse,
   type ListRulesResponse,
 } from "@mypropguard/contracts";
-import { addRule, deactivateRule, listRules } from "@mypropguard/risk-ledger";
+import { addRule, checkAndEnforceDailyLossFreeze, deactivateRule, listRules } from "@mypropguard/risk-ledger";
 import { assertAccountOwnership, type AppDeps } from "../app.js";
 
 /** Rule types the EVM spot Guards (PancakeSwap/Uniswap) actually understand how to enforce on-chain. */
@@ -88,6 +88,14 @@ export function registerRuleRoutes(app: FastifyInstance, deps: AppDeps): void {
       }
     }
 
+    // MAX_DAILY_LOSS isn't itself an on-chain-settable limit (the Guard can't compute P&L from a
+    // single transaction) - instead, re-evaluate right away whether this account is already over
+    // the new limit and freeze/unfreeze its Guard accordingly, rather than waiting for the next
+    // trade attempt to discover it.
+    if (rule.ruleType === RuleType.MAX_DAILY_LOSS) {
+      await checkAndEnforceDailyLossFreeze(deps.store, accountId, deps.evmGuardSyncers);
+    }
+
     const response: AddRuleResponse = {
       rule: {
         id: rule.id,
@@ -108,6 +116,9 @@ export function registerRuleRoutes(app: FastifyInstance, deps: AppDeps): void {
     if (!(await assertAccountOwnership(deps, request, reply, accountId))) return;
 
     await deactivateRule(deps.store, accountId, ruleId);
+    // Deactivating could have been the account's only MAX_DAILY_LOSS rule - re-check so a Guard
+    // frozen under the old rule doesn't stay frozen with nothing left to justify it.
+    await checkAndEnforceDailyLossFreeze(deps.store, accountId, deps.evmGuardSyncers);
 
     const response: DeactivateRuleResponse = { ruleId, isActive: false };
     return reply.send(deactivateRuleResponseSchema.parse(response));

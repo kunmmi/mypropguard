@@ -50,6 +50,25 @@ export class SpotGuardClient {
     return txHash;
   }
 
+  /**
+   * Freezes or unfreezes an account's ability to trade through any registered router - called
+   * after computing off-chain (see packages/risk-ledger's checkAndEnforceDailyLossFreeze) that the
+   * account has breached its max-daily-loss rule. See the contract's own NatSpec for the trust
+   * tradeoff this represents.
+   */
+  async setFrozen(account: Address, isFrozen: boolean): Promise<Hash> {
+    const txHash = await this.walletClient.writeContract({
+      address: this.guardAddress,
+      abi: spotGuardAdminAbi,
+      functionName: "setFrozen",
+      args: [account, isFrozen],
+      account: this.adminAccount,
+      chain: this.chain,
+    });
+    await this.publicClient.waitForTransactionReceipt({ hash: txHash });
+    return txHash;
+  }
+
   /** Registers or removes (RouterKind.None) a router address this Guard should decode. */
   async setRouterKind(routerAddress: Address, kind: RouterKind): Promise<Hash> {
     const txHash = await this.walletClient.writeContract({

@@ -3,6 +3,7 @@ export * from "./releaseReservation.js";
 export * from "./recordVenueOrderId.js";
 export * from "./listAccounts.js";
 export * from "./manageRules.js";
+export * from "./checkAndEnforceDailyLossFreeze.js";
 export * from "./reconcileAccount.js";
 export * from "./getProtectionStatus.js";
 export * from "./protectionLifecycle.js";

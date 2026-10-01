@@ -226,4 +226,42 @@ contract PancakeSwapLimitGuardTest is Test {
         // Must not revert even for a huge amount - this address is no longer a recognized router.
         _checkAsSafe(v3RouterNoDeadline, 0, _exactInputSingleNoDeadline(usdt, busd, 999_999e18));
     }
+
+    // ---- max-daily-loss freeze (backend-attested, see contract NatSpec) -------------------
+
+    function test_FrozenAccountCannotTradeEvenWithinOtherwiseValidLimits() public {
+        _setLimits(5, usdt, 1000e18);
+        vm.prank(admin);
+        guard.setFrozen(safeAccount, true);
+
+        vm.expectRevert(abi.encodeWithSelector(PancakeSwapLimitGuard.AccountIsFrozen.selector, safeAccount));
+        _checkAsSafe(v2Router, 0, _swapExactTokensForTokens(500e18, usdt, busd));
+    }
+
+    function test_UnfreezingRestoresNormalEnforcement() public {
+        _setLimits(5, usdt, 1000e18);
+        vm.startPrank(admin);
+        guard.setFrozen(safeAccount, true);
+        guard.setFrozen(safeAccount, false);
+        vm.stopPrank();
+
+        _checkAsSafe(v2Router, 0, _swapExactTokensForTokens(500e18, usdt, busd));
+        (, uint256 tradesToday) = guard.tradeState(safeAccount);
+        assertEq(tradesToday, 1);
+    }
+
+    function test_FreezingDoesNotBlockCallsToUnrecognizedAddresses() public {
+        // A frozen account must still be able to move its own funds (e.g. withdraw) through
+        // anything this Guard doesn't track as a router - freezing only stops further trades.
+        vm.prank(admin);
+        guard.setFrozen(safeAccount, true);
+
+        _checkAsSafe(otherTarget, 0, hex"deadbeef");
+    }
+
+    function test_OnlyAdminCanFreezeOrUnfreeze() public {
+        vm.expectRevert(PancakeSwapLimitGuard.NotAdmin.selector);
+        vm.prank(safeAccount);
+        guard.setFrozen(safeAccount, true);
+    }
 }

@@ -16,12 +16,19 @@ async function createAccountWithRule(app: ReturnType<typeof buildApp>, accountId
   });
 }
 
-/** Records every syncRule call instead of touching any real chain - lets tests assert exactly what would have been pushed on-chain. */
-function fakeEvmGuardSyncer(calls: EvmRuleSyncInput[], shouldThrow = false): EvmGuardRuleSyncer {
+/** Records every syncRule/setFrozen call instead of touching any real chain - lets tests assert exactly what would have been pushed on-chain. */
+function fakeEvmGuardSyncer(
+  calls: EvmRuleSyncInput[],
+  shouldThrow = false,
+  freezeCalls: { safeAddress: string; isFrozen: boolean }[] = [],
+): EvmGuardRuleSyncer {
   return {
     syncRule: async (input) => {
       if (shouldThrow) throw new Error("rpc call failed");
       calls.push(input);
+    },
+    setFrozen: async (safeAddress, isFrozen) => {
+      freezeCalls.push({ safeAddress, isFrozen });
     },
   };
 }
@@ -210,5 +217,91 @@ describe("POST /v1/accounts/:accountId/rules - EVM on-chain sync", () => {
 
     const listResponse = await app.inject({ method: "GET", url: "/v1/accounts/acct_sync_5/rules" });
     expect(listResponse.json().rules).toHaveLength(0);
+  });
+});
+
+describe("POST /v1/accounts/:accountId/rules - MAX_DAILY_LOSS freeze enforcement", () => {
+  it("re-checks and syncs freeze state on the account's Guard when a MAX_DAILY_LOSS rule is added", async () => {
+    const store = new InMemoryRiskLedgerStore();
+    const freezeCalls: { safeAddress: string; isFrozen: boolean }[] = [];
+    const app = buildApp({
+      store,
+      evmSafeProvisioners: { 56: { provisionSafe: async () => ({ safeAddress: "0xSAFE_BSC", chainId: 56 }) } },
+      evmGuardSyncers: { 56: fakeEvmGuardSyncer([], false, freezeCalls) },
+    });
+    await createEvmSafeAccount(app, "acct_freeze_1");
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/accounts/acct_freeze_1/rules",
+      payload: { ruleType: RuleType.MAX_DAILY_LOSS, param: "500" },
+    });
+
+    expect(response.statusCode).toBe(201);
+    // Freshly created account has no loss yet, so it should not be frozen.
+    expect(freezeCalls).toEqual([{ safeAddress: "0xSAFE_BSC", isFrozen: false }]);
+  });
+
+  it("does not touch freeze state when a non-MAX_DAILY_LOSS rule is added", async () => {
+    const store = new InMemoryRiskLedgerStore();
+    const freezeCalls: { safeAddress: string; isFrozen: boolean }[] = [];
+    const app = buildApp({
+      store,
+      evmSafeProvisioners: { 56: { provisionSafe: async () => ({ safeAddress: "0xSAFE_BSC", chainId: 56 }) } },
+      evmGuardSyncers: { 56: fakeEvmGuardSyncer([], false, freezeCalls) },
+    });
+    await createEvmSafeAccount(app, "acct_freeze_2");
+
+    await app.inject({
+      method: "POST",
+      url: "/v1/accounts/acct_freeze_2/rules",
+      payload: { ruleType: RuleType.MAX_POSITION_SIZE, param: "500", tokenAddress: "0xUSDT" },
+    });
+
+    expect(freezeCalls).toEqual([]);
+  });
+
+  it("re-checks freeze state when a rule is deactivated", async () => {
+    const store = new InMemoryRiskLedgerStore();
+    const freezeCalls: { safeAddress: string; isFrozen: boolean }[] = [];
+    const app = buildApp({
+      store,
+      evmSafeProvisioners: { 56: { provisionSafe: async () => ({ safeAddress: "0xSAFE_BSC", chainId: 56 }) } },
+      evmGuardSyncers: { 56: fakeEvmGuardSyncer([], false, freezeCalls) },
+    });
+    await createEvmSafeAccount(app, "acct_freeze_3");
+
+    const addResponse = await app.inject({
+      method: "POST",
+      url: "/v1/accounts/acct_freeze_3/rules",
+      payload: { ruleType: RuleType.MAX_DAILY_LOSS, param: "500" },
+    });
+    const ruleId = addResponse.json().rule.id;
+    freezeCalls.length = 0;
+
+    const deactivateResponse = await app.inject({
+      method: "POST",
+      url: `/v1/accounts/acct_freeze_3/rules/${ruleId}/deactivate`,
+    });
+
+    expect(deactivateResponse.statusCode).toBe(200);
+    expect(freezeCalls).toEqual([{ safeAddress: "0xSAFE_BSC", isFrozen: false }]);
+  });
+
+  it("does not error when no syncer is configured for a MAX_DAILY_LOSS rule add", async () => {
+    const store = new InMemoryRiskLedgerStore();
+    const app = buildApp({
+      store,
+      evmSafeProvisioners: { 56: { provisionSafe: async () => ({ safeAddress: "0xSAFE_BSC", chainId: 56 }) } },
+    });
+    await createEvmSafeAccount(app, "acct_freeze_4");
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/accounts/acct_freeze_4/rules",
+      payload: { ruleType: RuleType.MAX_DAILY_LOSS, param: "500" },
+    });
+
+    expect(response.statusCode).toBe(201);
   });
 });

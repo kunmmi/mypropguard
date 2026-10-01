@@ -109,13 +109,25 @@ contract UniswapLimitGuard is BaseGuard {
 
     mapping(address => AccountState) public tradeState;
 
+    /// @notice Set by MyPropGuard's backend when an account breaches its max-daily-loss rule
+    /// (computed off-chain - see packages/risk-ledger's checkAndEnforceDailyLossFreeze - since
+    /// realized P&L across multiple trades isn't derivable from a single transaction's calldata).
+    /// This is the trusted-backend compromise documented in packages/evm-guard/ROADMAP.md: the
+    /// Guard enforces whatever the admin key says, the same trust a trader already extends to
+    /// MyPropGuard by letting it deploy their Safe's Guard in the first place. Frozen accounts can
+    /// still move their own funds (untracked contracts/their own wallet) - only further trades
+    /// through a registered router are blocked.
+    mapping(address => bool) public frozen;
+
     event RouterConfigured(address indexed router, RouterKind kind);
     event TokenLimitSet(address indexed account, address indexed token, uint256 maxAmountPerTrade);
     event TradeCountLimitSet(address indexed account, uint256 maxTradesPerDay);
     event SwapChecked(address indexed account, address indexed token, uint256 amount, uint256 tradesToday);
+    event AccountFrozen(address indexed account, bool frozen);
 
     error NotAdmin();
     error LimitsNotConfigured(address account);
+    error AccountIsFrozen(address account);
     error TradeAmountExceeded(address token, uint256 requested, uint256 max);
     error TradeCountExceeded(uint256 attempted, uint256 max);
     error DelegateCallNotAllowed();
@@ -153,6 +165,14 @@ contract UniswapLimitGuard is BaseGuard {
         emit TradeCountLimitSet(account, limit);
     }
 
+    /// @notice Freezes or unfreezes an account's ability to trade through any registered router.
+    /// Called by MyPropGuard's backend after it computes (off-chain) that the account has
+    /// breached its max-daily-loss rule, and again the next day to lift the freeze.
+    function setFrozen(address account, bool isFrozen) external onlyAdmin {
+        frozen[account] = isFrozen;
+        emit AccountFrozen(account, isFrozen);
+    }
+
     function checkTransaction(
         address to,
         uint256 value,
@@ -188,6 +208,7 @@ contract UniswapLimitGuard is BaseGuard {
         RouterKind kind = routerKind[to];
         if (kind == RouterKind.None) return;
         if (operation == Enum.Operation.DelegateCall) revert DelegateCallNotAllowed();
+        if (frozen[account]) revert AccountIsFrozen(account);
 
         uint256 tradeLimit = maxTradesPerDay[account];
         if (tradeLimit == 0) revert LimitsNotConfigured(account);

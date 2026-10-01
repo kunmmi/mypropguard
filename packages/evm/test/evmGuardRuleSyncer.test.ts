@@ -85,4 +85,14 @@ describe("EvmChainGuardRuleSyncer", () => {
       syncer.syncRule({ safeAddress: SAFE_ADDRESS, ruleType: RuleType.MAX_DAILY_LOSS, param: new Decimal(500) }),
     ).rejects.toThrow(/does not support/);
   });
+
+  it("setFrozen calls the Guard's setFrozen with the account and flag", async () => {
+    const { syncer, writeContract } = buildSyncer(18);
+
+    await syncer.setFrozen(SAFE_ADDRESS, true);
+
+    expect(writeContract).toHaveBeenCalledWith(
+      expect.objectContaining({ functionName: "setFrozen", args: [SAFE_ADDRESS, true] }),
+    );
+  });
 });

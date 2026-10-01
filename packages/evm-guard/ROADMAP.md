@@ -139,18 +139,49 @@ requirement Hyperliquid's gas-free signing never had.
    doing it with real money on real mainnet, which needs the account owner's own funded wallet -
    prepare it, have them run it, same pattern as the Hyperliquid mainnet proof.
 
-## Deferred: max leverage, max daily loss (leveraged/perps risk enforcement)
+## Deferred: max leverage (not applicable to the spot Guards)
 
-Explicitly out of scope until there's a specific reason to prioritize it. Per the original
-research report, this needs cross-trade P&L/position-value accounting that a Guard can't get
-from a single transaction's calldata alone - realistic options when this is picked back up:
+Still explicitly out of scope. PancakeSwap/Uniswap are spot AMMs - there is no leverage concept in
+a plain token swap, so this only matters if/when a leveraged venue beyond GMX is added. No change
+here.
 
-- Build an owned on-chain position-accounting contract (most trustless, most work).
-- Accept an off-chain attestation MyPropGuard's own backend signs before each trade (reintroduces
-  a trusted component, but is the standard DeFi-wide compromise for this exact problem).
-- A keeper/automation hybrid: periodically compute P&L off-chain, flip a cheap on-chain "frozen"
-  flag the Guard checks (near-zero added gas per trade).
+## Done: max daily loss freeze mechanism for PancakeSwap/Uniswap Guards (decision made: backend attestation)
 
-No decision has been made yet on which of these to use - revisit
-`reports/EVM on-chain trading risk enforcement.md` section on the oracle/P&L problem when this
-track is picked up.
+The three-option decision from this roadmap's earlier revision is resolved: **backend attestation**
+was chosen over an owned on-chain accounting contract or a keeper/automation hybrid, since it
+reuses the existing Postgres risk ledger and risk engine almost entirely rather than building new
+on-chain accounting infrastructure. In practice this is implemented as a simple admin-controlled
+freeze flag rather than a per-trade cryptographic signature - functionally the same trust tradeoff
+(the backend's admin key decides), but far simpler for traders: nothing changes about how they
+submit a trade, no extra signature needs to be attached to anything.
+
+`PancakeSwapLimitGuard`/`UniswapLimitGuard` gained a `frozen` mapping and admin-only `setFrozen`;
+`_enforce` reverts with `AccountIsFrozen` for any registered router while frozen, but a frozen
+account can still call untracked addresses (e.g. withdrawing its own funds elsewhere) - freezing
+only stops further trades. `packages/evm`'s `SpotGuardClient.setFrozen` and
+`EvmChainGuardRuleSyncer.setFrozen` wire this into the existing per-chain admin wallet config, and
+`packages/risk-ledger`'s new `checkAndEnforceDailyLossFreeze` reuses the *exact* same
+`equityStartOfDay - currentEquity >= maxDailyLossParam` comparison the risk engine already uses for
+Hyperliquid accounts, so an EVM account is frozen/unfrozen under the identical rule a Hyperliquid
+account would be blocked under. `apps/api`'s rule routes call this automatically whenever a
+MAX_DAILY_LOSS rule is added or deactivated, so changing the limit re-evaluates the freeze state
+immediately rather than waiting for the next trade attempt.
+
+**Proof:** 4 new Foundry tests per Guard contract (frozen accounts revert, unfreezing restores
+normal enforcement, freezing doesn't block calls to untracked addresses, only the admin can
+freeze/unfreeze - not run against a live chain from this environment since Foundry isn't installed
+here; written to the exact same style as the existing passing test suite and should be run before
+deployment) plus 6 new `packages/risk-ledger` unit tests and 4 new `apps/api` tests (all passing)
+covering the breach/no-breach/no-rule/non-EVM/no-syncer cases and the route-level wiring.
+
+**The real remaining gap - this mechanism has nothing live to act on yet**: `currentEquity` for an
+EVM account only reflects reality once something feeds the Safe's live on-chain USD value into
+`account_risk_heads`, the same way `reconcileAccountFromVenue` already does for Hyperliquid by
+reading its Info API. No such reconciliation exists for EVM accounts, because it needs pricing
+arbitrary ERC-20 holdings - the exact oracle/P&L problem this roadmap has flagged since the
+original research (`reports/EVM on-chain trading risk enforcement.md`). Until an EVM equity feed is
+built, `checkAndEnforceDailyLossFreeze` is correct and fully tested, but will only ever see an
+EVM account's equity frozen at whatever it was when the account was created - it cannot yet detect
+a real loss happening from real EVM trades. That EVM price-oracle/reconciliation piece is now the
+single remaining prerequisite before max daily loss is actually live for PancakeSwap/Uniswap
+accounts, not a decision to make, but a build to do.

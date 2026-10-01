@@ -91,6 +91,13 @@ export interface EvmRuleSyncInput {
  */
 export interface EvmGuardRuleSyncer {
   syncRule(input: EvmRuleSyncInput): Promise<void>;
+  /**
+   * Freezes or unfreezes an account's ability to trade through any router the Guard tracks -
+   * called when the off-chain ledger determines the account has breached (or recovered from) its
+   * max-daily-loss rule. See packages/evm-guard/ROADMAP.md for why this is a trusted-backend
+   * compromise rather than a fully trustless on-chain computation.
+   */
+  setFrozen(safeAddress: string, isFrozen: boolean): Promise<void>;
 }
 
 /**
