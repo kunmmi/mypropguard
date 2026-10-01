@@ -81,6 +81,15 @@ function ruleTypeLabel(ruleType: string): string {
   return RULE_TYPE_OPTIONS.find((o) => o.value === ruleType)?.label ?? ruleType;
 }
 
+// Only Hyperliquid (a Privy-managed wallet) and Arbitrum/GMX (a real on-chain Safe + Guard, see
+// packages/evm-guard) are wired up server-side right now - see packages/evm-guard/ROADMAP.md for
+// BSC/Ethereum.
+const VENUE_OPTIONS = [
+  { value: "hyperliquid", label: "Hyperliquid" },
+  { value: "arbitrum-gmx", label: "GMX on Arbitrum" },
+];
+const VENUE_CHAIN_IDS: Record<string, number> = { "arbitrum-gmx": 42161 };
+
 function AuthForm() {
   const [mode, setMode] = useState<"sign-in" | "sign-up">("sign-in");
   const [email, setEmail] = useState("");
@@ -200,6 +209,9 @@ function Dashboard({ session }: { session: Session }) {
   const [initialEquity, setInitialEquity] = useState("10000");
   const [maxPositionSize, setMaxPositionSize] = useState("100000");
   const [newAgentWalletAddress, setNewAgentWalletAddress] = useState<string | null>(null);
+  const [newVenue, setNewVenue] = useState("hyperliquid");
+  const [evmOwnerWalletAddress, setEvmOwnerWalletAddress] = useState("");
+  const [newEvmSafeAddress, setNewEvmSafeAddress] = useState<string | null>(null);
 
   const [venueAddress, setVenueAddress] = useState("");
   const [reconcileResult, setReconcileResult] = useState<ReconcileResult | null>(null);
@@ -320,13 +332,19 @@ function Dashboard({ session }: { session: Session }) {
   async function handleCreateAccount() {
     setError(null);
     try {
+      const isEvmVenue = newVenue !== "hyperliquid";
       const result = await api.createAccount({
         accountId,
         ownerUserId: session.user.id,
+        venue: newVenue,
         initialEquity,
         initialRules: [{ ruleType: "MAX_POSITION_SIZE", param: maxPositionSize }],
+        ...(isEvmVenue && evmOwnerWalletAddress
+          ? { evmOwnerWalletAddress, evmChainId: VENUE_CHAIN_IDS[newVenue] }
+          : {}),
       });
       setNewAgentWalletAddress(result.agentWalletAddress);
+      setNewEvmSafeAddress(result.evmSafeAddress ?? null);
       await Promise.all([loadAccount(accountId), loadAccounts()]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create account");
@@ -525,8 +543,24 @@ function Dashboard({ session }: { session: Session }) {
                 Or provision a new account
               </h4>
               <div style={{ display: "flex", gap: "var(--space-3)", flexWrap: "wrap", alignItems: "flex-end" }}>
+                <Select label="Venue" options={VENUE_OPTIONS} value={newVenue} onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setNewVenue(e.target.value)} />
                 <Input label="Initial equity ($)" value={initialEquity} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setInitialEquity(e.target.value)} />
                 <Input label="Max position size ($)" value={maxPositionSize} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setMaxPositionSize(e.target.value)} />
+              </div>
+
+              {newVenue !== "hyperliquid" && (
+                <div style={{ marginTop: "var(--space-3)" }}>
+                  <Input
+                    label="Your wallet address"
+                    value={evmOwnerWalletAddress}
+                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => setEvmOwnerWalletAddress(e.target.value)}
+                    placeholder="0x..."
+                    helpText="This becomes the sole owner of a Safe we provision for you - MyPropGuard never holds its key."
+                  />
+                </div>
+              )}
+
+              <div style={{ marginTop: "var(--space-3)" }}>
                 <Button onClick={handleCreateAccount} disabled={!accountId}>
                   Create account
                 </Button>
@@ -550,6 +584,26 @@ function Dashboard({ session }: { session: Session }) {
                 Approve Agent, and paste this address:
               </div>
               <code style={{ fontFamily: "var(--font-accent)", wordBreak: "break-all" }}>{newAgentWalletAddress}</code>
+            </div>
+          )}
+
+          {newEvmSafeAddress && (
+            <div
+              style={{
+                marginTop: "var(--space-5)",
+                padding: "var(--space-3) var(--space-4)",
+                borderRadius: "var(--radius-md)",
+                background: "var(--surface-sunken)",
+                fontSize: 13,
+              }}
+            >
+              <div style={{ fontWeight: 600, marginBottom: 4 }}>Your Safe is ready - trade with it directly on GMX</div>
+              <div style={{ color: "var(--text-muted)", marginBottom: 6 }}>
+                This Safe already has your risk rules attached on-chain. Go to GMX&apos;s own site, connect this
+                address as your trading wallet, and trade normally - a rule-breaking order will revert on-chain
+                before it ever reaches GMX:
+              </div>
+              <code style={{ fontFamily: "var(--font-accent)", wordBreak: "break-all" }}>{newEvmSafeAddress}</code>
             </div>
           )}
         </Panel>

@@ -40,8 +40,12 @@ export interface ProtectionStatus {
 export interface CreateAccountInput {
   accountId: string;
   ownerUserId: string;
+  venue?: string;
   initialEquity: string;
   initialRules: Array<{ ruleType: string; param: string }>;
+  /** EVM-chain venues only (e.g. "arbitrum-gmx") - your own wallet address and which chain to provision a Safe on. Both required together. */
+  evmOwnerWalletAddress?: string;
+  evmChainId?: number;
 }
 
 export interface ReconcileResult {
@@ -69,6 +73,7 @@ export interface ProtectedAccountSummary {
   protectionEnabled: boolean;
   createdAt: string;
   agentWalletAddress: string | null;
+  evmSafeAddress?: string | null;
 }
 
 export interface RuleVersion {
@@ -107,10 +112,10 @@ export interface SubmitOrderResult {
 
 export const api = {
   createAccount: (input: CreateAccountInput) =>
-    request<{ accountId: string; protectionOn: boolean; agentWalletAddress: string | null }>("/v1/accounts", {
-      method: "POST",
-      body: JSON.stringify(input),
-    }),
+    request<{ accountId: string; protectionOn: boolean; agentWalletAddress: string | null; evmSafeAddress?: string | null }>(
+      "/v1/accounts",
+      { method: "POST", body: JSON.stringify(input) },
+    ),
 
   getProtection: (accountId: string) => request<ProtectionStatus>(`/v1/protection/${accountId}`),
 
