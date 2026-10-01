@@ -232,19 +232,34 @@ contract UniswapLimitGuardTest is Test {
     function test_FrozenAccountCannotTradeEvenWithinOtherwiseValidLimits() public {
         _setLimits(5, usdt, 1000e18);
         vm.prank(admin);
-        guard.setFrozen(safeAccount, true);
+        guard.recordDailyLossBreach(safeAccount);
 
         vm.expectRevert(abi.encodeWithSelector(UniswapLimitGuard.AccountIsFrozen.selector, safeAccount));
         _checkAsSafe(v2Router, 0, _swapExactTokensForTokens(500e18, usdt, dai));
     }
 
-    function test_UnfreezingRestoresNormalEnforcement() public {
+    function test_NoFunctionCanLiftAFreezeEarly() public {
+        // Confirms the actual guarantee: there is no admin (or any) function that clears
+        // frozenThroughDay early - calling recordDailyLossBreach again the same day is the only
+        // admin action available, and it's a no-op (still today), not a way back in.
         _setLimits(5, usdt, 1000e18);
         vm.startPrank(admin);
-        guard.setFrozen(safeAccount, true);
-        guard.setFrozen(safeAccount, false);
+        guard.recordDailyLossBreach(safeAccount);
+        guard.recordDailyLossBreach(safeAccount); // idempotent - still frozen for today, not cleared
         vm.stopPrank();
 
+        vm.expectRevert(abi.encodeWithSelector(UniswapLimitGuard.AccountIsFrozen.selector, safeAccount));
+        _checkAsSafe(v2Router, 0, _swapExactTokensForTokens(500e18, usdt, dai));
+    }
+
+    function test_FreezeAutomaticallyLiftsAtTheNextUtcDayWithNoTransactionNeeded() public {
+        _setLimits(5, usdt, 1000e18);
+        vm.prank(admin);
+        guard.recordDailyLossBreach(safeAccount);
+
+        vm.warp(block.timestamp + 1 days);
+
+        // No unfreeze call of any kind - the clock alone restores normal enforcement.
         _checkAsSafe(v2Router, 0, _swapExactTokensForTokens(500e18, usdt, dai));
         (, uint256 tradesToday) = guard.tradeState(safeAccount);
         assertEq(tradesToday, 1);
@@ -254,14 +269,14 @@ contract UniswapLimitGuardTest is Test {
         // A frozen account must still be able to move its own funds (e.g. withdraw) through
         // anything this Guard doesn't track as a router - freezing only stops further trades.
         vm.prank(admin);
-        guard.setFrozen(safeAccount, true);
+        guard.recordDailyLossBreach(safeAccount);
 
         _checkAsSafe(otherTarget, 0, hex"deadbeef");
     }
 
-    function test_OnlyAdminCanFreezeOrUnfreeze() public {
+    function test_OnlyAdminCanRecordABreach() public {
         vm.expectRevert(UniswapLimitGuard.NotAdmin.selector);
         vm.prank(safeAccount);
-        guard.setFrozen(safeAccount, true);
+        guard.recordDailyLossBreach(safeAccount);
     }
 }

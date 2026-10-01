@@ -20,11 +20,11 @@ function evmAccount(overrides: Partial<ProtectedAccount> = {}): ProtectedAccount
   };
 }
 
-function fakeSyncer(freezeCalls: { safeAddress: string; isFrozen: boolean }[]): EvmGuardRuleSyncer {
+function fakeSyncer(freezeCalls: string[]): EvmGuardRuleSyncer {
   return {
     syncRule: async () => {},
-    setFrozen: async (safeAddress, isFrozen) => {
-      freezeCalls.push({ safeAddress, isFrozen });
+    freezeForToday: async (safeAddress) => {
+      freezeCalls.push(safeAddress);
     },
   };
 }
@@ -38,13 +38,13 @@ describe("checkAndEnforceDailyLossFreeze", () => {
     );
     store.seedRules("acct_evm_1", [buildRuleVersion(RuleType.MAX_DAILY_LOSS, 500, { accountId: "acct_evm_1" })]);
 
-    const freezeCalls: { safeAddress: string; isFrozen: boolean }[] = [];
+    const freezeCalls: string[] = [];
     await checkAndEnforceDailyLossFreeze(store, "acct_evm_1", { 56: fakeSyncer(freezeCalls) });
 
-    expect(freezeCalls).toEqual([{ safeAddress: "0xSAFE", isFrozen: true }]);
+    expect(freezeCalls).toEqual(["0xSAFE"]);
   });
 
-  it("unfreezes (or keeps unfrozen) when today's loss is within the MAX_DAILY_LOSS rule", async () => {
+  it("does not call freezeForToday when today's loss is within the MAX_DAILY_LOSS rule", async () => {
     const store = new InMemoryRiskLedgerStore();
     store.seedAccount(evmAccount());
     store.seedAccountRiskHead(
@@ -52,13 +52,14 @@ describe("checkAndEnforceDailyLossFreeze", () => {
     );
     store.seedRules("acct_evm_1", [buildRuleVersion(RuleType.MAX_DAILY_LOSS, 500, { accountId: "acct_evm_1" })]);
 
-    const freezeCalls: { safeAddress: string; isFrozen: boolean }[] = [];
+    const freezeCalls: string[] = [];
     await checkAndEnforceDailyLossFreeze(store, "acct_evm_1", { 56: fakeSyncer(freezeCalls) });
 
-    expect(freezeCalls).toEqual([{ safeAddress: "0xSAFE", isFrozen: false }]);
+    // No "unfreeze" call exists - not being breached just means nothing is reported at all.
+    expect(freezeCalls).toEqual([]);
   });
 
-  it("unfreezes when there is no active MAX_DAILY_LOSS rule at all", async () => {
+  it("does not call freezeForToday when there is no active MAX_DAILY_LOSS rule at all", async () => {
     const store = new InMemoryRiskLedgerStore();
     store.seedAccount(evmAccount());
     store.seedAccountRiskHead(
@@ -66,10 +67,10 @@ describe("checkAndEnforceDailyLossFreeze", () => {
     );
     store.seedRules("acct_evm_1", []);
 
-    const freezeCalls: { safeAddress: string; isFrozen: boolean }[] = [];
+    const freezeCalls: string[] = [];
     await checkAndEnforceDailyLossFreeze(store, "acct_evm_1", { 56: fakeSyncer(freezeCalls) });
 
-    expect(freezeCalls).toEqual([{ safeAddress: "0xSAFE", isFrozen: false }]);
+    expect(freezeCalls).toEqual([]);
   });
 
   it("does nothing for a non-EVM (Hyperliquid) account", async () => {
@@ -78,7 +79,7 @@ describe("checkAndEnforceDailyLossFreeze", () => {
     store.seedAccountRiskHead(buildAccountRiskHead({ accountId: "acct_hl_1" }));
     store.seedRules("acct_hl_1", [buildRuleVersion(RuleType.MAX_DAILY_LOSS, 500, { accountId: "acct_hl_1" })]);
 
-    const freezeCalls: { safeAddress: string; isFrozen: boolean }[] = [];
+    const freezeCalls: string[] = [];
     await checkAndEnforceDailyLossFreeze(store, "acct_hl_1", { 56: fakeSyncer(freezeCalls) });
 
     expect(freezeCalls).toEqual([]);
@@ -92,7 +93,7 @@ describe("checkAndEnforceDailyLossFreeze", () => {
     );
     store.seedRules("acct_evm_1", [buildRuleVersion(RuleType.MAX_DAILY_LOSS, 500, { accountId: "acct_evm_1" })]);
 
-    const freezeCalls: { safeAddress: string; isFrozen: boolean }[] = [];
+    const freezeCalls: string[] = [];
     await checkAndEnforceDailyLossFreeze(store, "acct_evm_1", { 1: fakeSyncer(freezeCalls) });
 
     expect(freezeCalls).toEqual([]);

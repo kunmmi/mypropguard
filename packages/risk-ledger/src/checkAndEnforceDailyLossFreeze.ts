@@ -2,20 +2,21 @@ import { Decimal } from "decimal.js";
 import { RuleType, type EvmGuardRuleSyncer, type RiskLedgerStore } from "@mypropguard/domain";
 
 /**
- * Freezes or unfreezes an EVM Safe account's on-chain Guard based on whether it has breached its
- * MAX_DAILY_LOSS rule - the "backend-signed attestation" compromise documented in
- * packages/evm-guard/ROADMAP.md (max daily loss needs P&L across multiple trades, which a Guard
- * can't see from a single transaction's calldata alone, so MyPropGuard's own backend decides and
- * the Guard just enforces whatever it's told).
+ * Reports a MAX_DAILY_LOSS breach to an EVM Safe account's on-chain Guard - the "backend-signed
+ * attestation" compromise documented in packages/evm-guard/ROADMAP.md (max daily loss needs P&L
+ * across multiple trades, which a Guard can't see from a single transaction's calldata alone, so
+ * MyPropGuard's own backend decides and the Guard just enforces whatever it's told).
+ *
+ * Deliberately one-directional, matching the contract: this only ever calls `freezeForToday` when
+ * breached, and does nothing at all when not breached. There is no "unfreeze" call to make - once
+ * recorded, a freeze can only ever lift on its own at the next UTC day, and no one (including this
+ * function, including the admin key) can clear it early. This was a deliberate product decision:
+ * the backend reports breaches, but never controls when a freeze ends.
  *
  * Uses the exact same `equityStartOfDay - currentEquity >= maxDailyLoss` comparison as
  * packages/risk-engine's RiskEngine, for consistency with how Hyperliquid accounts are already
  * blocked - but for an EVM account, `currentEquity` only reflects reality once something feeds the
- * Safe's live on-chain USD value into `account_risk_heads` (an EVM equivalent of
- * `reconcileAccountFromVenue`, which doesn't exist yet - see the ROADMAP for why: pricing
- * arbitrary ERC-20 holdings needs a price oracle, a separate, still-undecided piece of work). Until
- * that exists, this function is correct and tested, but has no live data to act on for a real EVM
- * account - call sites should not assume it reflects live trading activity yet.
+ * Safe's live on-chain USD value into `account_risk_heads` (see reconcileEvmAccountEquity).
  *
  * No-op (does not call the syncer) when the account has no evmSafeAddress/evmChainId, or when no
  * syncer is configured for that chain - same "absent config = no-op" convention as the rest of the
@@ -41,5 +42,7 @@ export async function checkAndEnforceDailyLossFreeze(
     return lossToday.gte(dailyLossRule.param);
   });
 
-  await syncer.setFrozen(account.evmSafeAddress, isBreached);
+  if (isBreached) {
+    await syncer.freezeForToday(account.evmSafeAddress);
+  }
 }

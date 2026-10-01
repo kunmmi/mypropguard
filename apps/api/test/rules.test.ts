@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { RuleType, type EvmGuardRuleSyncer, type EvmRuleSyncInput } from "@mypropguard/domain";
+import { Decimal } from "decimal.js";
+import { RuleType, type ClearinghouseState, type EvmGuardRuleSyncer, type EvmRuleSyncInput, type VenueStateReader } from "@mypropguard/domain";
 import { InMemoryRiskLedgerStore } from "@mypropguard/test-fixtures";
 import { buildApp } from "../src/app.js";
 
@@ -16,19 +17,15 @@ async function createAccountWithRule(app: ReturnType<typeof buildApp>, accountId
   });
 }
 
-/** Records every syncRule/setFrozen call instead of touching any real chain - lets tests assert exactly what would have been pushed on-chain. */
-function fakeEvmGuardSyncer(
-  calls: EvmRuleSyncInput[],
-  shouldThrow = false,
-  freezeCalls: { safeAddress: string; isFrozen: boolean }[] = [],
-): EvmGuardRuleSyncer {
+/** Records every syncRule/freezeForToday call instead of touching any real chain - lets tests assert exactly what would have been pushed on-chain. */
+function fakeEvmGuardSyncer(calls: EvmRuleSyncInput[], shouldThrow = false, freezeCalls: string[] = []): EvmGuardRuleSyncer {
   return {
     syncRule: async (input) => {
       if (shouldThrow) throw new Error("rpc call failed");
       calls.push(input);
     },
-    setFrozen: async (safeAddress, isFrozen) => {
-      freezeCalls.push({ safeAddress, isFrozen });
+    freezeForToday: async (safeAddress) => {
+      freezeCalls.push(safeAddress);
     },
   };
 }
@@ -221,9 +218,9 @@ describe("POST /v1/accounts/:accountId/rules - EVM on-chain sync", () => {
 });
 
 describe("POST /v1/accounts/:accountId/rules - MAX_DAILY_LOSS freeze enforcement", () => {
-  it("re-checks and syncs freeze state on the account's Guard when a MAX_DAILY_LOSS rule is added", async () => {
+  it("does not report a breach when a MAX_DAILY_LOSS rule is added to an account with no loss yet", async () => {
     const store = new InMemoryRiskLedgerStore();
-    const freezeCalls: { safeAddress: string; isFrozen: boolean }[] = [];
+    const freezeCalls: string[] = [];
     const app = buildApp({
       store,
       evmSafeProvisioners: { 56: { provisionSafe: async () => ({ safeAddress: "0xSAFE_BSC", chainId: 56 }) } },
@@ -238,13 +235,14 @@ describe("POST /v1/accounts/:accountId/rules - MAX_DAILY_LOSS freeze enforcement
     });
 
     expect(response.statusCode).toBe(201);
-    // Freshly created account has no loss yet, so it should not be frozen.
-    expect(freezeCalls).toEqual([{ safeAddress: "0xSAFE_BSC", isFrozen: false }]);
+    // Freshly created account has no loss yet - there is no "confirm unfrozen" call, since no
+    // such call exists; not being breached just means nothing gets reported at all.
+    expect(freezeCalls).toEqual([]);
   });
 
   it("does not touch freeze state when a non-MAX_DAILY_LOSS rule is added", async () => {
     const store = new InMemoryRiskLedgerStore();
-    const freezeCalls: { safeAddress: string; isFrozen: boolean }[] = [];
+    const freezeCalls: string[] = [];
     const app = buildApp({
       store,
       evmSafeProvisioners: { 56: { provisionSafe: async () => ({ safeAddress: "0xSAFE_BSC", chainId: 56 }) } },
@@ -261,9 +259,9 @@ describe("POST /v1/accounts/:accountId/rules - MAX_DAILY_LOSS freeze enforcement
     expect(freezeCalls).toEqual([]);
   });
 
-  it("re-checks freeze state when a rule is deactivated", async () => {
+  it("re-checks freeze state when a rule is deactivated (no breach, so no call)", async () => {
     const store = new InMemoryRiskLedgerStore();
-    const freezeCalls: { safeAddress: string; isFrozen: boolean }[] = [];
+    const freezeCalls: string[] = [];
     const app = buildApp({
       store,
       evmSafeProvisioners: { 56: { provisionSafe: async () => ({ safeAddress: "0xSAFE_BSC", chainId: 56 }) } },
@@ -285,7 +283,43 @@ describe("POST /v1/accounts/:accountId/rules - MAX_DAILY_LOSS freeze enforcement
     });
 
     expect(deactivateResponse.statusCode).toBe(200);
-    expect(freezeCalls).toEqual([{ safeAddress: "0xSAFE_BSC", isFrozen: false }]);
+    expect(freezeCalls).toEqual([]);
+  });
+
+  it("reports a breach to the Guard when the account's equity has already dropped below the new rule's budget", async () => {
+    const store = new InMemoryRiskLedgerStore();
+    const freezeCalls: string[] = [];
+    const venueReader: VenueStateReader = {
+      getClearinghouseState: async (): Promise<ClearinghouseState> => ({
+        accountValue: new Decimal(9_000), // down from the 10,000 initialEquity
+        totalMarginUsed: new Decimal(0),
+        totalNotionalPosition: new Decimal(0),
+        withdrawable: new Decimal(9_000),
+        positions: [],
+      }),
+    };
+    const app = buildApp({
+      store,
+      venueReader,
+      evmSafeProvisioners: { 56: { provisionSafe: async () => ({ safeAddress: "0xSAFE_BSC", chainId: 56 }) } },
+      evmGuardSyncers: { 56: fakeEvmGuardSyncer([], false, freezeCalls) },
+    });
+    await createEvmSafeAccount(app, "acct_freeze_5");
+
+    await app.inject({
+      method: "POST",
+      url: "/v1/accounts/acct_freeze_5/reconcile",
+      payload: { venueAddress: "0xanything" },
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/accounts/acct_freeze_5/rules",
+      payload: { ruleType: RuleType.MAX_DAILY_LOSS, param: "500" }, // already lost 1000, over the 500 budget
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(freezeCalls).toEqual(["0xSAFE_BSC"]);
   });
 
   it("does not error when no syncer is configured for a MAX_DAILY_LOSS rule add", async () => {

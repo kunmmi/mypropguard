@@ -51,17 +51,19 @@ export class SpotGuardClient {
   }
 
   /**
-   * Freezes or unfreezes an account's ability to trade through any registered router - called
-   * after computing off-chain (see packages/risk-ledger's checkAndEnforceDailyLossFreeze) that the
-   * account has breached its max-daily-loss rule. See the contract's own NatSpec for the trust
-   * tradeoff this represents.
+   * Records that an account has breached its max-daily-loss rule today, freezing it through the
+   * end of the current UTC day - called after computing off-chain (see packages/risk-ledger's
+   * checkAndEnforceDailyLossFreeze) that a breach occurred. One-directional: there is no
+   * corresponding "unfreeze" call, by design - see the contract's own NatSpec for the trust
+   * tradeoff this represents and the guarantee it makes (no one, including the admin, can lift a
+   * freeze before the day rolls over on its own).
    */
-  async setFrozen(account: Address, isFrozen: boolean): Promise<Hash> {
+  async recordDailyLossBreach(account: Address): Promise<Hash> {
     const txHash = await this.walletClient.writeContract({
       address: this.guardAddress,
       abi: spotGuardAdminAbi,
-      functionName: "setFrozen",
-      args: [account, isFrozen],
+      functionName: "recordDailyLossBreach",
+      args: [account],
       account: this.adminAccount,
       chain: this.chain,
     });

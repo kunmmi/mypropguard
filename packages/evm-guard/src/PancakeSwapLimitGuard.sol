@@ -109,21 +109,24 @@ contract PancakeSwapLimitGuard is BaseGuard {
 
     mapping(address => AccountState) public tradeState;
 
-    /// @notice Set by MyPropGuard's backend when an account breaches its max-daily-loss rule
-    /// (computed off-chain - see packages/risk-ledger's checkAndEnforceDailyLossFreeze - since
-    /// realized P&L across multiple trades isn't derivable from a single transaction's calldata).
-    /// This is the trusted-backend compromise documented in packages/evm-guard/ROADMAP.md: the
-    /// Guard enforces whatever the admin key says, the same trust a trader already extends to
-    /// MyPropGuard by letting it deploy their Safe's Guard in the first place. Frozen accounts can
-    /// still move their own funds (untracked contracts/their own wallet) - only further trades
-    /// through a registered router are blocked.
-    mapping(address => bool) public frozen;
+    /// @notice The UTC day (block.timestamp / 1 days) through which an account is frozen, set by
+    /// MyPropGuard's backend when it detects (off-chain - see packages/risk-ledger's
+    /// checkAndEnforceDailyLossFreeze) that the account has breached its max-daily-loss rule.
+    /// Realized P&L across multiple trades isn't derivable from a single transaction's calldata,
+    /// so the backend's admin key is still the one that tells this contract a breach happened -
+    /// that trust is unavoidable without a full on-chain accounting system. What IS enforced
+    /// on-chain, with no admin override possible: once recorded, the freeze cannot be lifted early
+    /// by anyone, including the admin - there is no function anywhere that clears this early. It
+    /// expires automatically the moment `block.timestamp / 1 days` advances past the stored day,
+    /// with zero transactions needed from anyone. A frozen account can still move its own funds
+    /// through anything this Guard doesn't track as a router - only further trades are blocked.
+    mapping(address => uint256) public frozenThroughDay;
 
     event RouterConfigured(address indexed router, RouterKind kind);
     event TokenLimitSet(address indexed account, address indexed token, uint256 maxAmountPerTrade);
     event TradeCountLimitSet(address indexed account, uint256 maxTradesPerDay);
     event SwapChecked(address indexed account, address indexed token, uint256 amount, uint256 tradesToday);
-    event AccountFrozen(address indexed account, bool frozen);
+    event DailyLossBreachRecorded(address indexed account, uint256 day);
 
     error NotAdmin();
     error LimitsNotConfigured(address account);
@@ -165,12 +168,16 @@ contract PancakeSwapLimitGuard is BaseGuard {
         emit TradeCountLimitSet(account, limit);
     }
 
-    /// @notice Freezes or unfreezes an account's ability to trade through any registered router.
-    /// Called by MyPropGuard's backend after it computes (off-chain) that the account has
-    /// breached its max-daily-loss rule, and again the next day to lift the freeze.
-    function setFrozen(address account, bool isFrozen) external onlyAdmin {
-        frozen[account] = isFrozen;
-        emit AccountFrozen(account, isFrozen);
+    /// @notice Records that an account has breached its max-daily-loss rule today, freezing it
+    /// through the end of the current UTC day. Admin-only, but deliberately one-directional and
+    /// idempotent: this can only ever set the frozen day to the CURRENT day, never clear it, never
+    /// extend it into the future, and never target a day that has already passed. There is no
+    /// function on this contract, callable by anyone, that lifts a freeze before the day rolls
+    /// over on its own.
+    function recordDailyLossBreach(address account) external onlyAdmin {
+        uint256 today = block.timestamp / 1 days;
+        frozenThroughDay[account] = today;
+        emit DailyLossBreachRecorded(account, today);
     }
 
     function checkTransaction(
@@ -208,7 +215,7 @@ contract PancakeSwapLimitGuard is BaseGuard {
         RouterKind kind = routerKind[to];
         if (kind == RouterKind.None) return;
         if (operation == Enum.Operation.DelegateCall) revert DelegateCallNotAllowed();
-        if (frozen[account]) revert AccountIsFrozen(account);
+        if (frozenThroughDay[account] == block.timestamp / 1 days) revert AccountIsFrozen(account);
 
         uint256 tradeLimit = maxTradesPerDay[account];
         if (tradeLimit == 0) revert LimitsNotConfigured(account);

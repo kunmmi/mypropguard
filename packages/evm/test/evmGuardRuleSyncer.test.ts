@@ -86,13 +86,13 @@ describe("EvmChainGuardRuleSyncer", () => {
     ).rejects.toThrow(/does not support/);
   });
 
-  it("setFrozen calls the Guard's setFrozen with the account and flag", async () => {
+  it("freezeForToday calls the Guard's recordDailyLossBreach with the account", async () => {
     const { syncer, writeContract } = buildSyncer(18);
 
-    await syncer.setFrozen(SAFE_ADDRESS, true);
+    await syncer.freezeForToday(SAFE_ADDRESS);
 
     expect(writeContract).toHaveBeenCalledWith(
-      expect.objectContaining({ functionName: "setFrozen", args: [SAFE_ADDRESS, true] }),
+      expect.objectContaining({ functionName: "recordDailyLossBreach", args: [SAFE_ADDRESS] }),
     );
   });
 });

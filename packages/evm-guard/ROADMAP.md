@@ -155,24 +155,39 @@ freeze flag rather than a per-trade cryptographic signature - functionally the s
 (the backend's admin key decides), but far simpler for traders: nothing changes about how they
 submit a trade, no extra signature needs to be attached to anything.
 
-`PancakeSwapLimitGuard`/`UniswapLimitGuard` gained a `frozen` mapping and admin-only `setFrozen`;
-`_enforce` reverts with `AccountIsFrozen` for any registered router while frozen, but a frozen
-account can still call untracked addresses (e.g. withdrawing its own funds elsewhere) - freezing
-only stops further trades. `packages/evm`'s `SpotGuardClient.setFrozen` and
-`EvmChainGuardRuleSyncer.setFrozen` wire this into the existing per-chain admin wallet config, and
-`packages/risk-ledger`'s new `checkAndEnforceDailyLossFreeze` reuses the *exact* same
+**Revised after explicit product direction**: the admin key must never be able to freeze a wallet
+outside of an actual rule breach, and once frozen, nothing - not even the admin - may lift it
+early; the only way out is the next UTC day. `PancakeSwapLimitGuard`/`UniswapLimitGuard` gained
+`frozenThroughDay` (a UTC day number, not a boolean) and a single admin function,
+`recordDailyLossBreach`, which can only ever set that day to *today* - there is no function on
+either contract, callable by anyone, that clears it early. `_enforce` reverts with
+`AccountIsFrozen` for any registered router while `frozenThroughDay[account] == today`, and the
+freeze lifts itself automatically the instant `block.timestamp / 1 days` advances, with zero
+transactions needed from anyone. A frozen account can still call untracked addresses (e.g.
+withdrawing its own funds elsewhere) - freezing only stops further trades. The one thing that
+remains structurally unavoidable: the contract still can't independently verify a breach happened
+(realized P&L across multiple trades isn't derivable from calldata), so the admin key is still the
+one that *reports* a breach - what changed is that reporting one no longer gives the admin any
+control over how long the freeze lasts.
+
+`packages/evm`'s `SpotGuardClient.recordDailyLossBreach` and
+`EvmChainGuardRuleSyncer.freezeForToday` wire this into the existing per-chain admin wallet config.
+`packages/risk-ledger`'s `checkAndEnforceDailyLossFreeze` reuses the *exact* same
 `equityStartOfDay - currentEquity >= maxDailyLossParam` comparison the risk engine already uses for
-Hyperliquid accounts, so an EVM account is frozen/unfrozen under the identical rule a Hyperliquid
-account would be blocked under. `apps/api`'s rule routes call this automatically whenever a
-MAX_DAILY_LOSS rule is added or deactivated, so changing the limit re-evaluates the freeze state
+Hyperliquid accounts, and is now one-directional to match the contract: it calls `freezeForToday`
+when breached and does *nothing* when not (there is no "unfreeze" call to make - the domain port,
+`EvmGuardRuleSyncer`, has no such method at all). `apps/api`'s rule routes call this automatically
+whenever a MAX_DAILY_LOSS rule is added or deactivated, so changing the limit re-evaluates
 immediately rather than waiting for the next trade attempt.
 
-**Proof:** 4 new Foundry tests per Guard contract (frozen accounts revert, unfreezing restores
-normal enforcement, freezing doesn't block calls to untracked addresses, only the admin can
-freeze/unfreeze - not run against a live chain from this environment since Foundry isn't installed
-here; written to the exact same style as the existing passing test suite and should be run before
-deployment) plus 6 new `packages/risk-ledger` unit tests and 4 new `apps/api` tests (all passing)
-covering the breach/no-breach/no-rule/non-EVM/no-syncer cases and the route-level wiring.
+**Proof:** 4 Foundry tests per Guard contract (frozen accounts revert; no function anywhere lifts
+a freeze early, confirmed by calling `recordDailyLossBreach` twice and showing it stays frozen
+rather than toggling; the freeze lifts automatically after `vm.warp`-ing one day forward with zero
+further calls; freezing doesn't block calls to untracked addresses; only the admin can record a
+breach at all) - run for real against this environment's own Foundry install, all passing,
+alongside the full existing suite. Plus 6 `packages/risk-ledger` unit tests and 7 `apps/api` tests
+(including one exercising a real reported breach end-to-end through the HTTP rule route, not just
+the no-breach cases), all passing.
 
 ## Done: EVM equity feed for BSC (the oracle/P&L piece that makes max daily loss live)
 

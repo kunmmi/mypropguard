@@ -142,12 +142,9 @@ export const spotGuardAdminAbi = [
   },
   {
     type: "function",
-    name: "setFrozen",
+    name: "recordDailyLossBreach",
     stateMutability: "nonpayable",
-    inputs: [
-      { name: "account", type: "address" },
-      { name: "isFrozen", type: "bool" },
-    ],
+    inputs: [{ name: "account", type: "address" }],
     outputs: [],
   },
 ] as const;

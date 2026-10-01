@@ -92,12 +92,15 @@ export interface EvmRuleSyncInput {
 export interface EvmGuardRuleSyncer {
   syncRule(input: EvmRuleSyncInput): Promise<void>;
   /**
-   * Freezes or unfreezes an account's ability to trade through any router the Guard tracks -
-   * called when the off-chain ledger determines the account has breached (or recovered from) its
-   * max-daily-loss rule. See packages/evm-guard/ROADMAP.md for why this is a trusted-backend
-   * compromise rather than a fully trustless on-chain computation.
+   * Records that an account has breached its max-daily-loss rule today, freezing it through the
+   * end of the current UTC day - called when the off-chain ledger determines a breach occurred.
+   * Deliberately one-directional: there is no corresponding "unfreeze" method on this port,
+   * because the underlying contract has no such function for anyone to call, including the admin -
+   * a freeze can only ever expire on its own at the next UTC day. See
+   * packages/evm-guard/ROADMAP.md for why the admin key is still the one that has to report the
+   * breach in the first place (full on-chain P&L verification remains out of scope).
    */
-  setFrozen(safeAddress: string, isFrozen: boolean): Promise<void>;
+  freezeForToday(safeAddress: string): Promise<void>;
 }
 
 export interface EvmEquityQuery {

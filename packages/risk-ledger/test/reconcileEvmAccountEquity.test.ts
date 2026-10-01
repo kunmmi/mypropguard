@@ -29,11 +29,11 @@ function fakeEquityReader(equityUsd: Decimal, calls: { safeAddress: string; trac
   };
 }
 
-function fakeGuardSyncer(freezeCalls: { safeAddress: string; isFrozen: boolean }[]): EvmGuardRuleSyncer {
+function fakeGuardSyncer(freezeCalls: string[]): EvmGuardRuleSyncer {
   return {
     syncRule: async () => {},
-    setFrozen: async (safeAddress, isFrozen) => {
-      freezeCalls.push({ safeAddress, isFrozen });
+    freezeForToday: async (safeAddress) => {
+      freezeCalls.push(safeAddress);
     },
   };
 }
@@ -85,7 +85,7 @@ describe("reconcileEvmAccountEquity", () => {
     );
     store.seedRules("acct_evm_1", [buildRuleVersion(RuleType.MAX_DAILY_LOSS, 100, { accountId: "acct_evm_1" })]);
 
-    const freezeCalls: { safeAddress: string; isFrozen: boolean }[] = [];
+    const freezeCalls: string[] = [];
     await reconcileEvmAccountEquity(
       store,
       { 56: fakeEquityReader(new Decimal(850), []) }, // lost 150, over the 100 budget
@@ -93,7 +93,7 @@ describe("reconcileEvmAccountEquity", () => {
       "acct_evm_1",
     );
 
-    expect(freezeCalls).toEqual([{ safeAddress: "0xSAFE", isFrozen: true }]);
+    expect(freezeCalls).toEqual(["0xSAFE"]);
   });
 
   it("throws EvmAccountNotFoundError for a non-EVM account", async () => {
