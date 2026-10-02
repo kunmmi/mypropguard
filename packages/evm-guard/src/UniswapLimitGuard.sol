@@ -128,7 +128,29 @@ contract UniswapLimitGuard is BaseGuard {
     /// through anything this Guard doesn't track as a router - only further trades are blocked.
     mapping(address => uint256) public frozenThroughDay;
 
+    /// @notice How long after `requestRemoval` a Safe must wait before it may call `setGuard` to
+    /// detach this Guard. Also refused outright on any day the account is frozen.
+    uint256 public constant REMOVAL_DELAY = 24 hours;
+
+    /// @notice Timestamp at which an account asked to detach this Guard (0 = no pending request).
+    mapping(address => uint256) public removalRequestedAt;
+
+    bytes4 private constant SET_GUARD = bytes4(keccak256("setGuard(address)"));
+    bytes4 private constant REQUEST_REMOVAL = bytes4(keccak256("requestRemoval()"));
+    bytes4 private constant CANCEL_REMOVAL = bytes4(keccak256("cancelRemoval()"));
+    bytes4 private constant ERC20_TRANSFER = bytes4(keccak256("transfer(address,uint256)"));
+    bytes4 private constant ERC20_APPROVE = bytes4(keccak256("approve(address,uint256)"));
+    bytes4 private constant WRAP_DEPOSIT = bytes4(keccak256("deposit()"));
+    bytes4 private constant WRAP_WITHDRAW = bytes4(keccak256("withdraw(uint256)"));
+    bytes4 private constant V3_UNWRAP_WETH9 = bytes4(keccak256("unwrapWETH9(uint256,address)"));
+    bytes4 private constant V3_UNWRAP_WETH9_NO_RECIPIENT = bytes4(keccak256("unwrapWETH9(uint256)"));
+    bytes4 private constant V3_REFUND_ETH = bytes4(keccak256("refundETH()"));
+    bytes4 private constant V3_SWEEP_TOKEN = bytes4(keccak256("sweepToken(address,uint256,address)"));
+    bytes4 private constant V3_SWEEP_TOKEN_NO_RECIPIENT = bytes4(keccak256("sweepToken(address,uint256)"));
+
     event RouterConfigured(address indexed router, RouterKind kind);
+    event RemovalRequested(address indexed account, uint256 unlockTime);
+    event RemovalCancelled(address indexed account);
     event TokenLimitSet(address indexed account, address indexed token, uint256 maxAmountPerTrade);
     event TradeCountLimitSet(address indexed account, uint256 maxTradesPerDay);
     event SwapChecked(address indexed account, address indexed token, uint256 amount, uint256 tradesToday);
@@ -141,6 +163,9 @@ contract UniswapLimitGuard is BaseGuard {
     error TradeCountExceeded(uint256 attempted, uint256 max);
     error DelegateCallNotAllowed();
     error ZeroAmountInNotAllowed();
+    error UnrecognizedCall(address to, bytes4 selector);
+    error GuardRemovalNotReady(uint256 unlockTime);
+    error GuardRemovalBlockedWhileFrozen(address account);
 
     modifier onlyAdmin() {
         if (msg.sender != admin) revert NotAdmin();
@@ -188,6 +213,19 @@ contract UniswapLimitGuard is BaseGuard {
         emit DailyLossBreachRecorded(account, today);
     }
 
+    /// @notice A Safe calls this (via its own transaction) to start the 24-hour countdown before
+    /// it may detach this Guard. Callable by anyone for their own address - only meaningful for a
+    /// Safe that has this Guard installed.
+    function requestRemoval() external {
+        removalRequestedAt[msg.sender] = block.timestamp;
+        emit RemovalRequested(msg.sender, block.timestamp + REMOVAL_DELAY);
+    }
+
+    function cancelRemoval() external {
+        delete removalRequestedAt[msg.sender];
+        emit RemovalCancelled(msg.sender);
+    }
+
     function checkTransaction(
         address to,
         uint256 value,
@@ -219,62 +257,114 @@ contract UniswapLimitGuard is BaseGuard {
 
     function checkAfterModuleExecution(bytes32, bool) external override {}
 
+    /// @dev Block-by-default: a call passes only if it is one of (a) a rule-checked swap on a
+    /// registered router, (b) an approval of a registered router (or a zero-amount revoke),
+    /// (c) a plain native-coin send, (d) an ERC-20 transfer, (e) wrapped-native wrap/unwrap,
+    /// (f) a Safe self-call (owner/module management - but `setGuard` only after the removal
+    /// cooldown and never while frozen), or (g) this Guard's own requestRemoval/cancelRemoval.
+    /// Anything else, including every delegatecall, reverts.
     function _enforce(address account, address to, uint256 value, bytes memory data, Enum.Operation operation) private {
-        RouterKind kind = routerKind[to];
-        if (kind == RouterKind.None) return;
         if (operation == Enum.Operation.DelegateCall) revert DelegateCallNotAllowed();
 
-        uint256 tradeLimit = maxTradesPerDay[account];
-        if (tradeLimit == 0) revert LimitsNotConfigured(account);
+        bytes4 sel = data.length >= 4 ? _selector(data) : bytes4(0);
 
-        if (kind == RouterKind.V2) {
-            _enforceV2(account, value, data, tradeLimit);
-        } else {
-            _enforceV3(account, data, tradeLimit, kind);
+        RouterKind kind = routerKind[to];
+        if (kind != RouterKind.None) {
+            uint256 tradeLimit = maxTradesPerDay[account];
+            if (tradeLimit == 0) revert LimitsNotConfigured(account);
+            if (kind == RouterKind.V2) {
+                _enforceV2(account, to, value, data, tradeLimit);
+            } else {
+                _enforceV3(account, to, data, tradeLimit, kind);
+            }
+            return;
         }
+
+        if (to == address(this)) {
+            if (value == 0 && (sel == REQUEST_REMOVAL || sel == CANCEL_REMOVAL)) return;
+            revert UnrecognizedCall(to, sel);
+        }
+
+        if (to == account) {
+            if (sel == SET_GUARD) _checkRemoval(account);
+            return;
+        }
+
+        if (data.length == 0) return;
+
+        if (value == 0) {
+            if (sel == ERC20_TRANSFER) return;
+            if (sel == ERC20_APPROVE && data.length == 68) {
+                (address spender, uint256 amount) = abi.decode(_stripSelector(data), (address, uint256));
+                if (amount == 0 || routerKind[spender] != RouterKind.None) return;
+            }
+        }
+
+        if (to == wrappedNative) {
+            if (sel == WRAP_DEPOSIT) return;
+            if (sel == WRAP_WITHDRAW && value == 0) return;
+        }
+
+        revert UnrecognizedCall(to, sel);
     }
 
-    function _enforceV2(address account, uint256 value, bytes memory data, uint256 tradeLimit) private {
+    function _checkRemoval(address account) private {
+        uint256 requestedAt = removalRequestedAt[account];
+        uint256 unlock = requestedAt + REMOVAL_DELAY;
+        if (requestedAt == 0 || block.timestamp < unlock) revert GuardRemovalNotReady(unlock);
+        if (frozenThroughDay[account] != 0 && frozenThroughDay[account] == block.timestamp / 1 days) {
+            revert GuardRemovalBlockedWhileFrozen(account);
+        }
+        delete removalRequestedAt[account];
+    }
+
+    function _enforceV2(address account, address router, uint256 value, bytes memory data, uint256 tradeLimit) private {
         (address inputToken, address outputToken, uint256 inputAmount, bool isSwap) = _decodeV2Swap(data, value);
-        if (!isSwap) return;
+        if (!isSwap) revert UnrecognizedCall(router, data.length >= 4 ? _selector(data) : bytes4(0));
         _checkAndRecord(account, inputToken, outputToken, inputAmount, tradeLimit);
     }
 
     /// @dev Handles both direct exactInputSingle/exactInput calls and the same wrapped inside
     /// any of the three multicall overloads. Only one level of multicall unwrapping - V3
     /// routers don't nest multicalls within multicalls.
-    function _enforceV3(address account, bytes memory data, uint256 tradeLimit, RouterKind kind) private {
-        if (data.length < 4) return;
+    function _enforceV3(address account, address router, bytes memory data, uint256 tradeLimit, RouterKind kind) private {
+        if (data.length < 4) revert UnrecognizedCall(router, bytes4(0));
         bytes4 sel = _selector(data);
 
         if (sel == MULTICALL_PLAIN) {
             bytes[] memory calls = abi.decode(_stripSelector(data), (bytes[]));
-            _enforceV3Batch(account, calls, tradeLimit, kind);
+            _enforceV3Batch(account, router, calls, tradeLimit, kind);
             return;
         }
         if (sel == MULTICALL_DEADLINE) {
             (, bytes[] memory calls) = abi.decode(_stripSelector(data), (uint256, bytes[]));
-            _enforceV3Batch(account, calls, tradeLimit, kind);
+            _enforceV3Batch(account, router, calls, tradeLimit, kind);
             return;
         }
         if (sel == MULTICALL_PREV_BLOCKHASH) {
             (, bytes[] memory calls) = abi.decode(_stripSelector(data), (bytes32, bytes[]));
-            _enforceV3Batch(account, calls, tradeLimit, kind);
+            _enforceV3Batch(account, router, calls, tradeLimit, kind);
             return;
         }
 
         (address inputToken, address outputToken, uint256 inputAmount, bool isSwap) = _decodeV3Swap(sel, data, kind);
-        if (!isSwap) return;
+        if (!isSwap) {
+            if (_isHarmlessV3(sel)) return;
+            revert UnrecognizedCall(router, sel);
+        }
         _checkAndRecord(account, inputToken, outputToken, inputAmount, tradeLimit);
     }
 
-    function _enforceV3Batch(address account, bytes[] memory calls, uint256 tradeLimit, RouterKind kind) private {
+    function _enforceV3Batch(address account, address router, bytes[] memory calls, uint256 tradeLimit, RouterKind kind) private {
         for (uint256 i = 0; i < calls.length; i++) {
             bytes memory inner = calls[i];
-            if (inner.length < 4) continue;
+            if (inner.length < 4) revert UnrecognizedCall(router, bytes4(0));
             bytes4 innerSel = _selector(inner);
             (address inputToken, address outputToken, uint256 inputAmount, bool isSwap) = _decodeV3Swap(innerSel, inner, kind);
-            if (!isSwap) continue;
+            if (!isSwap) {
+                if (_isHarmlessV3(innerSel)) continue;
+                revert UnrecognizedCall(router, innerSel);
+            }
             _checkAndRecord(account, inputToken, outputToken, inputAmount, tradeLimit);
         }
     }
@@ -390,6 +480,12 @@ contract UniswapLimitGuard is BaseGuard {
         assembly {
             token := shr(96, mload(add(add(path, 32), offset)))
         }
+    }
+
+    /// @dev Router helper calls that only settle leftovers of a swap this Guard already checked.
+    function _isHarmlessV3(bytes4 sel) private pure returns (bool) {
+        return sel == V3_UNWRAP_WETH9 || sel == V3_UNWRAP_WETH9_NO_RECIPIENT || sel == V3_REFUND_ETH
+            || sel == V3_SWEEP_TOKEN || sel == V3_SWEEP_TOKEN_NO_RECIPIENT;
     }
 
     function _selector(bytes memory data) private pure returns (bytes4 sel) {

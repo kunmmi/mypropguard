@@ -109,9 +109,8 @@ contract PancakeSwapLimitGuardTest is Test {
         _checkAsSafe(v2Router, 0, _swapExactTokensForTokens(2000e18, usdt, busd));
     }
 
-    function test_IgnoresUnrecognizedRouterAddress() public {
-        // No limits configured at all - must not revert, since address(0xBEEF) was never
-        // registered with any RouterKind.
+    function test_UnrecognizedCallToUnknownContractReverts() public {
+        vm.expectRevert(abi.encodeWithSelector(PancakeSwapLimitGuard.UnrecognizedCall.selector, otherTarget, bytes4(0xdeadbeef)));
         _checkAsSafe(otherTarget, 0, hex"deadbeef");
     }
 
@@ -241,13 +240,15 @@ contract PancakeSwapLimitGuardTest is Test {
         guard.checkModuleTransaction(v3RouterNoDeadline, 0, _exactInputSingleNoDeadline(usdt, busd, 200e18), Enum.Operation.Call, address(0xD00D));
     }
 
-    function test_RemovingARouterByResettingToNoneStopsEnforcement() public {
+    function test_RemovingARouterMakesItsCallsUnrecognizedAndBlocked() public {
         _setLimits(5, usdt, 1000e18);
         vm.prank(admin);
         guard.setRouterKind(v3RouterNoDeadline, PancakeSwapLimitGuard.RouterKind.None);
 
-        // Must not revert even for a huge amount - this address is no longer a recognized router.
-        _checkAsSafe(v3RouterNoDeadline, 0, _exactInputSingleNoDeadline(usdt, busd, 999_999e18));
+        // No longer a recognized router, and swap calldata is not an allowed non-router call.
+        bytes memory data = _exactInputSingleNoDeadline(usdt, busd, 999_999e18);
+        vm.expectRevert(abi.encodeWithSelector(PancakeSwapLimitGuard.UnrecognizedCall.selector, v3RouterNoDeadline, _sel(data)));
+        _checkAsSafe(v3RouterNoDeadline, 0, data);
     }
 
     // ---- max-daily-loss freeze (backend-attested, see contract NatSpec) -------------------
@@ -288,13 +289,127 @@ contract PancakeSwapLimitGuardTest is Test {
         assertEq(tradesToday, 1);
     }
 
-    function test_FreezingDoesNotBlockCallsToUnrecognizedAddresses() public {
-        // A frozen account must still be able to move its own funds (e.g. withdraw) through
-        // anything this Guard doesn't track as a router - freezing only stops further trades.
+    function test_FreezingDoesNotBlockWithdrawals() public {
         vm.prank(admin);
         guard.recordDailyLossBreach(safeAccount);
 
-        _checkAsSafe(otherTarget, 0, hex"deadbeef");
+        _checkAsSafe(otherTarget, 1 ether, ""); // plain native send
+        _checkAsSafe(usdt, 0, abi.encodeWithSignature("transfer(address,uint256)", otherTarget, 5e18));
+    }
+
+    // ---- block-by-default hardening -----------------------------------------------------
+
+    function _sel(bytes memory data) private pure returns (bytes4 s) {
+        assembly { s := mload(add(data, 32)) }
+    }
+
+    function test_DelegateCallToAnyTargetReverts() public {
+        vm.expectRevert(PancakeSwapLimitGuard.DelegateCallNotAllowed.selector);
+        vm.prank(safeAccount);
+        guard.checkTransaction(
+            otherTarget, 0, "", Enum.Operation.DelegateCall, 0, 0, 0, address(0), payable(address(0)), "", address(0)
+        );
+    }
+
+    function test_ValueWithCalldataToUnknownContractReverts() public {
+        vm.expectRevert();
+        _checkAsSafe(otherTarget, 1 ether, abi.encodeWithSignature("transfer(address,uint256)", otherTarget, 1));
+    }
+
+    function test_ApproveOfRegisteredRouterAllowedOthersBlocked() public {
+        _checkAsSafe(usdt, 0, abi.encodeWithSignature("approve(address,uint256)", v2Router, 1e30));
+        _checkAsSafe(usdt, 0, abi.encodeWithSignature("approve(address,uint256)", otherTarget, 0)); // revoke ok
+        bytes memory bad = abi.encodeWithSignature("approve(address,uint256)", otherTarget, 1e30);
+        vm.expectRevert(abi.encodeWithSelector(PancakeSwapLimitGuard.UnrecognizedCall.selector, usdt, _sel(bad)));
+        _checkAsSafe(usdt, 0, bad);
+    }
+
+    function test_WrapUnwrapAllowed() public {
+        _checkAsSafe(wbnb, 1 ether, abi.encodeWithSignature("deposit()"));
+        _checkAsSafe(wbnb, 0, abi.encodeWithSignature("withdraw(uint256)", 1 ether));
+    }
+
+    function test_UnknownRouterFunctionReverts() public {
+        bytes memory data = abi.encodeWithSignature("addLiquidity(address,address,uint256)", usdt, busd, 1);
+        _setLimits(5, usdt, 1000e18);
+        vm.expectRevert(abi.encodeWithSelector(PancakeSwapLimitGuard.UnrecognizedCall.selector, v2Router, _sel(data)));
+        _checkAsSafe(v2Router, 0, data);
+    }
+
+    function test_UnknownCallInsideV3MulticallReverts() public {
+        _setLimits(5, usdt, 1000e18);
+        bytes[] memory calls = new bytes[](2);
+        calls[0] = _exactInputSingleNoDeadline(usdt, busd, 100e18);
+        calls[1] = abi.encodeWithSignature("selfdestruct()");
+        bytes memory data = abi.encodeWithSignature("multicall(bytes[])", calls);
+        vm.expectRevert();
+        _checkAsSafe(v3RouterNoDeadline, 0, data);
+    }
+
+    function test_HarmlessV3SettlementCallsInsideMulticallAllowed() public {
+        _setLimits(5, usdt, 1000e18);
+        bytes[] memory calls = new bytes[](2);
+        calls[0] = _exactInputSingleNoDeadline(usdt, wbnb, 100e18);
+        calls[1] = abi.encodeWithSignature("unwrapWETH9(uint256,address)", 0, safeAccount);
+        _checkAsSafe(v3RouterNoDeadline, 0, abi.encodeWithSignature("multicall(bytes[])", calls));
+    }
+
+    // ---- guard removal: 24h cooldown, never while frozen ---------------------------------
+
+    function _setGuardData() private pure returns (bytes memory) {
+        return abi.encodeWithSignature("setGuard(address)", address(0));
+    }
+
+    function test_SetGuardWithoutRequestReverts() public {
+        vm.expectRevert();
+        _checkAsSafe(safeAccount, 0, _setGuardData());
+    }
+
+    function test_SetGuardBeforeCooldownReverts() public {
+        vm.prank(safeAccount);
+        guard.requestRemoval();
+        vm.warp(block.timestamp + 23 hours);
+        vm.expectRevert();
+        _checkAsSafe(safeAccount, 0, _setGuardData());
+    }
+
+    function test_SetGuardAfterCooldownAllowedAndClearsRequest() public {
+        vm.prank(safeAccount);
+        guard.requestRemoval();
+        vm.warp(block.timestamp + 24 hours + 1);
+        _checkAsSafe(safeAccount, 0, _setGuardData());
+        assertEq(guard.removalRequestedAt(safeAccount), 0);
+    }
+
+    function test_SetGuardBlockedWhileFrozenEvenAfterCooldown() public {
+        vm.prank(safeAccount);
+        guard.requestRemoval();
+        vm.warp(block.timestamp + 25 hours);
+        vm.prank(admin);
+        guard.recordDailyLossBreach(safeAccount);
+        vm.expectRevert(abi.encodeWithSelector(PancakeSwapLimitGuard.GuardRemovalBlockedWhileFrozen.selector, safeAccount));
+        _checkAsSafe(safeAccount, 0, _setGuardData());
+    }
+
+    function test_CancelRemovalResetsCooldown() public {
+        vm.startPrank(safeAccount);
+        guard.requestRemoval();
+        guard.cancelRemoval();
+        vm.stopPrank();
+        vm.warp(block.timestamp + 48 hours);
+        vm.expectRevert();
+        _checkAsSafe(safeAccount, 0, _setGuardData());
+    }
+
+    function test_OtherSafeSelfCallsStillAllowed() public {
+        _checkAsSafe(safeAccount, 0, abi.encodeWithSignature("enableModule(address)", otherTarget));
+    }
+
+    function test_SafeCanCallRequestRemovalButNotAdminFunctions() public {
+        _checkAsSafe(address(guard), 0, abi.encodeWithSignature("requestRemoval()"));
+        bytes memory data = abi.encodeWithSignature("setMaxTradesPerDay(address,uint256)", safeAccount, 1000);
+        vm.expectRevert(abi.encodeWithSelector(PancakeSwapLimitGuard.UnrecognizedCall.selector, address(guard), _sel(data)));
+        _checkAsSafe(address(guard), 0, data);
     }
 
     function test_OnlyAdminCanRecordABreach() public {

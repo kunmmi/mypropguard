@@ -288,3 +288,27 @@ blocked; an allowed exit still enforces the per-token amount limit), written to 
 machine's own Foundry install alongside the full existing suite including the multicall/batch and
 V2/V3 decode-shape regression tests from before this change - confirm with `forge test` before
 deploying.
+
+## Done: Guard hardening - block-by-default, protected removal (needs `forge test` run by the user)
+
+Correction first: an earlier claim that a frozen Safe "can never execute a buy, no exceptions" was
+false. The Guard used to pass through any call to an address that was not a registered router, so a
+trader could (1) call an unregistered DEX/aggregator (e.g. Axiom's rotating routers) directly,
+(2) use delegatecall/MultiSend, or (3) simply `setGuard(0)` and detach the Guard.
+
+Now `_enforce` is block-by-default in both PancakeSwapLimitGuard and UniswapLimitGuard. Allowed:
+- rule-checked swaps on registered routers (unknown router functions and unknown calls inside a V3
+  multicall revert; only unwrap/refund/sweep settlement helpers are let through),
+- plain native sends, ERC-20 `transfer` (withdrawals stay possible - non-custodial),
+- `approve` only for a registered router (or amount 0 to revoke),
+- WBNB/WETH `deposit()` / `withdraw(uint256)`,
+- Safe self-calls (owner/module management). `setGuard` specifically requires `requestRemoval()`
+  to have been called at least 24h earlier AND the account not frozen that UTC day; the Safe calls
+  `requestRemoval()` / `cancelRemoval()` through the Guard itself.
+Everything else, including every delegatecall, reverts with `UnrecognizedCall`.
+
+Honest remaining limits: a trader can still withdraw funds and trade elsewhere with them, or wait
+out the 24h cooldown on a non-frozen day and remove the Guard; Axiom/aggregators are blocked, not
+supported (support would need the current router ABI decoded); Safe batching via MultiSend is
+blocked because it is a delegatecall; tests still run against Safe v1.5.0 while production uses
+v1.4.1. Contracts must be redeployed from this version - do not deploy the older build.
