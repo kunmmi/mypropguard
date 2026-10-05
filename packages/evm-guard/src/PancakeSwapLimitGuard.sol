@@ -106,6 +106,7 @@ contract PancakeSwapLimitGuard is BaseGuard {
     bytes4 private constant MULTICALL_PREV_BLOCKHASH = bytes4(keccak256("multicall(bytes32,bytes[])"));
 
     mapping(address => mapping(address => uint256)) public maxAmountPerTrade;
+    /// @notice Max BUYS per UTC day (the name predates this: sells never count, see `_checkAndRecord`).
     mapping(address => uint256) public maxTradesPerDay;
 
     struct AccountState {
@@ -394,7 +395,17 @@ contract PancakeSwapLimitGuard is BaseGuard {
 
         uint256 today = block.timestamp / 1 days;
         AccountState memory existing = tradeState[account];
-        uint256 tradesToday = (existing.lastTradeDay == today ? existing.tradesToday : 0) + 1;
+        uint256 countedToday = existing.lastTradeDay == today ? existing.tradesToday : 0;
+
+        // Only BUYS use up the daily allowance (`maxTradesPerDay` is a max-buys-per-day limit). An
+        // exit never opens exposure, so it must never be blocked by - or consume - the buy count;
+        // otherwise a trader who has used their buys for the day could not sell to get out.
+        if (isExit) {
+            emit SwapChecked(account, inputToken, inputAmount, countedToday);
+            return;
+        }
+
+        uint256 tradesToday = countedToday + 1;
 
         if (tradesToday > tradeLimit) {
             revert TradeCountExceeded(tradesToday, tradeLimit);

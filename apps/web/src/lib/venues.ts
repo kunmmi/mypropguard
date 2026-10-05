@@ -10,6 +10,15 @@
  */
 export type VenueKind = "safe-guard" | "agent-wallet";
 
+export interface VenueToken {
+  symbol: string;
+  address: string;
+  /** Short hint shown next to the symbol, e.g. "native coin" or "stablecoin". */
+  note?: string;
+}
+
+const NATIVE = "0x0000000000000000000000000000000000000000";
+
 export interface VenueConfig {
   id: string;
   name: string;
@@ -26,6 +35,8 @@ export interface VenueConfig {
   unsupportedNote?: string;
   explorerUrl?: string;
   nativeSymbol?: string;
+  /** Common tokens offered in the rule form so traders never paste a contract address by hand. */
+  tokens?: VenueToken[];
 }
 
 export const VENUES: VenueConfig[] = [
@@ -40,7 +51,7 @@ export const VENUES: VenueConfig[] = [
     supportedRules: ["MAX_POSITION_SIZE", "MAX_TRADE_FREQUENCY", "MAX_DAILY_LOSS"],
     ruleLabels: {
       MAX_POSITION_SIZE: "Max amount per trade (per token)",
-      MAX_TRADE_FREQUENCY: "Max trades per day",
+      MAX_TRADE_FREQUENCY: "Max buys per day",
       MAX_DAILY_LOSS: "Max daily loss ($)",
     },
     supportedRoutes: ["PancakeSwap V2 Router"],
@@ -48,6 +59,13 @@ export const VENUES: VenueConfig[] = [
       "Other routers (PancakeSwap Smart Router and Universal Router, other exchanges and aggregators) are rejected until support for them is added.",
     explorerUrl: "https://bscscan.com/address/",
     nativeSymbol: "BNB",
+    tokens: [
+      { symbol: "BNB", address: NATIVE, note: "native coin" },
+      { symbol: "USDT", address: "0x55d398326f99059fF775485246999027B3197955", note: "stablecoin" },
+      { symbol: "USDC", address: "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d", note: "stablecoin" },
+      { symbol: "BUSD", address: "0xe9e7CEA3DedcA5984780Bafc599bD69ADd087D56", note: "stablecoin" },
+      { symbol: "WBNB", address: "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c", note: "wrapped BNB" },
+    ],
   },
   {
     id: "ethereum-uniswap",
@@ -60,13 +78,20 @@ export const VENUES: VenueConfig[] = [
     supportedRules: ["MAX_POSITION_SIZE", "MAX_TRADE_FREQUENCY", "MAX_DAILY_LOSS"],
     ruleLabels: {
       MAX_POSITION_SIZE: "Max amount per trade (per token)",
-      MAX_TRADE_FREQUENCY: "Max trades per day",
+      MAX_TRADE_FREQUENCY: "Max buys per day",
       MAX_DAILY_LOSS: "Max daily loss ($)",
     },
     supportedRoutes: ["Uniswap V2 Router", "Uniswap V3 routers"],
     unsupportedNote: "Other routers, including the Universal Router, are rejected until support for them is added.",
     explorerUrl: "https://etherscan.io/address/",
     nativeSymbol: "ETH",
+    tokens: [
+      { symbol: "ETH", address: NATIVE, note: "native coin" },
+      { symbol: "USDT", address: "0xdAC17F958D2ee523a2206206994597C13D831ec7", note: "stablecoin" },
+      { symbol: "USDC", address: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", note: "stablecoin" },
+      { symbol: "DAI", address: "0x6B175474E89094C44Da98b954EedeAC495271d0F", note: "stablecoin" },
+      { symbol: "WETH", address: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2", note: "wrapped ETH" },
+    ],
   },
   {
     id: "arbitrum-gmx",
@@ -80,6 +105,12 @@ export const VENUES: VenueConfig[] = [
     unsupportedNote: "Other contracts are rejected until support for them is added.",
     explorerUrl: "https://arbiscan.io/address/",
     nativeSymbol: "ETH",
+    tokens: [
+      { symbol: "ETH", address: NATIVE, note: "native coin" },
+      { symbol: "USDC", address: "0xaf88d065e77c8cC2239327C5EDb3A432268e5831", note: "stablecoin" },
+      { symbol: "USDT", address: "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9", note: "stablecoin" },
+      { symbol: "WETH", address: "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1", note: "wrapped ETH" },
+    ],
   },
   {
     id: "hyperliquid",

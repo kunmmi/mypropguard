@@ -428,7 +428,7 @@ contract UniswapLimitGuardTest is Test {
         // swapExactTokensForETH always outputs native ETH regardless of the path's last entry.
         _checkAsSafe(v2Router, 0, _swapExactTokensForEth(500e18, usdt));
         (, uint256 tradesToday) = guard.tradeState(safeAccount);
-        assertEq(tradesToday, 1);
+        assertEq(tradesToday, 0); // an exit never consumes the daily buy allowance
     }
 
     function test_V2_BuyingWithNativeEthIsBlockedWhileFrozen() public {
@@ -448,7 +448,7 @@ contract UniswapLimitGuardTest is Test {
         // V3 routers always output the wrapped form, never the native sentinel directly.
         _checkAsSafe(v3RouterNoDeadline, 0, _exactInputSingleNoDeadline(usdt, weth, 500e18));
         (, uint256 tradesToday) = guard.tradeState(safeAccount);
-        assertEq(tradesToday, 1);
+        assertEq(tradesToday, 0); // an exit never consumes the daily buy allowance
     }
 
     function test_V3_BuyingFromWethIsBlockedWhileFrozen() public {
@@ -471,14 +471,41 @@ contract UniswapLimitGuardTest is Test {
         _checkAsSafe(v2Router, 0, _swapExactTokensForTokens(500e18, usdt, dai));
     }
 
-    function test_SellingForEthStillEnforcesTheTokenAmountAndTradeCountLimits() public {
-        // The freeze exemption only skips the freeze check itself - every other rule still
-        // applies to an exit trade exactly as it would to any other trade.
+    function test_SellingForEthStillEnforcesTheTokenAmountLimit() public {
+        // The freeze exemption only skips the freeze check itself - the per-token amount limit
+        // still applies to an exit trade exactly as it would to any other trade.
         _setLimits(5, usdt, 1000e18);
         vm.prank(admin);
         guard.recordDailyLossBreach(safeAccount);
 
         vm.expectRevert(abi.encodeWithSelector(UniswapLimitGuard.TradeAmountExceeded.selector, usdt, 2000e18, 1000e18));
         _checkAsSafe(v2Router, 0, _swapExactTokensForEth(2000e18, usdt));
+    }
+
+    // ---- the daily limit counts BUYS only ----------------------------------------------------
+
+    function test_SellsDoNotConsumeOrGetBlockedByTheBuyCount() public {
+        _setLimits(1, usdt, 1000e18);
+        _checkAsSafe(v2Router, 0, _swapExactTokensForTokens(500e18, usdt, dai)); // the one buy
+        // Selling into the native asset any number of times after the buy allowance is used up.
+        _checkAsSafe(v2Router, 0, _swapExactTokensForEth(100e18, usdt));
+        _checkAsSafe(v2Router, 0, _swapExactTokensForEth(100e18, usdt));
+        _checkAsSafe(v3RouterNoDeadline, 0, _exactInputSingleNoDeadline(usdt, weth, 100e18));
+        (, uint256 counted) = guard.tradeState(safeAccount);
+        assertEq(counted, 1);
+    }
+
+    function test_SecondBuyInTheSameDayRevertsWhenLimitIsOne() public {
+        _setLimits(1, usdt, 1000e18);
+        _checkAsSafe(v2Router, 0, _swapExactTokensForTokens(100e18, usdt, dai));
+        vm.expectRevert(abi.encodeWithSelector(UniswapLimitGuard.TradeCountExceeded.selector, 2, 1));
+        _checkAsSafe(v2Router, 0, _swapExactTokensForTokens(100e18, usdt, dai));
+    }
+
+    function test_BuyAllowanceResetsNextDay() public {
+        _setLimits(1, usdt, 1000e18);
+        _checkAsSafe(v2Router, 0, _swapExactTokensForTokens(100e18, usdt, dai));
+        vm.warp(block.timestamp + 1 days);
+        _checkAsSafe(v2Router, 0, _swapExactTokensForTokens(100e18, usdt, dai));
     }
 }

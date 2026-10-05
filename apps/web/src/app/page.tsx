@@ -34,7 +34,7 @@ const GUIDE_STEPS = [
   },
   {
     title: "3. Set your risk rules",
-    body: "Add limits like max amount per trade, max trades per day and max daily loss. On-chain venues push them to the Guard so they are enforced on every transaction. The rules offered depend on the venue.",
+    body: "Add limits like max amount per trade, max buys per day and max daily loss. On-chain venues push them to the Guard so they are enforced on every transaction. The rules offered depend on the venue.",
   },
   {
     title: "4. Trade within your rules",
@@ -238,6 +238,10 @@ function Dashboard({ session }: { session: Session }) {
   const activeRuleType = ruleOptions.some((o) => o.value === newRuleType) ? newRuleType : (ruleOptions[0]?.value ?? newRuleType);
   const [newRuleParam, setNewRuleParam] = useState("");
   const [newRuleTokenAddress, setNewRuleTokenAddress] = useState("");
+  const [tokenChoice, setTokenChoice] = useState("");
+  const venueTokens = venue.tokens ?? [];
+  const effectiveTokenChoice = tokenChoice || venueTokens[0]?.address || "custom";
+  const effectiveTokenAddress = effectiveTokenChoice === "custom" ? newRuleTokenAddress : effectiveTokenChoice;
   const [addingRule, setAddingRule] = useState(false);
 
   const [showGuide, setShowGuide] = useState(false);
@@ -306,12 +310,12 @@ function Dashboard({ session }: { session: Session }) {
     }
   }
 
-  async function handleAddRule(ruleType: string) {
+  async function handleAddRule(ruleType: string, tokenAddress: string) {
     if (!accountId || !newRuleParam) return;
     setAddingRule(true);
     setError(null);
     try {
-      await api.addRule(accountId, ruleType, newRuleParam, newRuleTokenAddress || undefined);
+      await api.addRule(accountId, ruleType, newRuleParam, tokenAddress || undefined);
       setNewRuleParam("");
       setNewRuleTokenAddress("");
       // Protection status (e.g. the daily-loss budget shown) depends on
@@ -828,27 +832,45 @@ function Dashboard({ session }: { session: Session }) {
                   placeholder="e.g. 500"
                 />
                 {activeRuleType === "MAX_POSITION_SIZE" && isEvmSafeAccount && (
-                  <Input
-                    label="Token address"
-                    value={newRuleTokenAddress}
-                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => setNewRuleTokenAddress(e.target.value)}
-                    placeholder="0x... (the ERC-20 this limit applies to)"
-                  />
+                  <>
+                    <Select
+                      label="Token"
+                      options={[
+                        ...venueTokens.map((t) => ({
+                          value: t.address,
+                          label: `${t.symbol}${t.note ? ` (${t.note})` : ""}`,
+                        })),
+                        { value: "custom", label: "Other token (paste address)" },
+                      ]}
+                      value={effectiveTokenChoice}
+                      onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setTokenChoice(e.target.value)}
+                    />
+                    {effectiveTokenChoice === "custom" && (
+                      <Input
+                        label="Token address"
+                        value={newRuleTokenAddress}
+                        onChange={(e: React.ChangeEvent<HTMLInputElement>) => setNewRuleTokenAddress(e.target.value)}
+                        placeholder="0x... (the ERC-20 this limit applies to)"
+                      />
+                    )}
+                  </>
                 )}
                 <Button
                   onClick={() => {
                     if (activeRuleType !== newRuleType) setNewRuleType(activeRuleType);
-                    void handleAddRule(activeRuleType);
+                    void handleAddRule(activeRuleType, effectiveTokenAddress);
                   }}
-                  disabled={!newRuleParam || addingRule || (activeRuleType === "MAX_POSITION_SIZE" && isEvmSafeAccount && !newRuleTokenAddress)}
+                  disabled={!newRuleParam || addingRule || (activeRuleType === "MAX_POSITION_SIZE" && isEvmSafeAccount && !effectiveTokenAddress)}
                 >
                   {addingRule ? "Adding…" : "Add rule"}
                 </Button>
               </div>
               {activeRuleType === "MAX_POSITION_SIZE" && isEvmSafeAccount && (
                 <p style={{ marginTop: "var(--space-2)", fontSize: 12, color: "var(--text-muted)" }}>
-                  The limit is in units of that token (for example 5 for 5 USDT), pushed directly to the Guard contract
-                  and enforced for every trade on that token, whichever site it comes from.
+                  The limit is in units of the token you spend (for example 5 for 5 USDT, or 0.0006 for 0.0006
+                  {venue.nativeSymbol ?? "native coin"}), pushed directly to the Guard contract and enforced for every
+                  trade that spends that token, whichever site it comes from. Set a limit for each token you trade
+                  with.
                 </p>
               )}
             </div>

@@ -428,7 +428,7 @@ contract PancakeSwapLimitGuardTest is Test {
         // swapExactTokensForETH always outputs native BNB regardless of the path's last entry.
         _checkAsSafe(v2Router, 0, _swapExactTokensForEth(500e18, usdt));
         (, uint256 tradesToday) = guard.tradeState(safeAccount);
-        assertEq(tradesToday, 1);
+        assertEq(tradesToday, 0); // an exit never consumes the daily buy allowance
     }
 
     function test_V2_BuyingWithNativeBnbIsBlockedWhileFrozen() public {
@@ -448,7 +448,7 @@ contract PancakeSwapLimitGuardTest is Test {
         // V3 routers always output the wrapped form, never the native sentinel directly.
         _checkAsSafe(v3RouterNoDeadline, 0, _exactInputSingleNoDeadline(usdt, wbnb, 500e18));
         (, uint256 tradesToday) = guard.tradeState(safeAccount);
-        assertEq(tradesToday, 1);
+        assertEq(tradesToday, 0); // an exit never consumes the daily buy allowance
     }
 
     function test_V3_BuyingFromWbnbIsBlockedWhileFrozen() public {
@@ -471,14 +471,41 @@ contract PancakeSwapLimitGuardTest is Test {
         _checkAsSafe(v2Router, 0, _swapExactTokensForTokens(500e18, usdt, busd));
     }
 
-    function test_SellingForBnbStillEnforcesTheTokenAmountAndTradeCountLimits() public {
-        // The freeze exemption only skips the freeze check itself - every other rule still
-        // applies to an exit trade exactly as it would to any other trade.
+    function test_SellingForBnbStillEnforcesTheTokenAmountLimit() public {
+        // The freeze exemption only skips the freeze check itself - the per-token amount limit
+        // still applies to an exit trade exactly as it would to any other trade.
         _setLimits(5, usdt, 1000e18);
         vm.prank(admin);
         guard.recordDailyLossBreach(safeAccount);
 
         vm.expectRevert(abi.encodeWithSelector(PancakeSwapLimitGuard.TradeAmountExceeded.selector, usdt, 2000e18, 1000e18));
         _checkAsSafe(v2Router, 0, _swapExactTokensForEth(2000e18, usdt));
+    }
+
+    // ---- the daily limit counts BUYS only ----------------------------------------------------
+
+    function test_SellsDoNotConsumeOrGetBlockedByTheBuyCount() public {
+        _setLimits(1, usdt, 1000e18);
+        _checkAsSafe(v2Router, 0, _swapExactTokensForTokens(500e18, usdt, busd)); // the one buy
+        // Selling into the native asset any number of times after the buy allowance is used up.
+        _checkAsSafe(v2Router, 0, _swapExactTokensForEth(100e18, usdt));
+        _checkAsSafe(v2Router, 0, _swapExactTokensForEth(100e18, usdt));
+        _checkAsSafe(v3RouterNoDeadline, 0, _exactInputSingleNoDeadline(usdt, wbnb, 100e18));
+        (, uint256 counted) = guard.tradeState(safeAccount);
+        assertEq(counted, 1);
+    }
+
+    function test_SecondBuyInTheSameDayRevertsWhenLimitIsOne() public {
+        _setLimits(1, usdt, 1000e18);
+        _checkAsSafe(v2Router, 0, _swapExactTokensForTokens(100e18, usdt, busd));
+        vm.expectRevert(abi.encodeWithSelector(PancakeSwapLimitGuard.TradeCountExceeded.selector, 2, 1));
+        _checkAsSafe(v2Router, 0, _swapExactTokensForTokens(100e18, usdt, busd));
+    }
+
+    function test_BuyAllowanceResetsNextDay() public {
+        _setLimits(1, usdt, 1000e18);
+        _checkAsSafe(v2Router, 0, _swapExactTokensForTokens(100e18, usdt, busd));
+        vm.warp(block.timestamp + 1 days);
+        _checkAsSafe(v2Router, 0, _swapExactTokensForTokens(100e18, usdt, busd));
     }
 }

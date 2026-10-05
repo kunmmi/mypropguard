@@ -312,3 +312,13 @@ out the 24h cooldown on a non-frozen day and remove the Guard; Axiom/aggregators
 supported (support would need the current router ABI decoded); Safe batching via MultiSend is
 blocked because it is a delegatecall; tests still run against Safe v1.5.0 while production uses
 v1.4.1. Contracts must be redeployed from this version - do not deploy the older build.
+
+## Done: the daily limit counts buys only (needs `forge test`, then a Guard redeploy)
+
+`maxTradesPerDay` (the `MAX_TRADE_FREQUENCY` rule, labelled "Max buys per day" in the dashboard) now
+counts only non-exit swaps. A swap whose output is BNB/ETH or WBNB/WETH (a sell back to the base
+asset) never consumes the allowance and is never blocked by it, so a trader who used their buys for
+the day can still get out. Per-token amount limits still apply to sells. The contracts changed, so
+the Guards must be redeployed and accounts created on the new Guard (the Safe from the earlier
+deploy keeps pointing at the old one; moving it needs the 24h removal cooldown).
+Limitation unchanged: amount limits are per input token in token units, not dollars.
