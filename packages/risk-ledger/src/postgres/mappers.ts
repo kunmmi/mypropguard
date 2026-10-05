@@ -1,5 +1,5 @@
 import { Decimal } from "decimal.js";
-import type { AccountRiskHead, OrderReservation, ProtectedAccount, RuleVersion, StateCheckpoint } from "@mypropguard/domain";
+import type { AccountRiskHead, EvmFlowState, OrderReservation, ProtectedAccount, RuleVersion, StateCheckpoint } from "@mypropguard/domain";
 import { OrderReservationStatus, StateConfidence } from "@mypropguard/domain";
 
 export function rowToProtectedAccount(row: Record<string, unknown>): ProtectedAccount {
@@ -30,7 +30,44 @@ export function rowToAccountRiskHead(row: Record<string, unknown>): AccountRiskH
     tradeCountToday: Number(row.trade_count_today),
     lastTradeAt: row.last_trade_at ? new Date(row.last_trade_at as string) : null,
     version: Number(row.version),
+    // Absent (undefined) when the column does not exist yet, so a deploy can precede the migration.
+    evmFlowState: "evm_flow_state" in row ? rowToEvmFlowState(row.evm_flow_state) : undefined,
   };
+}
+
+function rowToEvmFlowState(raw: unknown): EvmFlowState | null {
+  if (!raw) return null;
+  const value = (typeof raw === "string" ? JSON.parse(raw) : raw) as {
+    day: string;
+    cursorBlock: number;
+    cumulativeFlowUsd: string;
+    knownTokens?: string[];
+    lastNonce?: number;
+    lastBalances?: Record<string, string>;
+    lastWithdrawn?: Record<string, string>;
+  };
+  return {
+    day: value.day,
+    cursorBlock: Number(value.cursorBlock),
+    cumulativeFlowUsd: new Decimal(value.cumulativeFlowUsd),
+    knownTokens: value.knownTokens ?? [],
+    lastNonce: Number(value.lastNonce ?? 0),
+    lastBalances: value.lastBalances ?? {},
+    lastWithdrawn: value.lastWithdrawn ?? {},
+  };
+}
+
+export function evmFlowStateToJson(state: EvmFlowState | null | undefined): string | null {
+  if (!state) return null;
+  return JSON.stringify({
+    day: state.day,
+    cursorBlock: state.cursorBlock,
+    cumulativeFlowUsd: state.cumulativeFlowUsd.toString(),
+    knownTokens: state.knownTokens,
+    lastNonce: state.lastNonce,
+    lastBalances: state.lastBalances,
+    lastWithdrawn: state.lastWithdrawn,
+  });
 }
 
 export function rowToRuleVersion(row: Record<string, unknown>): RuleVersion {

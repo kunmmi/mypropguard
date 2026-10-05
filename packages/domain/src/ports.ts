@@ -106,13 +106,14 @@ export interface EvmGuardRuleSyncer {
 export interface EvmEquityQuery {
   safeAddress: string;
   /**
-   * ERC-20 addresses to value in addition to the Safe's native-token balance - in practice, the
-   * tokens the account has a MAX_POSITION_SIZE rule for, since there's no general way to enumerate
-   * every token an arbitrary address holds on-chain. A token the account holds but has never set a
-   * rule for is not counted - see EvmSafeEquityReader's implementer for why this is a deliberate
-   * scope decision, not an oversight.
+   * ERC-20 addresses to value in addition to the Safe's native-token balance: the tokens the Safe has
+   * acquired through its own transactions (found by an EvmFlowReader) and any token with a per-token
+   * rule. Only these are counted - there is no general way to enumerate every token an address
+   * holds on-chain, and counting unsolicited airdrops would let anyone inflate an account's equity.
    */
   trackedTokens: readonly string[];
+  /** Read balances and prices as of this block, so equity and capital flows describe the same instant. */
+  blockNumber?: number;
 }
 
 /**
@@ -123,6 +124,40 @@ export interface EvmEquityQuery {
  */
 export interface EvmSafeEquityReader {
   getEquityUsd(query: EvmEquityQuery): Promise<Decimal>;
+  /** USD value of `rawAmount` base units of `token` (the zero address is the native coin). */
+  getTokenValueUsd(token: string, rawAmount: bigint, blockNumber?: number): Promise<Decimal>;
+}
+
+/** What the chain says about a Safe at one block. */
+export interface EvmSafeSnapshot {
+  blockNumber: number;
+  /** How many transactions the Safe has executed. */
+  nonce: number;
+  /** Raw balance of each asset (the zero address is the native coin). */
+  balances: Record<string, bigint>;
+  /** The Guard's running total of what the Safe has sent out, per asset. Zero if the Guard has no such record. */
+  withdrawn: Record<string, bigint>;
+}
+
+/**
+ * Reads a Safe's balances, transaction count and the Guard's withdrawal totals at a block, using
+ * only ordinary state reads (no event logs, which free public RPCs refuse to serve).
+ */
+export interface EvmSafeStateReader {
+  /** The newest block that is safe to treat as final (head minus a few confirmations). */
+  getSettledBlock(): Promise<number>;
+  /** Reads the native coin, the chain's base tokens and every asset in `extraAssets`. */
+  getSnapshot(input: { safeAddress: string; extraAssets: readonly string[]; blockNumber: number }): Promise<EvmSafeSnapshot>;
+}
+
+/**
+ * Finds the ERC-20s a Safe holds. There is no way to enumerate an address's tokens from a plain
+ * RPC, so this is backed by a wallet-token API (Moralis). It is only asked when the Safe has run a
+ * transaction since the last reconcile, because only a Safe transaction can bring in a token
+ * the owner chose to buy.
+ */
+export interface EvmTokenDiscovery {
+  discoverTokens(safeAddress: string): Promise<string[]>;
 }
 
 /**

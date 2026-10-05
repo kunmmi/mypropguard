@@ -371,7 +371,8 @@ function Dashboard({ session }: { session: Session }) {
         accountId,
         ownerUserId: session.user.id,
         venue: newVenue,
-        initialEquity,
+        // An on-chain account's equity is read from the chain, never typed in.
+        initialEquity: newIsSafe ? "0" : initialEquity,
         initialRules: newIsSafe ? [] : [{ ruleType: "MAX_POSITION_SIZE", param: maxPositionSize }],
         ...(newIsSafe && evmOwnerWalletAddress && newVenueConfig.chainId
           ? { evmOwnerWalletAddress, evmChainId: newVenueConfig.chainId }
@@ -632,11 +633,13 @@ function Dashboard({ session }: { session: Session }) {
                 onChange={(e: React.ChangeEvent<HTMLInputElement>) => setAccountId(e.target.value)}
                 placeholder="acct_my_first"
               />
-              <Input
-                label="Starting equity ($)"
-                value={initialEquity}
-                onChange={(e: React.ChangeEvent<HTMLInputElement>) => setInitialEquity(e.target.value)}
-              />
+              {!newIsSafe && (
+                <Input
+                  label="Starting equity ($)"
+                  value={initialEquity}
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => setInitialEquity(e.target.value)}
+                />
+              )}
               {!newIsSafe && (
                 <Input
                   label="Max position size ($)"

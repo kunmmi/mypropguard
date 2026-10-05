@@ -264,6 +264,51 @@ contract SpotRiskGuardTest is Test {
         assertEq(buys, 0);
     }
 
+    // ---- withdrawal bookkeeping (read by the backend to separate withdrawals from losses) --------
+
+    function test_WithdrawalsAreRecordedInTheRunningTotals() public {
+        _pre(wallet, 1 ether, "");
+        vm.deal(account, account.balance - 1 ether);
+        _post();
+        _pre(wallet, 0.5 ether, "");
+        vm.deal(account, account.balance - 0.5 ether);
+        _post();
+        assertEq(guard.withdrawnTotal(account, address(0)), 1.5 ether);
+
+        _pre(address(usdt), 0, abi.encodeWithSignature("transfer(address,uint256)", wallet, 7e18));
+        usdt.burn(account, 7e18);
+        _post();
+        assertEq(guard.withdrawnTotal(account, address(usdt)), 7e18);
+    }
+
+    function test_TransferOfANonBaseTokenIsRecordedToo() public {
+        _pre(address(meme), 0, abi.encodeWithSignature("transfer(address,uint256)", wallet, 40e18));
+        meme.burn(account, 40e18);
+        _post(); // spent no base asset, so it passes the outcome check
+        assertEq(guard.withdrawnTotal(account, address(meme)), 40e18);
+        (, uint256 buys) = guard.tradeState(account);
+        assertEq(buys, 0);
+    }
+
+    function test_BatchedWithdrawalsAreRecorded() public {
+        bytes memory packed = bytes.concat(
+            _pack(0, wallet, 2 ether, ""),
+            _pack(0, address(usdt), 0, abi.encodeWithSignature("transfer(address,uint256)", wallet, 3e18))
+        );
+        _preOp(multiSendCallOnly, 0, _multiSend(packed), Enum.Operation.DelegateCall);
+        assertEq(guard.withdrawnTotal(account, address(0)), 2 ether);
+        assertEq(guard.withdrawnTotal(account, address(usdt)), 3e18);
+    }
+
+    function test_TradesApprovalsAndWrapsAreNotCountedAsWithdrawals() public {
+        _limits(5, address(0), 1 ether);
+        _buyWithBnb(0.1 ether);
+        _pre(address(usdt), 0, abi.encodeWithSignature("approve(address,uint256)", allowedRouter, 1e18));
+        _pre(address(wbnb), 1 ether, abi.encodeWithSignature("deposit()"));
+        assertEq(guard.withdrawnTotal(account, address(0)), 0);
+        assertEq(guard.withdrawnTotal(account, address(usdt)), 0);
+    }
+
     function test_WrapAndUnwrapAreAllowed() public {
         _pre(address(wbnb), 1 ether, abi.encodeWithSignature("deposit()"));
         _pre(address(wbnb), 0, abi.encodeWithSignature("withdraw(uint256)", 1 ether));

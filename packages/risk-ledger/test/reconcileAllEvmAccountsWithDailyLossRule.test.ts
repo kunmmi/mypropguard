@@ -6,6 +6,7 @@ import { reconcileAllEvmAccountsWithDailyLossRule } from "../src/reconcileAllEvm
 
 function fakeEquityReader(equityByAddress: Record<string, Decimal>, calls: string[]): EvmSafeEquityReader {
   return {
+    getTokenValueUsd: async () => new Decimal(0),
     getEquityUsd: async (query) => {
       calls.push(query.safeAddress);
       return equityByAddress[query.safeAddress] ?? new Decimal(0);
@@ -85,6 +86,7 @@ describe("reconcileAllEvmAccountsWithDailyLossRule", () => {
     await createEvmAccountWithDailyLossRule(store, "acct_fail", "0xSAFE_FAIL", 56);
 
     const reader: EvmSafeEquityReader = {
+      getTokenValueUsd: async () => new Decimal(0),
       getEquityUsd: async (query) => {
         if (query.safeAddress === "0xSAFE_FAIL") throw new Error("rpc error");
         return new Decimal(900);

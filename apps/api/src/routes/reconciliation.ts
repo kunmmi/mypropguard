@@ -14,7 +14,13 @@ export function registerReconciliationRoutes(app: FastifyInstance, deps: AppDeps
 
     let head;
     try {
-      head = await reconcileEvmAccountEquity(deps.store, deps.evmEquityReaders, deps.evmGuardSyncers, accountId);
+      head = await reconcileEvmAccountEquity(
+        deps.store,
+        deps.evmEquityReaders,
+        deps.evmGuardSyncers,
+        accountId,
+        { stateReaders: deps.evmStateReaders, tokenDiscoveries: deps.evmTokenDiscoveries },
+      );
     } catch (error) {
       if (error instanceof EvmAccountNotFoundError) {
         return reply.status(501).send({ error: "NOT_IMPLEMENTED", message: error.message });

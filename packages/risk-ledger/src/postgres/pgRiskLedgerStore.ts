@@ -14,6 +14,7 @@ import {
   type RuleType,
 } from "@mypropguard/domain";
 import {
+  evmFlowStateToJson,
   rowToAccountRiskHead,
   rowToOrderReservation,
   rowToProtectedAccount,
@@ -49,11 +50,16 @@ export class PgRiskLedgerStore implements RiskLedgerStore {
           return rowToAccountRiskHead(row);
         },
         updateAccountRiskHead: async (head) => {
+          // evm_flow_state is only written when the head carries it, so accounts that never use it (and a
+          // database that has not had migration 0009 yet) are unaffected.
+          const writesFlowState = head.evmFlowState !== undefined;
           await client.query(
             `UPDATE account_risk_heads SET
                equity_start_of_day = $2, current_equity = $3, realized_pnl_today = $4,
                peak_equity = $5, current_drawdown = $6, open_notional = $7, leverage = $8,
-               trade_count_today = $9, last_trade_at = $10, version = version + 1, updated_at = now()
+               trade_count_today = $9, last_trade_at = $10,
+               ${writesFlowState ? "evm_flow_state = $11::jsonb," : ""}
+               version = version + 1, updated_at = now()
              WHERE account_id = $1`,
             [
               head.accountId,
@@ -66,6 +72,7 @@ export class PgRiskLedgerStore implements RiskLedgerStore {
               head.leverage.toString(),
               head.tradeCountToday,
               head.lastTradeAt,
+              ...(writesFlowState ? [evmFlowStateToJson(head.evmFlowState)] : []),
             ],
           );
         },

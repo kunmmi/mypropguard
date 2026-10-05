@@ -9,7 +9,7 @@ function fakeVenueReader(state: ClearinghouseState): VenueStateReader {
 }
 
 function fakeEquityReader(equityUsd: Decimal): EvmSafeEquityReader {
-  return { getEquityUsd: async () => equityUsd };
+  return { getEquityUsd: async () => equityUsd, getTokenValueUsd: async () => new Decimal(0) };
 }
 
 async function createEvmSafeAccount(app: ReturnType<typeof buildApp>, accountId: string) {

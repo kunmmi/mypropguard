@@ -18,11 +18,13 @@ const NATIVE_TOKEN_DECIMALS = 18;
  * frozen/unfrozen account, not a theft. Revisit this if max-daily-loss enforcement is ever used to
  * gate something with a higher cost of being wrong (e.g. an on-chain payout).
  *
- * Only values the Safe's native-token balance plus whatever ERC-20s are passed in as
- * `trackedTokens` (see EvmEquityQuery's NatSpec for why - there is no general way to enumerate
- * every token an address holds purely on-chain). A tracked token with no PancakeSwap pair against
- * either the stablecoin or wrapped-native token directly is valued at $0 rather than throwing, so
- * one illiquid/untradeable token can't break the whole equity read.
+ * Values the Safe's native-token balance plus the ERC-20s passed in as `trackedTokens` (see
+ * EvmEquityQuery's NatSpec for why only those). A token is valued by what selling the WHOLE balance
+ * into its PancakeSwap pools would actually return (constant-product maths with the 0.25% fee), not
+ * by the pool's marginal price: that caps a token's value at what the pool can really pay out, so a
+ * worthless token with a fake pool cannot inflate the Safe's equity. A token with no V2 pair against
+ * the stablecoin or the wrapped-native token is valued at $0 rather than throwing, so one
+ * illiquid token can't break the whole equity read.
  */
 export class PancakeSwapEquityReader implements EvmSafeEquityReader {
   private stablecoinDecimals: number | undefined;
@@ -38,9 +40,10 @@ export class PancakeSwapEquityReader implements EvmSafeEquityReader {
 
   async getEquityUsd(query: EvmEquityQuery): Promise<Decimal> {
     const safeAddress = query.safeAddress as Address;
+    const blockNumber = query.blockNumber === undefined ? undefined : BigInt(query.blockNumber);
 
-    const nativeBalanceWei = await this.publicClient.getBalance({ address: safeAddress });
-    let total = await this.valueAmount(this.wrappedNativeAddress, NATIVE_TOKEN_DECIMALS, nativeBalanceWei);
+    const nativeBalanceWei = await this.publicClient.getBalance({ address: safeAddress, blockNumber });
+    let total = await this.valueAmount(ZERO_ADDRESS, nativeBalanceWei, blockNumber);
 
     const seen = new Set<string>([ZERO_ADDRESS]);
     for (const rawToken of query.trackedTokens) {
@@ -49,78 +52,88 @@ export class PancakeSwapEquityReader implements EvmSafeEquityReader {
       seen.add(token);
 
       const tokenAddress = rawToken as Address;
-      const [decimals, balance] = await Promise.all([
-        this.readDecimals(tokenAddress),
-        this.publicClient.readContract({
-          address: tokenAddress,
-          abi: erc20ReadAbi,
-          functionName: "balanceOf",
-          args: [safeAddress],
-        }),
-      ]);
+      const balance = await this.publicClient.readContract({
+        address: tokenAddress,
+        abi: erc20ReadAbi,
+        functionName: "balanceOf",
+        args: [safeAddress],
+        blockNumber,
+      });
       if (balance === 0n) continue;
-      total = total.add(await this.valueAmount(tokenAddress, decimals, balance));
+      total = total.add(await this.valueAmount(tokenAddress, balance, blockNumber));
     }
 
     return total;
   }
 
-  private async valueAmount(token: Address, decimals: number, rawAmount: bigint): Promise<Decimal> {
-    if (rawAmount === 0n) return new Decimal(0);
-    const amount = new Decimal(rawAmount.toString()).div(new Decimal(10).pow(decimals));
-
-    if (token.toLowerCase() === this.stablecoinAddress.toLowerCase()) {
-      return amount; // assumed ~$1 peg
-    }
-
-    const stableDecimals = await this.readStablecoinDecimals();
-
-    const directPrice = await this.spotPriceInBase(token, decimals, this.stablecoinAddress, stableDecimals);
-    if (directPrice) return amount.mul(directPrice);
-
-    if (token.toLowerCase() === this.wrappedNativeAddress.toLowerCase()) {
-      return new Decimal(0); // wrapped-native has no direct stablecoin pair and nothing further to route through
-    }
-
-    const priceInNative = await this.spotPriceInBase(token, decimals, this.wrappedNativeAddress, NATIVE_TOKEN_DECIMALS);
-    const nativeInStable = await this.spotPriceInBase(this.wrappedNativeAddress, NATIVE_TOKEN_DECIMALS, this.stablecoinAddress, stableDecimals);
-    if (priceInNative && nativeInStable) return amount.mul(priceInNative).mul(nativeInStable);
-
-    return new Decimal(0);
+  async getTokenValueUsd(token: string, rawAmount: bigint, blockNumber?: number): Promise<Decimal> {
+    return this.valueAmount(token as Address, rawAmount, blockNumber === undefined ? undefined : BigInt(blockNumber));
   }
 
-  /** Price of 1 unit of `token` expressed in units of `base`, read from their PancakeSwap pool reserves - null if no such pool exists. */
-  private async spotPriceInBase(token: Address, tokenDecimals: number, base: Address, baseDecimals: number): Promise<Decimal | null> {
+  /** The zero address means the native coin, valued as its wrapped form. */
+  private async valueAmount(rawToken: Address, rawAmount: bigint, blockNumber: bigint | undefined): Promise<Decimal> {
+    if (rawAmount === 0n) return new Decimal(0);
+    const isNative = rawToken.toLowerCase() === ZERO_ADDRESS;
+    const token = isNative ? this.wrappedNativeAddress : rawToken;
+    const decimals = isNative ? NATIVE_TOKEN_DECIMALS : await this.readDecimals(token, blockNumber);
+    const stableDecimals = await this.readStablecoinDecimals(blockNumber);
+
+    if (token.toLowerCase() === this.stablecoinAddress.toLowerCase()) {
+      return new Decimal(rawAmount.toString()).div(new Decimal(10).pow(decimals)); // assumed ~$1 peg
+    }
+
+    const directOut = await this.quote(token, this.stablecoinAddress, rawAmount, blockNumber);
+    if (directOut !== null) return this.toUsd(directOut, stableDecimals);
+
+    if (token.toLowerCase() === this.wrappedNativeAddress.toLowerCase()) {
+      return new Decimal(0); // no direct stablecoin pair and nothing further to route through
+    }
+
+    const nativeOut = await this.quote(token, this.wrappedNativeAddress, rawAmount, blockNumber);
+    if (nativeOut === null) return new Decimal(0);
+    const stableOut = await this.quote(this.wrappedNativeAddress, this.stablecoinAddress, nativeOut, blockNumber);
+    return stableOut === null ? new Decimal(0) : this.toUsd(stableOut, stableDecimals);
+  }
+
+  private toUsd(rawStable: bigint, stableDecimals: number): Decimal {
+    return new Decimal(rawStable.toString()).div(new Decimal(10).pow(stableDecimals));
+  }
+
+  /**
+   * What swapping `amountIn` of `tokenIn` for `tokenOut` in their direct PancakeSwap V2 pool would
+   * return, in `tokenOut` base units - null if there is no pool. Constant product with the 0.25% fee.
+   */
+  private async quote(tokenIn: Address, tokenOut: Address, amountIn: bigint, blockNumber: bigint | undefined): Promise<bigint | null> {
     const pairAddress = await this.publicClient.readContract({
       address: this.factoryAddress,
       abi: pancakeFactoryAbi,
       functionName: "getPair",
-      args: [token, base],
+      args: [tokenIn, tokenOut],
+      blockNumber,
     });
     if (pairAddress.toLowerCase() === ZERO_ADDRESS) return null;
 
     const [reserves, token0] = await Promise.all([
-      this.publicClient.readContract({ address: pairAddress, abi: pancakePairAbi, functionName: "getReserves" }),
-      this.publicClient.readContract({ address: pairAddress, abi: pancakePairAbi, functionName: "token0" }),
+      this.publicClient.readContract({ address: pairAddress, abi: pancakePairAbi, functionName: "getReserves", blockNumber }),
+      this.publicClient.readContract({ address: pairAddress, abi: pancakePairAbi, functionName: "token0", blockNumber }),
     ]);
 
     const [reserve0, reserve1] = reserves;
-    const [reserveToken, reserveBase] = token0.toLowerCase() === token.toLowerCase() ? [reserve0, reserve1] : [reserve1, reserve0];
-    if (reserveToken === 0n) return null;
+    const [reserveIn, reserveOut] = token0.toLowerCase() === tokenIn.toLowerCase() ? [reserve0, reserve1] : [reserve1, reserve0];
+    if (reserveIn === 0n || reserveOut === 0n) return null;
 
-    const tokenAmount = new Decimal(reserveToken.toString()).div(new Decimal(10).pow(tokenDecimals));
-    const baseAmount = new Decimal(reserveBase.toString()).div(new Decimal(10).pow(baseDecimals));
-    return baseAmount.div(tokenAmount);
+    const amountInWithFee = amountIn * 9975n;
+    return (amountInWithFee * reserveOut) / (reserveIn * 10000n + amountInWithFee);
   }
 
-  private async readDecimals(token: Address): Promise<number> {
-    const decimals = await this.publicClient.readContract({ address: token, abi: erc20ReadAbi, functionName: "decimals" });
+  private async readDecimals(token: Address, blockNumber: bigint | undefined): Promise<number> {
+    const decimals = await this.publicClient.readContract({ address: token, abi: erc20ReadAbi, functionName: "decimals", blockNumber });
     return Number(decimals);
   }
 
-  private async readStablecoinDecimals(): Promise<number> {
+  private async readStablecoinDecimals(blockNumber: bigint | undefined): Promise<number> {
     if (this.stablecoinDecimals === undefined) {
-      this.stablecoinDecimals = await this.readDecimals(this.stablecoinAddress);
+      this.stablecoinDecimals = await this.readDecimals(this.stablecoinAddress, blockNumber);
     }
     return this.stablecoinDecimals;
   }

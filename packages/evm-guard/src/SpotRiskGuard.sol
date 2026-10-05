@@ -82,6 +82,13 @@ contract SpotRiskGuard is BaseGuard {
     mapping(address => uint256) public frozenThroughDay;
     mapping(address => uint256) public removalRequestedAt;
 
+    /// @notice Running total, per account and asset (address(0) = native coin), of what the account has
+    /// sent out through plain native sends and ERC-20 `transfer` calls. MyPropGuard's backend reads this
+    /// to tell an owner's withdrawal apart from a trading loss when it computes daily profit and loss.
+    /// Free to read from any RPC at any recent block, unlike event logs, which free BNB Chain nodes
+    /// refuse to serve. Bookkeeping only: it never blocks anything.
+    mapping(address => mapping(address => uint256)) public withdrawnTotal;
+
     mapping(address => bool) private _snapshotActive;
     mapping(address => mapping(uint256 => uint256)) private _preBalance;
 
@@ -344,10 +351,16 @@ contract SpotRiskGuard is BaseGuard {
         }
 
         // A plain native-coin send: a withdrawal.
-        if (data.length == 0) return true;
+        if (data.length == 0) {
+            withdrawnTotal[account][address(0)] += value;
+            return true;
+        }
 
         if (isTrackedToken[to]) {
-            if (value == 0 && sel == ERC20_TRANSFER) return true;
+            if (value == 0 && sel == ERC20_TRANSFER) {
+                _recordTransferOut(account, to, data);
+                return true;
+            }
             if (value == 0 && sel == ERC20_APPROVE && data.length == 68) {
                 (address spender, uint256 amount) = abi.decode(_stripSelector(data), (address, uint256));
                 if (amount == 0 || allowedSpender[spender]) return true;
@@ -368,7 +381,17 @@ contract SpotRiskGuard is BaseGuard {
             revert BlockedCall(to, sel);
         }
 
+        // A transfer of any other token is still judged by the outcome check (it spends no base asset,
+        // so it passes), but is counted as a withdrawal for the backend's profit and loss maths.
+        if (value == 0 && sel == ERC20_TRANSFER && data.length == 68) _recordTransferOut(account, to, data);
+
         return false;
+    }
+
+    function _recordTransferOut(address account, address token, bytes memory data) private {
+        if (data.length != 68) return;
+        (, uint256 amount) = abi.decode(_stripSelector(data), (address, uint256));
+        withdrawnTotal[account][token] += amount;
     }
 
     /// @dev Walks a MultiSendCallOnly batch (packed: operation(1) | to(20) | value(32) |

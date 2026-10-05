@@ -46,7 +46,8 @@ describe("PancakeSwapEquityReader", () => {
     });
 
     const equity = await reader.getEquityUsd({ safeAddress: SAFE_ADDRESS, trackedTokens: [] });
-    expect(equity.toNumber()).toBeCloseTo(1200, 6); // 2 BNB * 600 USD
+    // Valued by what selling the 2 BNB into the pool returns (0.25% fee + price impact), not the spot price.
+    expect(equity.toNumber()).toBeCloseTo((2 * 0.9975 * 300_000) / (500 + 2 * 0.9975), 4);
     void readContract;
   });
 
@@ -68,7 +69,7 @@ describe("PancakeSwapEquityReader", () => {
     });
 
     const equity = await reader.getEquityUsd({ safeAddress: SAFE_ADDRESS, trackedTokens: [TOKEN_A] });
-    expect(equity.toNumber()).toBeCloseTo(50, 6); // 10 tokens * $5
+    expect(equity.toNumber()).toBeCloseTo((10 * 0.9975 * 5_000) / (1_000 + 10 * 0.9975), 4);
   });
 
   it("falls back to routing through WBNB when there is no direct stablecoin pair", async () => {
@@ -93,7 +94,8 @@ describe("PancakeSwapEquityReader", () => {
     });
 
     const equity = await reader.getEquityUsd({ safeAddress: SAFE_ADDRESS, trackedTokens: [TOKEN_B] });
-    expect(equity.toNumber()).toBeCloseTo(24, 6); // 4 tokens * 0.01 WBNB/token * 600 USD/WBNB = $24
+    const wbnbOut = (4 * 0.9975 * 1) / (100 + 4 * 0.9975);
+    expect(equity.toNumber()).toBeCloseTo((wbnbOut * 0.9975 * 600) / (1 + wbnbOut * 0.9975), 4);
   });
 
   it("values a token with no pair at all as $0 rather than throwing", async () => {
@@ -137,5 +139,57 @@ describe("PancakeSwapEquityReader", () => {
 
     expect(equity.toNumber()).toBe(0);
     expect(readContract).not.toHaveBeenCalledWith(expect.objectContaining({ functionName: "balanceOf" }));
+  });
+
+  it("caps a token's value at what its pool can actually pay, so a fake pool cannot inflate equity", async () => {
+    const { reader, getBalance } = buildReader();
+    getBalance.mockResolvedValue(0n);
+
+    (reader as any).publicClient.readContract = mockRouter({
+      [`${USDT}:decimals`]: () => 18,
+      [`${TOKEN_A}:decimals`]: () => 18,
+      [`${TOKEN_A}:balanceOf`]: () => 1_000_000_000n * 10n ** 18n, // a billion worthless tokens
+      [`${FACTORY}:getPair`]: ({ 0: a, 1: b }: any) =>
+        [a, b].map((x) => x.toLowerCase()).sort().join() === [TOKEN_A, USDT].map((x) => x.toLowerCase()).sort().join()
+          ? PAIR_A_USDT
+          : "0x0000000000000000000000000000000000000000",
+      // A pool seeded with 1 token and $1: the marginal price is $1/token, so a spot valuation of a
+      // billion tokens would be $1,000,000,000 - but the pool can only ever pay out less than $1.
+      [`${PAIR_A_USDT}:getReserves`]: () => [1n * 10n ** 18n, 1n * 10n ** 18n, 0],
+      [`${PAIR_A_USDT}:token0`]: () => TOKEN_A,
+    });
+
+    const equity = await reader.getEquityUsd({ safeAddress: SAFE_ADDRESS, trackedTokens: [TOKEN_A] });
+    expect(equity.toNumber()).toBeLessThan(1);
+  });
+
+  it("reads balances and prices at the requested block", async () => {
+    const { reader, getBalance } = buildReader();
+    getBalance.mockResolvedValue(0n);
+    const readContract = mockRouter({
+      [`${USDT}:decimals`]: () => 18,
+      [`${USDT}:balanceOf`]: () => 5n * 10n ** 18n,
+    });
+    (reader as any).publicClient.readContract = readContract;
+
+    await reader.getEquityUsd({ safeAddress: SAFE_ADDRESS, trackedTokens: [USDT], blockNumber: 12345 });
+
+    expect(getBalance).toHaveBeenCalledWith(expect.objectContaining({ blockNumber: 12345n }));
+    expect(readContract).toHaveBeenCalledWith(expect.objectContaining({ functionName: "balanceOf", blockNumber: 12345n }));
+  });
+
+  it("values a flow's tokens the same way, including the native coin", async () => {
+    const { reader } = buildReader();
+    (reader as any).publicClient.readContract = mockRouter({
+      [`${USDT}:decimals`]: () => 18,
+      [`${FACTORY}:getPair`]: ({ 0: a, 1: b }: any) =>
+        [a, b].map((x) => x.toLowerCase()).sort().join() === [WBNB, USDT].map((x) => x.toLowerCase()).sort().join()
+          ? PAIR_WBNB_USDT
+          : "0x0000000000000000000000000000000000000000",
+      [`${PAIR_WBNB_USDT}:getReserves`]: () => [500n * 10n ** 18n, 300_000n * 10n ** 18n, 0],
+      [`${PAIR_WBNB_USDT}:token0`]: () => WBNB,
+    });
+    const usd = await reader.getTokenValueUsd("0x0000000000000000000000000000000000000000", 10n ** 18n);
+    expect(usd.toNumber()).toBeCloseTo((1 * 0.9975 * 300_000) / (500 + 0.9975), 4);
   });
 });

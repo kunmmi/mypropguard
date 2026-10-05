@@ -189,3 +189,20 @@ describe("account ownership enforcement", () => {
     expect(response.statusCode).toBe(200);
   });
 });
+
+describe("GET /healthz", () => {
+  it("answers without a bearer token, even when auth is enforced", async () => {
+    const app = buildApp({
+      store: new InMemoryRiskLedgerStore(),
+      authPreHandler: async (_request, reply) => {
+        reply.status(401).send({ error: "UNAUTHORIZED" });
+      },
+    });
+    const response = await app.inject({ method: "GET", url: "/healthz" });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ ok: true });
+
+    const other = await app.inject({ method: "GET", url: "/v1/accounts" });
+    expect(other.statusCode).toBe(401);
+  });
+});

@@ -1,5 +1,10 @@
-import { RuleType, type EvmGuardRuleSyncer, type EvmSafeEquityReader, type RiskLedgerStore } from "@mypropguard/domain";
-import { reconcileEvmAccountEquity } from "./reconcileEvmAccountEquity.js";
+import {
+  RuleType,
+  type EvmGuardRuleSyncer,
+  type EvmSafeEquityReader,
+  type RiskLedgerStore,
+} from "@mypropguard/domain";
+import { reconcileEvmAccountEquity, type ReconcileEvmExtras } from "./reconcileEvmAccountEquity.js";
 
 export interface ReconcileAllResult {
   accountId: string;
@@ -23,6 +28,7 @@ export async function reconcileAllEvmAccountsWithDailyLossRule(
   store: RiskLedgerStore,
   equityReaders: Record<number, EvmSafeEquityReader> | undefined,
   evmGuardSyncers: Record<number, EvmGuardRuleSyncer> | undefined,
+  extras?: ReconcileEvmExtras,
 ): Promise<readonly ReconcileAllResult[]> {
   if (!equityReaders || Object.keys(equityReaders).length === 0) return [];
 
@@ -32,7 +38,7 @@ export async function reconcileAllEvmAccountsWithDailyLossRule(
   const results: ReconcileAllResult[] = [];
   for (const account of evmAccounts) {
     try {
-      await reconcileEvmAccountEquity(store, equityReaders, evmGuardSyncers, account.accountId);
+      await reconcileEvmAccountEquity(store, equityReaders, evmGuardSyncers, account.accountId, extras);
       results.push({ accountId: account.accountId });
     } catch (error) {
       results.push({ accountId: account.accountId, error });

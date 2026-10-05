@@ -5,6 +5,8 @@ import type {
   AgentWalletProvisioner,
   EvmGuardRuleSyncer,
   EvmSafeEquityReader,
+  EvmSafeStateReader,
+  EvmTokenDiscovery,
   EvmSafeProvisioner,
   ExecutionSequencer,
   OrderCanceller,
@@ -73,6 +75,15 @@ export interface AppDeps {
    * the offline scaffold and for any chain not yet configured.
    */
   evmEquityReaders?: Record<number, EvmSafeEquityReader>;
+  /**
+   * Reads a Safe's balances, transaction count and the Guard's withdrawal totals at a block, keyed by
+   * chain id like evmEquityReaders. Lets the equity reconcile separate an owner's deposits and
+   * withdrawals from trading profit and loss. Optional: without it the reconcile still rolls the day
+   * over but cannot net deposits and withdrawals out.
+   */
+  evmStateReaders?: Record<number, EvmSafeStateReader>;
+  /** Finds the tokens a Safe holds (Moralis), keyed by chain id. Optional; see evmStateReaders. */
+  evmTokenDiscoveries?: Record<number, EvmTokenDiscovery>;
   /**
    * When configured, every route requires a valid Supabase bearer token and
    * populates request.userId - route handlers then use it to derive
@@ -185,8 +196,18 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   void app.register(cors, { origin: true });
 
   if (deps.authPreHandler) {
-    app.addHook("preHandler", deps.authPreHandler);
+    const authPreHandler = deps.authPreHandler;
+    // /healthz is the one unauthenticated route: an uptime pinger needs a URL it can hit without a
+    // login, and it exposes nothing (see below).
+    app.addHook("preHandler", async (request, reply) => {
+      if (request.url === "/healthz") return;
+      await authPreHandler(request, reply);
+    });
   }
+
+  // Liveness only - no data. Keeps a free-tier host from sleeping, which would stop the max-daily-loss
+  // sweep (a sleeping server runs no timers).
+  app.get("/healthz", async () => ({ ok: true }));
 
   registerAccountRoutes(app, deps);
   registerOrderRoutes(app, deps);

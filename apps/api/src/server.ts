@@ -3,6 +3,8 @@ import type {
   AgentWalletProvisioner,
   EvmGuardRuleSyncer,
   EvmSafeEquityReader,
+  EvmSafeStateReader,
+  EvmTokenDiscovery,
   EvmSafeProvisioner,
   OrderCanceller,
   OrderLifecycleReader,
@@ -33,6 +35,8 @@ import {
   SpotGuardClient,
   EvmChainGuardRuleSyncer,
   PancakeSwapEquityReader,
+  MoralisTokenDiscovery,
+  SafeStateReader,
 } from "@mypropguard/evm";
 
 // PancakeSwap's own canonical BSC mainnet addresses - public, not secrets, so hardcoded rather
@@ -41,6 +45,18 @@ import {
 const PANCAKESWAP_V2_FACTORY_BSC: Address = "0xcA143Ce32Fe78f1f7019d7d551a6402fC5350c73";
 const WBNB_ADDRESS_BSC: Address = "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c";
 const USDT_ADDRESS_BSC: Address = "0x55d398326f99059fF775485246999027B3197955";
+// Stablecoins and wrapped BNB that are always watched for deposits (see SafeStateReader). Same
+// list the Guard tracks as "money".
+const BSC_DEPOSIT_TOKENS: Address[] = [
+  WBNB_ADDRESS_BSC,
+  USDT_ADDRESS_BSC,
+  "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d", // USDC
+  "0xe9e7CEA3DedcA5984780Bafc599bD69ADd087D56", // BUSD
+  "0xc5f0f7b66764F6ec8C8Dff7BA683102295E16409", // FDUSD
+  "0x1AF3F329e8BE154074D8769D1FFa4eE058B1DBc3", // DAI
+  "0x8d0D000Ee44948FC98c9B98A4FA4921476f08B0d", // USD1
+  "0x40af3827F39D0EAcBF4A168f8D4ee67c121D11c9", // TUSD
+];
 import { createAuthPreHandler } from "./auth.js";
 import { buildApp } from "./app.js";
 
@@ -154,8 +170,20 @@ function configureEvmChainProvisioning(
    * equity reader from the same publicClient, so checkAndEnforceDailyLossFreeze has live data for
    * that chain.
    */
-  equityReaderConfig?: { factoryAddress: Address; wrappedNativeAddress: Address; stablecoinAddress: Address },
-): { provisioner: EvmSafeProvisioner; guardSyncer?: EvmGuardRuleSyncer; equityReader?: EvmSafeEquityReader } | undefined {
+  equityReaderConfig?: {
+    factoryAddress: Address;
+    wrappedNativeAddress: Address;
+    stablecoinAddress: Address;
+    depositTokens: Address[];
+    moralisChain: string;
+  },
+): {
+  provisioner: EvmSafeProvisioner;
+  guardSyncer?: EvmGuardRuleSyncer;
+  equityReader?: EvmSafeEquityReader;
+  stateReader?: EvmSafeStateReader;
+  tokenDiscovery?: EvmTokenDiscovery;
+} | undefined {
   if (process.env[`ENABLE_EVM_${envPrefix}_PROVISIONING`] !== "true") return undefined;
 
   const rpcUrl = process.env[`EVM_${envPrefix}_RPC_URL`];
@@ -189,6 +217,8 @@ function configureEvmChainProvisioning(
   }
 
   let equityReader: EvmSafeEquityReader | undefined;
+  let stateReader: EvmSafeStateReader | undefined;
+  let tokenDiscovery: EvmTokenDiscovery | undefined;
   if (equityReaderConfig) {
     equityReader = new PancakeSwapEquityReader(
       publicClient,
@@ -196,16 +226,33 @@ function configureEvmChainProvisioning(
       equityReaderConfig.wrappedNativeAddress,
       equityReaderConfig.stablecoinAddress,
     );
+    // Reads balances, the Safe's transaction count and the Guard's withdrawal totals with plain state
+    // calls (free public RPCs refuse event logs), so daily loss is measured on trading only.
+    stateReader = new SafeStateReader(publicClient, {
+      guardAddress: guardAddress as Address,
+      baseTokens: equityReaderConfig.depositTokens,
+    });
+    // Finding the tokens a Safe holds needs a wallet-token API; without a key the reconcile still
+    // runs but only values BNB, the base tokens and tokens that have a per-token rule.
+    const moralisApiKey = process.env.MORALIS_API_KEY;
+    if (moralisApiKey) {
+      tokenDiscovery = new MoralisTokenDiscovery({ apiKey: moralisApiKey, chain: equityReaderConfig.moralisChain });
+    } else {
+      // eslint-disable-next-line no-console
+      console.warn(`MORALIS_API_KEY is not set: ${label} equity will not include tokens bought outside a per-token rule, so buys can look like losses.`);
+    }
   }
 
   // eslint-disable-next-line no-console
   console.log(`EVM Safe provisioning enabled for ${label}. New accounts on that chain get a real provisioned Safe.`);
-  return { provisioner, guardSyncer, equityReader };
+  return { provisioner, guardSyncer, equityReader, stateReader, tokenDiscovery };
 }
 
 const evmSafeProvisioners: Record<number, EvmSafeProvisioner> = {};
 const evmGuardSyncers: Record<number, EvmGuardRuleSyncer> = {};
 const evmEquityReaders: Record<number, EvmSafeEquityReader> = {};
+const evmStateReaders: Record<number, EvmSafeStateReader> = {};
+const evmTokenDiscoveries: Record<number, EvmTokenDiscovery> = {};
 
 const arbitrumConfig = configureEvmChainProvisioning("Arbitrum (GMX)", "ARBITRUM", arbitrum, "GMX", "gmx");
 if (arbitrumConfig) evmSafeProvisioners[arbitrum.id] = arbitrumConfig.provisioner;
@@ -214,11 +261,15 @@ const bscConfig = configureEvmChainProvisioning("BSC (PancakeSwap)", "BSC", bsc,
   factoryAddress: PANCAKESWAP_V2_FACTORY_BSC,
   wrappedNativeAddress: WBNB_ADDRESS_BSC,
   stablecoinAddress: USDT_ADDRESS_BSC,
+  depositTokens: BSC_DEPOSIT_TOKENS,
+  moralisChain: "bsc",
 });
 if (bscConfig) {
   evmSafeProvisioners[bsc.id] = bscConfig.provisioner;
   if (bscConfig.guardSyncer) evmGuardSyncers[bsc.id] = bscConfig.guardSyncer;
   if (bscConfig.equityReader) evmEquityReaders[bsc.id] = bscConfig.equityReader;
+  if (bscConfig.stateReader) evmStateReaders[bsc.id] = bscConfig.stateReader;
+  if (bscConfig.tokenDiscovery) evmTokenDiscoveries[bsc.id] = bscConfig.tokenDiscovery;
 }
 
 // Ethereum/Uniswap has no EvmSafeEquityReader yet (would need a Uniswap-specific factory/WETH/
@@ -246,6 +297,8 @@ const app = buildApp({
   evmSafeProvisioners,
   evmGuardSyncers,
   evmEquityReaders,
+  evmStateReaders,
+  evmTokenDiscoveries,
 });
 
 // Max-daily-loss freezing is equity-based, not just realized P&L from trades - an account can
@@ -259,7 +312,10 @@ const app = buildApp({
 if (Object.keys(evmEquityReaders).length > 0) {
   const sweepIntervalMs = Number(process.env.EVM_DAILY_LOSS_SWEEP_INTERVAL_MS ?? 5 * 60 * 1000);
   setInterval(() => {
-    reconcileAllEvmAccountsWithDailyLossRule(store, evmEquityReaders, evmGuardSyncers)
+    reconcileAllEvmAccountsWithDailyLossRule(store, evmEquityReaders, evmGuardSyncers, {
+      stateReaders: evmStateReaders,
+      tokenDiscoveries: evmTokenDiscoveries,
+    })
       .then((results) => {
         const failures = results.filter((r) => r.error);
         if (failures.length > 0) {

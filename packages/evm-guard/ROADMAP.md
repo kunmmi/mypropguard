@@ -357,3 +357,31 @@ loss); gas-refund (relayer) Safe transactions would count as a native spend.
 Also: a token that is not on the Guard's tracked list is treated like any other position, so spending
 it is not measured. List every stablecoin (and any other asset you consider money) at deploy time;
 `addTrackedAsset` can add more later but nothing can be removed.
+
+## Done: max-daily-loss accounting for on-chain accounts (deposits/withdrawals, bought tokens, day rollover)
+
+Found by reading the code against the real test Safe: the daily-loss number was wrong in three ways.
+(1) Equity only counted BNB plus tokens that had a per-token rule, so any token the Safe bought (CAKE)
+was invisible and every buy looked like a loss (the real Safe read $1.50, the old code $1.10).
+(2) `equityStartOfDay` was set once from the typed "starting equity" and never rolled, so the first
+reconcile could freeze an account instantly. (3) Withdrawals looked like losses and deposits like gains.
+
+Fix (`reconcileEvmAccountEquity`, `SafeStateReader`, `MoralisTokenDiscovery`, migration 0009):
+- Equity is read at one settled block (balances, prices, Guard totals) and tokens are valued by what
+  selling the whole balance into their V2 pools would return, so a fake pool cannot inflate equity.
+- The baseline is anchored to the real equity at the first reconcile of each UTC day.
+- Withdrawals: `SpotRiskGuard.withdrawnTotal(account, asset)` is a running on-chain total of plain sends
+  and ERC-20 transfers (also inside batches). The backend reads the increase since the last reconcile.
+- Deposits: with no Safe transaction since the last reconcile (Safe nonce unchanged), any balance
+  increase can only be a deposit. A deposit in the same few minutes as a trade is counted as trading.
+- Flows are valued when first observed and accumulated, and stored equity is net of them.
+- Tokens are found with Moralis' wallet-tokens API (needs `MORALIS_API_KEY`), asked only when the
+  Safe's nonce moved. No event logs are used: free public BNB Chain RPCs refuse eth_getLogs (Binance's
+  own nodes even for 50 blocks; publicnode for anything but recent blocks).
+- A chain or discovery failure fails the whole reconcile and writes nothing, so it never freezes an
+  account on a half-read.
+
+Limits: Safes on the older Guards have no `withdrawnTotal`, so their withdrawals still look like losses.
+Tokens with no PancakeSwap V2 pool are valued at $0 (a buy of one looks like a loss). Withdrawals by a
+method other than plain send or `transfer` are not recorded. The sweep only runs while the server is
+awake, so on a free Render plan something must ping `/healthz` (public, no login) every few minutes.

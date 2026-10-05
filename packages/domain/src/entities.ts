@@ -41,6 +41,31 @@ export interface ProtectedAccount {
  * new risk may be opened must acquire this row's lock (see
  * packages/risk-ledger AccountRiskHeadRepository).
  */
+/**
+ * EVM (Safe) accounts only: what is needed to turn raw on-chain balances into a daily profit/loss
+ * number that deposits and withdrawals cannot distort. See reconcileEvmAccountEquity.
+ */
+export interface EvmFlowState {
+  /** The UTC date (YYYY-MM-DD) that `equityStartOfDay` is anchored to. */
+  day: string;
+  /** The block the last reconcile read the chain at. */
+  cursorBlock: number;
+  /**
+   * Net USD value of capital moved in (+) and out (-) since the account's first reconcile, each flow
+   * valued when it was first observed. `currentEquity` is reported net of this, so a deposit is not
+   * a gain and a withdrawal is not a loss.
+   */
+  cumulativeFlowUsd: Decimal;
+  /** ERC-20s found in the Safe by token discovery, so they can be valued. */
+  knownTokens: string[];
+  /** The Safe's transaction count at the last reconcile. Unchanged means no Safe transaction ran since. */
+  lastNonce: number;
+  /** Raw balance of each watched asset at the last reconcile (address(0) = the native coin), as decimal strings. */
+  lastBalances: Record<string, string>;
+  /** The Guard's running withdrawal total per asset at the last reconcile, as decimal strings. */
+  lastWithdrawn: Record<string, string>;
+}
+
 export interface AccountRiskHead {
   accountId: string;
   /** Equity at the start of the current UTC risk day (excludes intraday capital flows). */
@@ -56,6 +81,8 @@ export interface AccountRiskHead {
   lastTradeAt: Date | null;
   /** Optimistic-concurrency / row-lock version. */
   version: number;
+  /** EVM Safe accounts only; null/absent for every other account. */
+  evmFlowState?: EvmFlowState | null;
 }
 
 /** Per-account, per-UTC-day rollover record used for daily-loss accounting. */

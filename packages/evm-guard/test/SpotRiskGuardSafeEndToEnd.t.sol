@@ -200,6 +200,7 @@ contract SpotRiskGuardSafeEndToEndTest is Test {
         uint256 before = trader.balance;
         _exec(trader, 1 ether, "", Enum.Operation.Call);
         assertEq(trader.balance - before, 1 ether);
+        assertEq(guard.withdrawnTotal(address(safe), address(0)), 1 ether, "withdrawal not recorded");
     }
 
 
