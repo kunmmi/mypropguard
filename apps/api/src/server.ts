@@ -26,7 +26,7 @@ import {
   PrivySignerGateway,
 } from "@mypropguard/hyperliquid";
 import { FakeSignerGateway, PlaceholderActionHasher } from "@mypropguard/execution";
-import { createPublicClient, createWalletClient, http, type Address, type Chain } from "viem";
+import { createPublicClient, createWalletClient, http, type Address, type Chain, getAddress } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { arbitrum, bsc, mainnet } from "viem/chains";
 import {
@@ -158,6 +158,11 @@ if (process.env.ENABLE_REAL_SIGNER === "true") {
 // admin wallet/RPC config - that Guard's setTokenLimit/setMaxTradesPerDay are independently
 // settable per rule, unlike GMX's combined setLimits, which needs its own, separate design before
 // a single rule change could safely push to it without clobbering the other limit.
+function envAddress(value: string | undefined): Address | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? getAddress(trimmed.toLowerCase()) : undefined;
+}
+
 function configureEvmChainProvisioning(
   label: string,
   envPrefix: string,
@@ -186,12 +191,16 @@ function configureEvmChainProvisioning(
 } | undefined {
   if (process.env[`ENABLE_EVM_${envPrefix}_PROVISIONING`] !== "true") return undefined;
 
-  const rpcUrl = process.env[`EVM_${envPrefix}_RPC_URL`];
-  const adminPrivateKey = process.env[`EVM_${envPrefix}_ADMIN_PRIVATE_KEY`];
-  const safeProxyFactory = process.env[`EVM_${envPrefix}_SAFE_PROXY_FACTORY`];
-  const safeSingleton = process.env[`EVM_${envPrefix}_SAFE_SINGLETON`];
-  const safeGuardSetup = process.env[`EVM_${envPrefix}_SAFE_GUARD_SETUP`];
-  const guardAddress = process.env[`EVM_${envPrefix}_${guardLabel}_GUARD_ADDRESS`];
+  // Values pasted into a host's settings page often carry a stray space or newline, and an address
+  // copied by eye can have a wrong capital letter (which fails the checksum). Trim everything and
+  // normalize addresses (a lowercase address is always valid) so a cosmetic slip cannot take the
+  // server down.
+  const rpcUrl = process.env[`EVM_${envPrefix}_RPC_URL`]?.trim();
+  const adminPrivateKey = process.env[`EVM_${envPrefix}_ADMIN_PRIVATE_KEY`]?.trim();
+  const safeProxyFactory = envAddress(process.env[`EVM_${envPrefix}_SAFE_PROXY_FACTORY`]);
+  const safeSingleton = envAddress(process.env[`EVM_${envPrefix}_SAFE_SINGLETON`]);
+  const safeGuardSetup = envAddress(process.env[`EVM_${envPrefix}_SAFE_GUARD_SETUP`]);
+  const guardAddress = envAddress(process.env[`EVM_${envPrefix}_${guardLabel}_GUARD_ADDRESS`]);
 
   if (!rpcUrl || !adminPrivateKey || !safeProxyFactory || !safeSingleton || !safeGuardSetup || !guardAddress) {
     throw new Error(
@@ -234,7 +243,7 @@ function configureEvmChainProvisioning(
     });
     // Finding the tokens a Safe holds needs a wallet-token API; without a key the reconcile still
     // runs but only values BNB, the base tokens and tokens that have a per-token rule.
-    const moralisApiKey = process.env.MORALIS_API_KEY;
+    const moralisApiKey = process.env.MORALIS_API_KEY?.trim();
     if (moralisApiKey) {
       tokenDiscovery = new MoralisTokenDiscovery({ apiKey: moralisApiKey, chain: equityReaderConfig.moralisChain });
     } else {
