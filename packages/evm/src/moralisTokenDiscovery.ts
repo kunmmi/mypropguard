@@ -50,7 +50,10 @@ export class MoralisTokenDiscovery implements EvmTokenDiscovery {
 
       const response = await this.fetchImpl(url, { headers: { "X-API-Key": this.options.apiKey, accept: "application/json" } });
       if (!response.ok) {
-        throw new Error(`Moralis token discovery failed: HTTP ${response.status}`);
+        // Moralis explains a rejection in the body (bad key, wrong plan, over quota). The key itself is
+        // never echoed back, so the message is safe to log.
+        const detail = await response.json().then((b: { message?: string }) => b?.message, () => undefined);
+        throw new Error(`Moralis token discovery failed: HTTP ${response.status}${detail ? ` (${String(detail).slice(0, 200)})` : ""}`);
       }
       const body = (await response.json()) as MoralisTokensResponse;
       for (const row of body.result ?? []) {

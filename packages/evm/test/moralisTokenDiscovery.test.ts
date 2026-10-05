@@ -52,4 +52,11 @@ describe("MoralisTokenDiscovery", () => {
     const fetchImpl = vi.fn(async () => ({ ok: false, status: 401, json: async () => ({}) }) as Response);
     await expect(new MoralisTokenDiscovery({ apiKey: "bad", chain: "bsc", fetchImpl: fetchImpl as any }).discoverTokens(SAFE)).rejects.toThrow("HTTP 401");
   });
+
+  it("includes Moralis's own explanation of a rejection, so a bad key is easy to tell from a rate limit", async () => {
+    const fetchImpl = vi.fn(async () => ({ ok: false, status: 401, json: async () => ({ message: "Invalid key" }) }) as Response);
+    await expect(new MoralisTokenDiscovery({ apiKey: "bad", chain: "bsc", fetchImpl: fetchImpl as any }).discoverTokens(SAFE)).rejects.toThrow(
+      "HTTP 401 (Invalid key)",
+    );
+  });
 });
