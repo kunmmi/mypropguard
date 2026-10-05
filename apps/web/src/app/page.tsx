@@ -43,14 +43,19 @@ const GUIDE_STEPS = [
     title: "5. Check an order vs. Submit for real",
     body: "\"Check order\" always just previews what the risk engine would decide - it never moves money. \"Submit for real\" (below it) is the only button that can actually place a trade on Hyperliquid, and needs an explicit confirmation checkbox first.",
   },
+  {
+    title: "On-chain accounts (PancakeSwap on BSC, Uniswap, GMX)",
+    body: "In \"Account\", pick the venue and paste your own wallet address (it becomes the Safe's sole owner), then Create account. We deploy a Safe with a Guard that enforces your rules on-chain. Fund the Safe, connect it to the exchange through WalletConnect from app.safe.global, and sign trades with your wallet. A trade that breaks a rule, or goes through a router the Guard does not support yet, is rejected on-chain. After a max-daily-loss breach the Safe cannot buy until the next UTC day, but it can still sell back to BNB/ETH.",
+  },
 ];
 
 function GettingStartedGuide({ onDismiss }: { onDismiss: () => void }) {
   return (
     <Panel title="Getting started">
       <p style={{ marginTop: 0, fontSize: 13, color: "var(--text-muted)" }}>
-        MyPropGuard sits between you and Hyperliquid and enforces the risk rules you set - it never signals trades or
-        manages your account for you. Here's the order things happen in:
+        MyPropGuard enforces the risk rules you set on Hyperliquid and on-chain (BSC, Ethereum, Arbitrum) - it never
+        signals trades or manages your account for you. Here's the order things happen in (steps 2, 4 and 5 are for
+        Hyperliquid accounts; the last step is for on-chain accounts):
       </p>
       <div style={{ display: "grid", gap: "var(--space-3)", marginBottom: "var(--space-4)" }}>
         {GUIDE_STEPS.map((step) => (
@@ -469,9 +474,10 @@ function Dashboard({ session }: { session: Session }) {
           marginBottom: "var(--space-6)",
         }}
       >
-        This connects to the real risk engine and Postgres ledger built this session. Order checks run the real
-        deterministic rules. Signing (when enabled) uses a real Privy key. Nothing here submits to Hyperliquid or
-        moves funds.
+        Hyperliquid accounts: order checks run the real deterministic rules, and nothing here submits to Hyperliquid
+        unless you use &quot;Submit for real&quot;. On-chain accounts (PancakeSwap on BSC, Uniswap, GMX): creating one
+        deploys a real Safe wallet on that chain, with your rules enforced on-chain. Funds you send to that Safe are
+        real.
       </p>
 
       {error && (
