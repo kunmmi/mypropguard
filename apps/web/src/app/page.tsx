@@ -242,7 +242,8 @@ function Dashboard({ session }: { session: Session }) {
   const venueTokens = venue.tokens ?? [];
   const effectiveTokenChoice = tokenChoice || venueTokens[0]?.address || "custom";
   const effectiveTokenAddress = effectiveTokenChoice === "custom" ? newRuleTokenAddress : effectiveTokenChoice;
-  const [addingRule, setAddingRule] = useState(false);
+  const [savingDrafts, setSavingDrafts] = useState(false);
+  const [draftRules, setDraftRules] = useState<Array<{ key: number; ruleType: string; param: string; tokenAddress: string }>>([]);
 
   const [showGuide, setShowGuide] = useState(false);
 
@@ -310,22 +311,45 @@ function Dashboard({ session }: { session: Session }) {
     }
   }
 
-  async function handleAddRule(ruleType: string, tokenAddress: string) {
-    if (!accountId || !newRuleParam) return;
-    setAddingRule(true);
+  function handleAddDraft(ruleType: string, tokenAddress: string) {
+    if (!newRuleParam) return;
+    setDraftRules((drafts) => [...drafts, { key: Date.now() + drafts.length, ruleType, param: newRuleParam, tokenAddress }]);
+    setNewRuleParam("");
+  }
+
+  function removeDraft(key: number) {
+    setDraftRules((drafts) => drafts.filter((d) => d.key !== key));
+  }
+
+  function draftTokenLabel(tokenAddress: string): string {
+    if (!tokenAddress) return "";
+    const known = venue.tokens?.find((t) => t.address.toLowerCase() === tokenAddress.toLowerCase());
+    return known ? known.symbol : `${tokenAddress.slice(0, 6)}…${tokenAddress.slice(-4)}`;
+  }
+
+  // Each rule is its own on-chain transaction, so they are saved one after another (never in
+  // parallel - the admin wallet's transactions must go out in order). A failure stops the run and
+  // leaves the rules not yet saved in the list, so nothing typed is lost.
+  async function handleSaveDrafts() {
+    if (!accountId || draftRules.length === 0) return;
+    setSavingDrafts(true);
     setError(null);
     try {
-      await api.addRule(accountId, ruleType, newRuleParam, tokenAddress || undefined);
-      setNewRuleParam("");
-      setNewRuleTokenAddress("");
-      // Protection status (e.g. the daily-loss budget shown) depends on
-      // active rules - refresh it too, not just the rules list, or it goes
-      // stale the moment a rule that fed it changes.
+      for (const draft of draftRules) {
+        try {
+          await api.addRule(accountId, draft.ruleType, draft.param, draft.tokenAddress || undefined);
+        } catch (err) {
+          const what = `${ruleTypeLabel(draft.ruleType, venue)} ${draft.param}${draft.tokenAddress ? ` (${draftTokenLabel(draft.tokenAddress)})` : ""}`;
+          setError(`Could not save "${what}": ${err instanceof Error ? err.message : "failed"}. Rules before it were saved; the rest are still in the list.`);
+          break;
+        }
+        setDraftRules((drafts) => drafts.filter((d) => d.key !== draft.key));
+      }
+      // Protection status (e.g. the daily-loss budget shown) depends on active rules - refresh it
+      // too, not just the rules list.
       await Promise.all([loadRules(accountId), api.getProtection(accountId).then(setStatus)]);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to add rule");
     } finally {
-      setAddingRule(false);
+      setSavingDrafts(false);
     }
   }
 
@@ -817,7 +841,7 @@ function Dashboard({ session }: { session: Session }) {
             )}
 
             <div style={{ paddingTop: "var(--space-4)", borderTop: "1px solid var(--border-default)" }}>
-              <h4 style={{ fontSize: "var(--text-body-md)", fontWeight: 600, marginBottom: "var(--space-3)" }}>Add a rule</h4>
+              <h4 style={{ fontSize: "var(--text-body-md)", fontWeight: 600, marginBottom: "var(--space-3)" }}>Add rules</h4>
               <div style={{ display: "flex", gap: "var(--space-3)", flexWrap: "wrap", alignItems: "flex-end" }}>
                 <Select
                   label="Rule type"
@@ -856,15 +880,55 @@ function Dashboard({ session }: { session: Session }) {
                   </>
                 )}
                 <Button
+                  variant="secondary"
                   onClick={() => {
                     if (activeRuleType !== newRuleType) setNewRuleType(activeRuleType);
-                    void handleAddRule(activeRuleType, effectiveTokenAddress);
+                    handleAddDraft(activeRuleType, activeRuleType === "MAX_POSITION_SIZE" && isEvmSafeAccount ? effectiveTokenAddress : "");
                   }}
-                  disabled={!newRuleParam || addingRule || (activeRuleType === "MAX_POSITION_SIZE" && isEvmSafeAccount && !effectiveTokenAddress)}
+                  disabled={!newRuleParam || savingDrafts || (activeRuleType === "MAX_POSITION_SIZE" && isEvmSafeAccount && !effectiveTokenAddress)}
                 >
-                  {addingRule ? "Adding…" : "Add rule"}
+                  Add to list
                 </Button>
               </div>
+
+              {draftRules.length > 0 && (
+                <div style={{ marginTop: "var(--space-4)", display: "grid", gap: "var(--space-2)" }}>
+                  <div style={{ fontSize: 13, fontWeight: 600 }}>Ready to save ({draftRules.length})</div>
+                  {draftRules.map((draft) => (
+                    <div
+                      key={draft.key}
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        gap: "var(--space-3)",
+                        padding: "var(--space-2) var(--space-3)",
+                        borderRadius: "var(--radius-md)",
+                        border: "1px dashed var(--border-default)",
+                        fontSize: 13,
+                      }}
+                    >
+                      <span>
+                        {ruleTypeLabel(draft.ruleType, venue)}: <strong>{draft.param}</strong>
+                        {draft.tokenAddress ? ` · ${draftTokenLabel(draft.tokenAddress)}` : ""}
+                      </span>
+                      <Button variant="subtle" size="sm" onClick={() => removeDraft(draft.key)} disabled={savingDrafts}>
+                        Remove
+                      </Button>
+                    </div>
+                  ))}
+                  <div>
+                    <Button onClick={handleSaveDrafts} disabled={savingDrafts}>
+                      {savingDrafts ? "Saving…" : `Save all rules (${draftRules.length})`}
+                    </Button>
+                    {isSafeVenue(venue) && (
+                      <span style={{ marginLeft: "var(--space-3)", fontSize: 12, color: "var(--text-muted)" }}>
+                        Each rule is sent on-chain, so saving takes a few seconds per rule.
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )}
               {activeRuleType === "MAX_POSITION_SIZE" && isEvmSafeAccount && (
                 <p style={{ marginTop: "var(--space-2)", fontSize: 12, color: "var(--text-muted)" }}>
                   The limit is in units of the token you spend (for example 5 for 5 USDT, or 0.0006 for 0.0006
