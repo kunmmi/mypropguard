@@ -132,11 +132,11 @@ export const spotGuardAdminAbi = [
   },
   {
     type: "function",
-    name: "setRouterKind",
+    name: "setAllowedSpender",
     stateMutability: "nonpayable",
     inputs: [
-      { name: "routerAddress", type: "address" },
-      { name: "kind", type: "uint8" },
+      { name: "spender", type: "address" },
+      { name: "allowed", type: "bool" },
     ],
     outputs: [],
   },

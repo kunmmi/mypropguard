@@ -1,18 +1,9 @@
 import type { Address, Chain, Hash, PublicClient, WalletClient, Account } from "viem";
 import { spotGuardAdminAbi } from "./abis.js";
 
-/** Mirrors PancakeSwapLimitGuard.sol / UniswapLimitGuard.sol's `RouterKind` enum exactly - order matters. */
-export enum RouterKind {
-  None = 0,
-  V2 = 1,
-  V3NoDeadline = 2,
-  V3WithDeadline = 3,
-}
-
 /**
- * Admin-only on-chain rule configuration for PancakeSwapLimitGuard and UniswapLimitGuard
- * (packages/evm-guard/src) - identical ABI on both contracts, so one client class serves either,
- * parameterized by which deployed Guard address to call.
+ * Admin-only on-chain rule configuration for SpotRiskGuard (packages/evm-guard/src), and for the
+ * older PancakeSwapLimitGuard/UniswapLimitGuard, which share the limit/freeze functions used here.
  */
 export class SpotGuardClient {
   constructor(
@@ -71,13 +62,13 @@ export class SpotGuardClient {
     return txHash;
   }
 
-  /** Registers or removes (RouterKind.None) a router address this Guard should decode. */
-  async setRouterKind(routerAddress: Address, kind: RouterKind): Promise<Hash> {
+  /** Allows or disallows a router/contract as a spender traders may approve base assets to. */
+  async setAllowedSpender(spender: Address, allowed: boolean): Promise<Hash> {
     const txHash = await this.walletClient.writeContract({
       address: this.guardAddress,
       abi: spotGuardAdminAbi,
-      functionName: "setRouterKind",
-      args: [routerAddress, kind],
+      functionName: "setAllowedSpender",
+      args: [spender, allowed],
       account: this.adminAccount,
       chain: this.chain,
     });

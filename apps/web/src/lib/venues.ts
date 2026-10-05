@@ -54,9 +54,12 @@ export const VENUES: VenueConfig[] = [
       MAX_TRADE_FREQUENCY: "Max buys per day",
       MAX_DAILY_LOSS: "Max daily loss ($)",
     },
-    supportedRoutes: ["PancakeSwap V2 Router"],
+    supportedRoutes: [
+      "Any exchange, terminal or bot: PancakeSwap (V2, V3, Smart Router, Universal Router), aggregators and others",
+      "Buys are measured by what your Safe spends, so no exchange has to be registered first",
+    ],
     unsupportedNote:
-      "Other routers (PancakeSwap Smart Router and Universal Router, other exchanges and aggregators) are rejected until support for them is added.",
+      "Spending a stablecoin needs the exchange's router on MyPropGuard's approved list (PancakeSwap's routers are already approved); spending BNB works with any exchange. Approving a token to an unapproved contract, enabling modules, and unknown delegatecalls are blocked. Selling back to BNB is never limited.",
     explorerUrl: "https://bscscan.com/address/",
     nativeSymbol: "BNB",
     tokens: [

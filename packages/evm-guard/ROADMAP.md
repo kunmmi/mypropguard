@@ -326,3 +326,34 @@ Limitation unchanged: amount limits are per input token in token units, not doll
 Update: per-token amount limits ("Max amount per buy") now also apply to buys only. A swap into
 BNB/ETH or WBNB/WETH is an exit and is never capped, counted, or blocked by a freeze. A swap into a
 stablecoin (for example a meme coin for USDT) is NOT an exit - it counts as a buy.
+
+## Done: SpotRiskGuard - outcome-based Guard (works with any exchange) (BSC)
+
+`src/SpotRiskGuard.sol` replaces router-by-router decoding with measuring what a transaction does to
+the Safe's balances. Before a transaction it snapshots the native coin and every tracked "base asset"
+(wrapped native + stablecoins); after it, if any base asset went down it is a BUY and the rules
+apply (frozen today, buys per day, per-asset amount cap). If nothing was spent it is a sell/no-spend
+and is never limited. Tested on a BSC fork against the REAL Safe v1.4.1 contracts and real
+PancakeSwap V2 router, Smart Router and Universal Router with nothing registered
+(`test/SpotRiskGuardSafeEndToEnd.t.sol`), plus 43 unit tests (`test/SpotRiskGuard.t.sol`).
+
+Bypasses closed: delegatecall only to Safe's MultiSendCallOnly (batches are decoded and every inner
+call checked); approving a base asset or a Permit2 allowance to a non-allowlisted spender is blocked
+(an allowance would let a contract spend the Safe's money without a Safe transaction); enableModule
+and setFallbackHandler blocked (modules bypass the v1.4.1 Guard; a fallback handler would re-enable
+off-chain signatures); setGuard needs the 24h cooldown and never while frozen; module transactions
+rejected; nested execution rejected. Our Safes are created with no fallback handler so EIP-1271
+signatures (Permit2 permits) cannot grant allowances.
+
+Deploy with `script/DeployBscSpotGuard.s.sol` (reuses the existing SafeGuardSetup). Existing Safes
+stay on their old Guard; create new accounts after switching `EVM_BSC_PANCAKESWAP_GUARD_ADDRESS`.
+`PancakeSwapLimitGuard`/`UniswapLimitGuard` are superseded for BSC but kept until Ethereum moves over.
+
+Honest limits: amount limits are per base asset in token units, not dollars; rotating one non-base
+token into another with no base asset spent is not detected; spending a stablecoin needs the
+exchange's router on the approved-spender list (`setAllowedSpender`), spending BNB does not; the
+daily-loss equity feed does not yet treat withdrawals as capital flows (a withdrawal can look like a
+loss); gas-refund (relayer) Safe transactions would count as a native spend.
+Also: a token that is not on the Guard's tracked list is treated like any other position, so spending
+it is not measured. List every stablecoin (and any other asset you consider money) at deploy time;
+`addTrackedAsset` can add more later but nothing can be removed.
