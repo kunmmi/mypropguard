@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { encodeFunctionData, type Address, type Hash, type PublicClient, type WalletClient, type Account, type Chain } from "viem";
 import { safeGuardSetupAbi, safeProxyFactoryAbi, safeSetupAbi } from "./abis.js";
 
@@ -16,6 +17,10 @@ export interface SafeDeployerConfig {
   safeGuardSetup: Address;
 }
 
+function randomSaltNonce(): bigint {
+  return BigInt(`0x${randomBytes(32).toString("hex")}`);
+}
+
 export interface DeploySafeWithGuardParams {
   /** The trader's own wallet address - becomes the Safe's sole owner. MyPropGuard never holds a
    * key for this address and never signs anything on its behalf. */
@@ -23,8 +28,9 @@ export interface DeploySafeWithGuardParams {
   /** The already-deployed Guard contract (GmxPositionLimitGuard/PancakeSwapLimitGuard/
    * UniswapLimitGuard) to attach - shared across every MyPropGuard account on this chain. */
   guard: Address;
-  /** Lets the same owner+guard pair produce a different Safe address if ever needed (e.g. a
-   * second account for the same trader on the same chain). Defaults to 0n. */
+  /** Makes the Safe address unique. Defaults to a random value so a retry, or a second account
+   * for the same owner, never collides with an already-deployed Safe (CREATE2 "Create2 call
+   * failed"). Pass a fixed value only to reproduce a specific address. */
   saltNonce?: bigint;
 }
 
@@ -71,7 +77,7 @@ export class SafeDeployer {
       ],
     });
 
-    const saltNonce = params.saltNonce ?? 0n;
+    const saltNonce = params.saltNonce ?? randomSaltNonce();
 
     const safeAddress = await this.publicClient.simulateContract({
       address: this.config.safeProxyFactory,
