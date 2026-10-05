@@ -138,6 +138,12 @@ export const api = {
       body: JSON.stringify({ venueAddress }),
     }),
 
+  reconcileEvm: (accountId: string) =>
+    request<{ accountId: string; currentEquity: string; peakEquity: string }>(
+      `/v1/accounts/${encodeURIComponent(accountId)}/reconcile-evm`,
+      { method: "POST", body: "{}" },
+    ),
+
   dryRunOrder: (input: DryRunOrderInput) =>
     request<DryRunOrderResult>("/v1/execution/dry-run", {
       method: "POST",

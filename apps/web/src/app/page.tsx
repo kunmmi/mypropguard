@@ -9,6 +9,7 @@ import { Select } from "@/design-system/components/forms/Select";
 import { Panel } from "@/design-system/Panel";
 import { StatusBadge } from "@/design-system/StatusBadge";
 import { supabase } from "@/lib/supabaseClient";
+import { VENUES, getVenue, isSafeVenue, type VenueConfig } from "@/lib/venues";
 import {
   api,
   type DryRunOrderResult,
@@ -24,28 +25,20 @@ const GUIDE_DISMISSED_KEY = "mypropguard.guideDismissed";
 
 const GUIDE_STEPS = [
   {
-    title: "1. Provision an account",
-    body: "In \"Account\", pick an account id (any name you choose, e.g. acct_my_bot) and click \"Create account\". This sets a starting equity and one initial risk rule for it.",
+    title: "1. Pick a venue",
+    body: "Choose where this account trades: an on-chain exchange on its own chain (PancakeSwap on BNB Chain, Uniswap on Ethereum, GMX on Arbitrum) or Hyperliquid. Each venue has its own setup, shown when you pick it. More venues and chains are added over time.",
   },
   {
-    title: "2. Approve the wallet on Hyperliquid",
-    body: "Creating an account provisions a dedicated signing wallet for it. Copy the address shown and approve it as an agent on Hyperliquid's site (API tab → Approve Agent) - this lets THIS account trade under YOUR risk rules, not through a shared key.",
+    title: "2. Create the account",
+    body: "On-chain venues: paste your own wallet address. We deploy a Safe smart wallet on that chain with you as its sole owner and a Guard contract attached, and we never hold your key. Hyperliquid: we provision a signing wallet that you approve as an agent on Hyperliquid's site.",
   },
   {
     title: "3. Set your risk rules",
-    body: "In \"Risk rules\", add limits like max daily loss or max position size. These are the mandate every order gets checked against - add or deactivate them any time, changes apply to the very next order.",
+    body: "Add limits like max amount per trade, max trades per day and max daily loss. On-chain venues push them to the Guard so they are enforced on every transaction. The rules offered depend on the venue.",
   },
   {
-    title: "4. Activate protection",
-    body: "In \"Protection status\", click Activate once you've reconciled real equity from Hyperliquid at least once. \"Bot can trade\" only shows green when your account's state has been freshly verified.",
-  },
-  {
-    title: "5. Check an order vs. Submit for real",
-    body: "\"Check order\" always just previews what the risk engine would decide - it never moves money. \"Submit for real\" (below it) is the only button that can actually place a trade on Hyperliquid, and needs an explicit confirmation checkbox first.",
-  },
-  {
-    title: "On-chain accounts (PancakeSwap on BSC, Uniswap, GMX)",
-    body: "In \"Account\", pick the venue and paste your own wallet address (it becomes the Safe's sole owner), then Create account. We deploy a Safe with a Guard that enforces your rules on-chain. Fund the Safe, connect it to the exchange through WalletConnect from app.safe.global, and sign trades with your wallet. A trade that breaks a rule, or goes through a router the Guard does not support yet, is rejected on-chain. After a max-daily-loss breach the Safe cannot buy until the next UTC day, but it can still sell back to BNB/ETH.",
+    title: "4. Trade within your rules",
+    body: "On-chain: fund the Safe, connect it to a supported exchange through WalletConnect from app.safe.global, and sign trades with your wallet. A trade that breaks a rule, or uses a route the Guard does not support yet, is rejected on-chain. Hyperliquid: activate protection and check orders against the rules before submitting.",
   },
 ];
 
@@ -53,9 +46,8 @@ function GettingStartedGuide({ onDismiss }: { onDismiss: () => void }) {
   return (
     <Panel title="Getting started">
       <p style={{ marginTop: 0, fontSize: 13, color: "var(--text-muted)" }}>
-        MyPropGuard enforces the risk rules you set on Hyperliquid and on-chain (BSC, Ethereum, Arbitrum) - it never
-        signals trades or manages your account for you. Here's the order things happen in (steps 2, 4 and 5 are for
-        Hyperliquid accounts; the last step is for on-chain accounts):
+        MyPropGuard enforces the risk rules you set on every trading venue you connect. It never signals trades or
+        manages your account for you.
       </p>
       <div style={{ display: "grid", gap: "var(--space-3)", marginBottom: "var(--space-4)" }}>
         {GUIDE_STEPS.map((step) => (
@@ -82,29 +74,17 @@ const RULE_TYPE_OPTIONS = [
   { value: "COOLDOWN", label: "Cooldown (seconds)" },
 ];
 
-function ruleTypeLabel(ruleType: string): string {
-  return RULE_TYPE_OPTIONS.find((o) => o.value === ruleType)?.label ?? ruleType;
+function ruleTypeLabel(ruleType: string, venue?: VenueConfig): string {
+  return venue?.ruleLabels?.[ruleType] ?? RULE_TYPE_OPTIONS.find((o) => o.value === ruleType)?.label ?? ruleType;
 }
 
-// Hyperliquid (a Privy-managed wallet) and all three EVM venues (a real on-chain Safe + Guard per
-// chain, see packages/evm-guard) are wired up server-side - each EVM venue still needs its own
-// ENABLE_EVM_*_PROVISIONING env var actually turned on, though (see .env.example).
-const VENUE_OPTIONS = [
-  { value: "hyperliquid", label: "Hyperliquid" },
-  { value: "arbitrum-gmx", label: "GMX on Arbitrum" },
-  { value: "bsc-pancakeswap", label: "PancakeSwap on BSC" },
-  { value: "ethereum-uniswap", label: "Uniswap on Ethereum" },
-];
-const VENUE_CHAIN_IDS: Record<string, number> = {
-  "arbitrum-gmx": 42161,
-  "bsc-pancakeswap": 56,
-  "ethereum-uniswap": 1,
-};
-const VENUE_EXCHANGE_NAMES: Record<string, string> = {
-  "arbitrum-gmx": "GMX",
-  "bsc-pancakeswap": "PancakeSwap",
-  "ethereum-uniswap": "Uniswap",
-};
+function ruleOptionsFor(venue: VenueConfig) {
+  const allowed = venue.supportedRules;
+  return RULE_TYPE_OPTIONS.filter((o) => !allowed || allowed.includes(o.value)).map((o) => ({
+    value: o.value,
+    label: venue.ruleLabels?.[o.value] ?? o.label,
+  }));
+}
 
 function AuthForm() {
   const [mode, setMode] = useState<"sign-in" | "sign-up">("sign-in");
@@ -224,10 +204,11 @@ function Dashboard({ session }: { session: Session }) {
 
   const [initialEquity, setInitialEquity] = useState("10000");
   const [maxPositionSize, setMaxPositionSize] = useState("100000");
-  const [newAgentWalletAddress, setNewAgentWalletAddress] = useState<string | null>(null);
-  const [newVenue, setNewVenue] = useState("hyperliquid");
+  const [newVenue, setNewVenue] = useState(VENUES[0].id);
+  const [showNewAccount, setShowNewAccount] = useState(false);
+  const [evmReconcile, setEvmReconcile] = useState<{ currentEquity: string; peakEquity: string } | null>(null);
+  const [evmReconciling, setEvmReconciling] = useState(false);
   const [evmOwnerWalletAddress, setEvmOwnerWalletAddress] = useState("");
-  const [newEvmSafeAddress, setNewEvmSafeAddress] = useState<string | null>(null);
 
   const [venueAddress, setVenueAddress] = useState("");
   const [reconcileResult, setReconcileResult] = useState<ReconcileResult | null>(null);
@@ -245,10 +226,16 @@ function Dashboard({ session }: { session: Session }) {
   const [accountsLoading, setAccountsLoading] = useState(false);
   const [accountsLoaded, setAccountsLoaded] = useState(false);
 
-  const isEvmSafeAccount = Boolean(accounts.find((a) => a.accountId === accountId)?.evmSafeAddress);
+  const selectedAccount = accounts.find((a) => a.accountId === accountId);
+  const venue = getVenue(selectedAccount?.venue);
+  const isEvmSafeAccount = Boolean(selectedAccount?.evmSafeAddress) || (selectedAccount ? isSafeVenue(venue) : false);
+  const newVenueConfig = getVenue(newVenue);
+  const newIsSafe = isSafeVenue(newVenueConfig);
 
   const [rules, setRules] = useState<RuleVersion[]>([]);
   const [newRuleType, setNewRuleType] = useState("MAX_POSITION_SIZE");
+  const ruleOptions = ruleOptionsFor(venue);
+  const activeRuleType = ruleOptions.some((o) => o.value === newRuleType) ? newRuleType : (ruleOptions[0]?.value ?? newRuleType);
   const [newRuleParam, setNewRuleParam] = useState("");
   const [newRuleTokenAddress, setNewRuleTokenAddress] = useState("");
   const [addingRule, setAddingRule] = useState(false);
@@ -319,12 +306,12 @@ function Dashboard({ session }: { session: Session }) {
     }
   }
 
-  async function handleAddRule() {
+  async function handleAddRule(ruleType: string) {
     if (!accountId || !newRuleParam) return;
     setAddingRule(true);
     setError(null);
     try {
-      await api.addRule(accountId, newRuleType, newRuleParam, newRuleTokenAddress || undefined);
+      await api.addRule(accountId, ruleType, newRuleParam, newRuleTokenAddress || undefined);
       setNewRuleParam("");
       setNewRuleTokenAddress("");
       // Protection status (e.g. the daily-loss budget shown) depends on
@@ -352,20 +339,18 @@ function Dashboard({ session }: { session: Session }) {
   async function handleCreateAccount() {
     setError(null);
     try {
-      const isEvmVenue = newVenue !== "hyperliquid";
-      const result = await api.createAccount({
+      await api.createAccount({
         accountId,
         ownerUserId: session.user.id,
         venue: newVenue,
         initialEquity,
-        initialRules: [{ ruleType: "MAX_POSITION_SIZE", param: maxPositionSize }],
-        ...(isEvmVenue && evmOwnerWalletAddress
-          ? { evmOwnerWalletAddress, evmChainId: VENUE_CHAIN_IDS[newVenue] }
+        initialRules: newIsSafe ? [] : [{ ruleType: "MAX_POSITION_SIZE", param: maxPositionSize }],
+        ...(newIsSafe && evmOwnerWalletAddress && newVenueConfig.chainId
+          ? { evmOwnerWalletAddress, evmChainId: newVenueConfig.chainId }
           : {}),
       });
-      setNewAgentWalletAddress(result.agentWalletAddress);
-      setNewEvmSafeAddress(result.evmSafeAddress ?? null);
       await Promise.all([loadAccount(accountId), loadAccounts()]);
+      setShowNewAccount(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create account");
     }
@@ -392,6 +377,21 @@ function Dashboard({ session }: { session: Session }) {
       await loadAccount(accountId);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Reconcile failed");
+    }
+  }
+
+  async function handleReconcileEvm() {
+    if (!accountId) return;
+    setError(null);
+    setEvmReconciling(true);
+    try {
+      const result = await api.reconcileEvm(accountId);
+      setEvmReconcile({ currentEquity: result.currentEquity, peakEquity: result.peakEquity });
+      await loadAccount(accountId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not refresh on-chain equity");
+    } finally {
+      setEvmReconciling(false);
     }
   }
 
@@ -455,7 +455,7 @@ function Dashboard({ session }: { session: Session }) {
           <div>
             <h1 style={{ fontSize: "var(--text-h2)" }}>MyPropGuard Onchain</h1>
             <p style={{ margin: 0, fontSize: "var(--text-caption)", color: "var(--text-muted)" }}>
-              Powered by Ighodalo Labs. Hyperliquid risk enforcement, not a signal service or account manager.
+              Powered by Ighodalo Labs. Risk enforcement for self-custody trading across venues and chains - not a signal service or account manager.
             </p>
           </div>
         </div>
@@ -474,10 +474,8 @@ function Dashboard({ session }: { session: Session }) {
           marginBottom: "var(--space-6)",
         }}
       >
-        Hyperliquid accounts: order checks run the real deterministic rules, and nothing here submits to Hyperliquid
-        unless you use &quot;Submit for real&quot;. On-chain accounts (PancakeSwap on BSC, Uniswap, GMX): creating one
-        deploys a real Safe wallet on that chain, with your rules enforced on-chain. Funds you send to that Safe are
-        real.
+        Your rules are enforced per venue: on-chain venues use a Guard contract inside your own Safe wallet, and
+        Hyperliquid uses an approved agent wallet. Funds in a Safe are real funds.
       </p>
 
       {error && (
@@ -506,131 +504,222 @@ function Dashboard({ session }: { session: Session }) {
             <Button variant="secondary" onClick={loadAccounts} disabled={accountsLoading}>
               {accountsLoading ? "Loading…" : "Refresh"}
             </Button>
+            <Button onClick={() => setShowNewAccount((v) => !v)}>{showNewAccount ? "Cancel" : "Add account"}</Button>
           </div>
 
           {accountsLoaded && (
             <div style={{ marginTop: "var(--space-4)" }}>
               {accounts.length === 0 ? (
-                <p style={{ fontSize: 13, color: "var(--text-muted)", margin: 0 }}>No accounts yet - provision one below.</p>
+                <p style={{ fontSize: 13, color: "var(--text-muted)", margin: 0 }}>
+                  No accounts yet - click &quot;Add account&quot; to pick a venue and set one up.
+                </p>
               ) : (
                 <div style={{ display: "grid", gap: "var(--space-2)" }}>
-                  {accounts.map((account) => (
-                    <button
-                      key={account.accountId}
-                      onClick={() => {
-                        setAccountId(account.accountId);
-                        void loadAccount(account.accountId);
-                      }}
-                      style={{
-                        display: "flex",
-                        justifyContent: "space-between",
-                        alignItems: "center",
-                        gap: "var(--space-3)",
-                        padding: "var(--space-3) var(--space-4)",
-                        borderRadius: "var(--radius-md)",
-                        border: account.accountId === accountId ? "1px solid var(--color-primary)" : "1px solid var(--border-default)",
-                        background: "var(--surface-card)",
-                        cursor: "pointer",
-                        textAlign: "left",
-                        fontFamily: "inherit",
-                      }}
-                    >
-                      <span style={{ fontSize: 14, fontWeight: 600 }}>{account.accountId}</span>
-                      <span style={{ display: "flex", gap: "var(--space-2)", alignItems: "center" }}>
-                        <span style={{ fontSize: 12, color: "var(--text-muted)" }}>{account.venue}</span>
-                        <StatusBadge tone={account.protectionEnabled ? "success" : "neutral"}>
-                          {account.protectionEnabled ? "Protected" : "Off"}
-                        </StatusBadge>
-                      </span>
-                    </button>
-                  ))}
+                  {accounts.map((account) => {
+                    const accountVenue = getVenue(account.venue);
+                    return (
+                      <button
+                        key={account.accountId}
+                        onClick={() => {
+                          setAccountId(account.accountId);
+                          setEvmReconcile(null);
+                          setShowNewAccount(false);
+                          void loadAccount(account.accountId);
+                        }}
+                        style={{
+                          display: "flex",
+                          justifyContent: "space-between",
+                          alignItems: "center",
+                          gap: "var(--space-3)",
+                          padding: "var(--space-3) var(--space-4)",
+                          borderRadius: "var(--radius-md)",
+                          border:
+                            account.accountId === accountId
+                              ? "1px solid var(--color-primary)"
+                              : "1px solid var(--border-default)",
+                          background: "var(--surface-card)",
+                          cursor: "pointer",
+                          textAlign: "left",
+                          fontFamily: "inherit",
+                        }}
+                      >
+                        <span style={{ fontSize: 14, fontWeight: 600 }}>{account.accountId}</span>
+                        <span style={{ display: "flex", gap: "var(--space-2)", alignItems: "center" }}>
+                          <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
+                            {accountVenue.name}
+                            {accountVenue.chainName && accountVenue.chainName !== accountVenue.name
+                              ? ` · ${accountVenue.chainName}`
+                              : ""}
+                          </span>
+                          <StatusBadge tone={account.protectionEnabled ? "success" : "neutral"}>
+                            {account.protectionEnabled ? "Protected" : "Off"}
+                          </StatusBadge>
+                        </span>
+                      </button>
+                    );
+                  })}
                 </div>
               )}
             </div>
           )}
         </Panel>
 
-        <Panel title="Account">
-          <div style={{ display: "flex", gap: "var(--space-3)", alignItems: "flex-end", flexWrap: "wrap" }}>
-            <Input label="Account ID" value={accountId} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setAccountId(e.target.value)} placeholder="acct_my_first" />
-            <Button variant="secondary" onClick={() => loadAccount(accountId)} disabled={!accountId || loading}>
-              {loading ? "Loading…" : "Load"}
-            </Button>
-          </div>
+        {showNewAccount && (
+          <Panel title="Add an account">
+            <h4 style={{ fontSize: "var(--text-body-md)", fontWeight: 600, marginTop: 0, marginBottom: "var(--space-3)" }}>
+              1. Choose a venue
+            </h4>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: "var(--space-3)" }}>
+              {VENUES.map((v) => (
+                <button
+                  key={v.id}
+                  onClick={() => setNewVenue(v.id)}
+                  style={{
+                    textAlign: "left",
+                    padding: "var(--space-3) var(--space-4)",
+                    borderRadius: "var(--radius-md)",
+                    border: v.id === newVenue ? "2px solid var(--color-primary)" : "1px solid var(--border-default)",
+                    background: "var(--surface-card)",
+                    cursor: "pointer",
+                    fontFamily: "inherit",
+                  }}
+                >
+                  <div style={{ fontSize: 14, fontWeight: 600 }}>{v.name}</div>
+                  <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 6 }}>
+                    {v.chainName}
+                    {isSafeVenue(v) ? " · on-chain Safe" : " · agent wallet"}
+                  </div>
+                  <div style={{ fontSize: 12, color: "var(--text-muted)" }}>{v.summary}</div>
+                </button>
+              ))}
+            </div>
 
-          {!status && (
-            <div style={{ marginTop: "var(--space-5)", paddingTop: "var(--space-5)", borderTop: "1px solid var(--border-default)" }}>
-              <h4 style={{ fontSize: "var(--text-body-md)", fontWeight: 600, marginBottom: "var(--space-3)" }}>
-                Or provision a new account
-              </h4>
-              <div style={{ display: "flex", gap: "var(--space-3)", flexWrap: "wrap", alignItems: "flex-end" }}>
-                <Select label="Venue" options={VENUE_OPTIONS} value={newVenue} onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setNewVenue(e.target.value)} />
-                <Input label="Initial equity ($)" value={initialEquity} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setInitialEquity(e.target.value)} />
-                <Input label="Max position size ($)" value={maxPositionSize} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setMaxPositionSize(e.target.value)} />
-              </div>
-
-              {newVenue !== "hyperliquid" && (
-                <div style={{ marginTop: "var(--space-3)" }}>
-                  <Input
-                    label="Your wallet address"
-                    value={evmOwnerWalletAddress}
-                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => setEvmOwnerWalletAddress(e.target.value)}
-                    placeholder="0x..."
-                    helpText="This becomes the sole owner of a Safe we provision for you - MyPropGuard never holds its key."
-                  />
-                </div>
+            <h4 style={{ fontSize: "var(--text-body-md)", fontWeight: 600, margin: "var(--space-5) 0 var(--space-3)" }}>
+              2. Account details
+            </h4>
+            <div style={{ display: "flex", gap: "var(--space-3)", flexWrap: "wrap", alignItems: "flex-end" }}>
+              <Input
+                label="Account name"
+                value={accountId}
+                onChange={(e: React.ChangeEvent<HTMLInputElement>) => setAccountId(e.target.value)}
+                placeholder="acct_my_first"
+              />
+              <Input
+                label="Starting equity ($)"
+                value={initialEquity}
+                onChange={(e: React.ChangeEvent<HTMLInputElement>) => setInitialEquity(e.target.value)}
+              />
+              {!newIsSafe && (
+                <Input
+                  label="Max position size ($)"
+                  value={maxPositionSize}
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => setMaxPositionSize(e.target.value)}
+                />
               )}
+            </div>
 
+            {newIsSafe && (
               <div style={{ marginTop: "var(--space-3)" }}>
-                <Button onClick={handleCreateAccount} disabled={!accountId}>
-                  Create account
-                </Button>
+                <Input
+                  label={`Your wallet address (owner of the Safe on ${newVenueConfig.chainName})`}
+                  value={evmOwnerWalletAddress}
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => setEvmOwnerWalletAddress(e.target.value)}
+                  placeholder="0x..."
+                  helpText="Use a wallet you control and sign with. It becomes the Safe's sole owner - MyPropGuard never holds its key and can never move your funds."
+                />
               </div>
-            </div>
-          )}
+            )}
 
-          {newAgentWalletAddress && (
-            <div
-              style={{
-                marginTop: "var(--space-5)",
-                padding: "var(--space-3) var(--space-4)",
-                borderRadius: "var(--radius-md)",
-                background: "var(--surface-sunken)",
-                fontSize: 13,
-              }}
-            >
-              <div style={{ fontWeight: 600, marginBottom: 4 }}>One more step: approve this wallet on Hyperliquid</div>
-              <div style={{ color: "var(--text-muted)", marginBottom: 6 }}>
-                We provisioned a signing wallet just for this account. Go to Hyperliquid&apos;s site → API tab →
-                Approve Agent, and paste this address:
-              </div>
-              <code style={{ fontFamily: "var(--font-accent)", wordBreak: "break-all" }}>{newAgentWalletAddress}</code>
+            <div style={{ marginTop: "var(--space-4)" }}>
+              <Button onClick={handleCreateAccount} disabled={!accountId || (newIsSafe && !evmOwnerWalletAddress)}>
+                Create account
+              </Button>
             </div>
-          )}
+          </Panel>
+        )}
 
-          {newEvmSafeAddress && (
-            <div
-              style={{
-                marginTop: "var(--space-5)",
-                padding: "var(--space-3) var(--space-4)",
-                borderRadius: "var(--radius-md)",
-                background: "var(--surface-sunken)",
-                fontSize: 13,
-              }}
-            >
-              <div style={{ fontWeight: 600, marginBottom: 4 }}>
-                Your Safe is ready - trade with it directly on {VENUE_EXCHANGE_NAMES[newVenue] ?? "the exchange"}
+        {status && selectedAccount && (
+          <Panel title={`${venue.name}${venue.chainName && venue.chainName !== venue.name ? ` · ${venue.chainName}` : ""}`}>
+            <p style={{ marginTop: 0, fontSize: 13, color: "var(--text-muted)" }}>
+              Account <strong>{selectedAccount.accountId}</strong> · {venue.summary}
+            </p>
+
+            {isSafeVenue(venue) ? (
+              <div style={{ display: "grid", gap: "var(--space-3)", fontSize: 13 }}>
+                {selectedAccount.evmSafeAddress ? (
+                  <div>
+                    <div style={{ fontWeight: 600, marginBottom: 4 }}>Your Safe wallet ({venue.chainName})</div>
+                    <code style={{ fontFamily: "var(--font-accent)", wordBreak: "break-all" }}>
+                      {selectedAccount.evmSafeAddress}
+                    </code>
+                    {venue.explorerUrl && (
+                      <div style={{ marginTop: 4 }}>
+                        <a href={`${venue.explorerUrl}${selectedAccount.evmSafeAddress}`} target="_blank" rel="noreferrer">
+                          View on block explorer
+                        </a>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <p style={{ margin: 0, color: "var(--text-muted)" }}>
+                    No Safe was provisioned for this account yet. This venue&apos;s on-chain provisioning may not be
+                    enabled on this server.
+                  </p>
+                )}
+
+                <div>
+                  <div style={{ fontWeight: 600, marginBottom: 4 }}>How to trade</div>
+                  <ol style={{ margin: 0, paddingLeft: 18, color: "var(--text-muted)", display: "grid", gap: 4 }}>
+                    <li>
+                      Send some {venue.nativeSymbol ?? "native token"} to the Safe address above. Start with a small
+                      amount.
+                    </li>
+                    <li>Open app.safe.global on {venue.chainName}, add your Safe, and sign in with your owner wallet.</li>
+                    <li>
+                      On {venue.exchangeName}&apos;s site choose WalletConnect, copy the link, and paste it into the
+                      WalletConnect option in the Safe app.
+                    </li>
+                    <li>
+                      Trade as usual, then sign and execute each transaction in the Safe app with your owner wallet.
+                      Keep a little {venue.nativeSymbol ?? "native token"} in your owner wallet for gas.
+                    </li>
+                  </ol>
+                </div>
+
+                {venue.supportedRoutes && (
+                  <div>
+                    <div style={{ fontWeight: 600, marginBottom: 4 }}>Supported today</div>
+                    <ul style={{ margin: 0, paddingLeft: 18, color: "var(--text-muted)" }}>
+                      {venue.supportedRoutes.map((route) => (
+                        <li key={route}>{route}</li>
+                      ))}
+                    </ul>
+                    {venue.unsupportedNote && (
+                      <p style={{ margin: "6px 0 0", color: "var(--text-muted)" }}>{venue.unsupportedNote}</p>
+                    )}
+                  </div>
+                )}
               </div>
-              <div style={{ color: "var(--text-muted)", marginBottom: 6 }}>
-                This Safe already has your risk rules attached on-chain. Go to{" "}
-                {VENUE_EXCHANGE_NAMES[newVenue] ?? "the exchange"}&apos;s own site, connect this address as your
-                trading wallet, and trade normally - a rule-breaking order will revert on-chain before it ever
-                reaches the exchange:
+            ) : (
+              <div style={{ fontSize: 13 }}>
+                {selectedAccount.agentWalletAddress ? (
+                  <>
+                    <div style={{ fontWeight: 600, marginBottom: 4 }}>Approve this wallet on Hyperliquid</div>
+                    <div style={{ color: "var(--text-muted)", marginBottom: 6 }}>
+                      Go to Hyperliquid&apos;s site → API tab → Approve Agent, and paste this address. This lets this
+                      account trade under your risk rules, not through a shared key.
+                    </div>
+                    <code style={{ fontFamily: "var(--font-accent)", wordBreak: "break-all" }}>
+                      {selectedAccount.agentWalletAddress}
+                    </code>
+                  </>
+                ) : (
+                  <p style={{ margin: 0, color: "var(--text-muted)" }}>No agent wallet has been provisioned for this account.</p>
+                )}
               </div>
-              <code style={{ fontFamily: "var(--font-accent)", wordBreak: "break-all" }}>{newEvmSafeAddress}</code>
-            </div>
-          )}
-        </Panel>
+            )}
+          </Panel>
+        )}
 
         {status && (
           <Panel title="Protection status">
@@ -639,7 +728,13 @@ function Dashboard({ session }: { session: Session }) {
                 {status.protectionOn ? "Protection on" : "Protection off"}
               </StatusBadge>
               <StatusBadge tone={status.botCanOpenNewTrades ? "success" : "warning"}>
-                {status.botCanOpenNewTrades ? "Bot can trade" : "Bot paused"}
+                {isSafeVenue(venue)
+                  ? status.botCanOpenNewTrades
+                    ? "Trading allowed"
+                    : "Trading paused"
+                  : status.botCanOpenNewTrades
+                    ? "Bot can trade"
+                    : "Bot paused"}
               </StatusBadge>
               {status.walletNeedsAttention && <StatusBadge tone="danger">Needs attention</StatusBadge>}
             </div>
@@ -679,8 +774,9 @@ function Dashboard({ session }: { session: Session }) {
         {status && (
           <Panel title="Risk rules">
             <p style={{ marginTop: 0, fontSize: 13, color: "var(--text-muted)" }}>
-              The mandate this account is actually checked against on every trade. Deactivating a rule takes effect
-              immediately — it stops applying to the very next order.
+              {isSafeVenue(venue)
+                ? "The mandate pushed to this account's Guard contract on-chain. Changes are sent as a transaction by MyPropGuard and apply to the next trade."
+                : "The mandate this account is checked against on every order. Deactivating a rule takes effect immediately."}
             </p>
 
             {rules.length === 0 ? (
@@ -702,7 +798,7 @@ function Dashboard({ session }: { session: Session }) {
                     }}
                   >
                     <div>
-                      <div style={{ fontSize: 14, fontWeight: 600 }}>{ruleTypeLabel(rule.ruleType)}</div>
+                      <div style={{ fontSize: 14, fontWeight: 600 }}>{ruleTypeLabel(rule.ruleType, venue)}</div>
                       <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
                         Limit: {rule.param}
                         {rule.tokenAddress ? ` (token ${rule.tokenAddress})` : ""}
@@ -719,14 +815,19 @@ function Dashboard({ session }: { session: Session }) {
             <div style={{ paddingTop: "var(--space-4)", borderTop: "1px solid var(--border-default)" }}>
               <h4 style={{ fontSize: "var(--text-body-md)", fontWeight: 600, marginBottom: "var(--space-3)" }}>Add a rule</h4>
               <div style={{ display: "flex", gap: "var(--space-3)", flexWrap: "wrap", alignItems: "flex-end" }}>
-                <Select label="Rule type" options={RULE_TYPE_OPTIONS} value={newRuleType} onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setNewRuleType(e.target.value)} />
+                <Select
+                  label="Rule type"
+                  options={ruleOptions}
+                  value={activeRuleType}
+                  onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setNewRuleType(e.target.value)}
+                />
                 <Input
                   label="Limit"
                   value={newRuleParam}
                   onChange={(e: React.ChangeEvent<HTMLInputElement>) => setNewRuleParam(e.target.value)}
                   placeholder="e.g. 500"
                 />
-                {newRuleType === "MAX_POSITION_SIZE" && isEvmSafeAccount && (
+                {activeRuleType === "MAX_POSITION_SIZE" && isEvmSafeAccount && (
                   <Input
                     label="Token address"
                     value={newRuleTokenAddress}
@@ -735,23 +836,44 @@ function Dashboard({ session }: { session: Session }) {
                   />
                 )}
                 <Button
-                  onClick={handleAddRule}
-                  disabled={!newRuleParam || addingRule || (newRuleType === "MAX_POSITION_SIZE" && isEvmSafeAccount && !newRuleTokenAddress)}
+                  onClick={() => {
+                    if (activeRuleType !== newRuleType) setNewRuleType(activeRuleType);
+                    void handleAddRule(activeRuleType);
+                  }}
+                  disabled={!newRuleParam || addingRule || (activeRuleType === "MAX_POSITION_SIZE" && isEvmSafeAccount && !newRuleTokenAddress)}
                 >
                   {addingRule ? "Adding…" : "Add rule"}
                 </Button>
               </div>
-              {newRuleType === "MAX_POSITION_SIZE" && isEvmSafeAccount && (
+              {activeRuleType === "MAX_POSITION_SIZE" && isEvmSafeAccount && (
                 <p style={{ marginTop: "var(--space-2)", fontSize: 12, color: "var(--text-muted)" }}>
-                  This account trades on-chain, so this limit is pushed directly to its Guard contract and enforced
-                  for every trade on that token - not just ones placed through this dashboard.
+                  The limit is in units of that token (for example 5 for 5 USDT), pushed directly to the Guard contract
+                  and enforced for every trade on that token, whichever site it comes from.
                 </p>
               )}
             </div>
           </Panel>
         )}
 
-        {status && (
+        {status && isSafeVenue(venue) && (
+          <Panel title="On-chain balance">
+            <p style={{ marginTop: 0, fontSize: 13, color: "var(--text-muted)" }}>
+              Reads this Safe&apos;s balances on {venue.chainName} and updates the equity used for the max-daily-loss
+              rule. If the loss limit is breached, the Safe cannot buy until the next UTC day, but it can still sell
+              back to {venue.nativeSymbol ?? "the native token"}.
+            </p>
+            <Button variant="secondary" onClick={handleReconcileEvm} disabled={evmReconciling}>
+              {evmReconciling ? "Reading chain…" : "Refresh on-chain balance"}
+            </Button>
+            {evmReconcile && (
+              <div style={{ marginTop: "var(--space-4)", fontSize: 13, color: "var(--text-muted)" }}>
+                Equity ${evmReconcile.currentEquity}, peak ${evmReconcile.peakEquity}
+              </div>
+            )}
+          </Panel>
+        )}
+
+        {status && !isSafeVenue(venue) && (
           <Panel title="Reconcile with Hyperliquid">
             <p style={{ marginTop: 0, fontSize: 13, color: "var(--text-muted)" }}>
               Reads live equity and exposure from Hyperliquid&apos;s public Info API for any address, no credentials
@@ -778,7 +900,7 @@ function Dashboard({ session }: { session: Session }) {
           </Panel>
         )}
 
-        {status && (
+        {status && !isSafeVenue(venue) && (
           <Panel title="Check an order">
             <p style={{ marginTop: 0, fontSize: 13, color: "var(--text-muted)" }}>
               Runs the real risk engine and reservation logic. If allowed or resized, also runs the real
