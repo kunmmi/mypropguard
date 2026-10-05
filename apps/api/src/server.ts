@@ -257,7 +257,6 @@ function configureEvmChainProvisioning(
       console.warn(`Neither GOLDRUSH_API_KEY nor MORALIS_API_KEY is set: ${label} equity will not include tokens bought outside a per-token rule, so buys can look like losses.`);
     }
   }
-  }
 
   // eslint-disable-next-line no-console
   console.log(`EVM Safe provisioning enabled for ${label}. New accounts on that chain get a real provisioned Safe.`);
