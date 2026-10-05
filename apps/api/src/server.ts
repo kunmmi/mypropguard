@@ -35,6 +35,7 @@ import {
   SpotGuardClient,
   EvmChainGuardRuleSyncer,
   PancakeSwapEquityReader,
+  GoldRushTokenDiscovery,
   MoralisTokenDiscovery,
   SafeStateReader,
 } from "@mypropguard/evm";
@@ -181,6 +182,7 @@ function configureEvmChainProvisioning(
     stablecoinAddress: Address;
     depositTokens: Address[];
     moralisChain: string;
+    goldRushChain: string;
   },
 ): {
   provisioner: EvmSafeProvisioner;
@@ -241,15 +243,20 @@ function configureEvmChainProvisioning(
       guardAddress: guardAddress as Address,
       baseTokens: equityReaderConfig.depositTokens,
     });
-    // Finding the tokens a Safe holds needs a wallet-token API; without a key the reconcile still
-    // runs but only values BNB, the base tokens and tokens that have a per-token rule.
+    // Finding the tokens a Safe holds needs a wallet-token API. GoldRush is preferred (its free plan
+    // covers BNB Chain); Moralis works too. Without either key the reconcile still runs but only
+    // values BNB, the base tokens and tokens that have a per-token rule.
+    const goldRushApiKey = process.env.GOLDRUSH_API_KEY?.trim();
     const moralisApiKey = process.env.MORALIS_API_KEY?.trim();
-    if (moralisApiKey) {
+    if (goldRushApiKey) {
+      tokenDiscovery = new GoldRushTokenDiscovery({ apiKey: goldRushApiKey, chain: equityReaderConfig.goldRushChain });
+    } else if (moralisApiKey) {
       tokenDiscovery = new MoralisTokenDiscovery({ apiKey: moralisApiKey, chain: equityReaderConfig.moralisChain });
     } else {
       // eslint-disable-next-line no-console
-      console.warn(`MORALIS_API_KEY is not set: ${label} equity will not include tokens bought outside a per-token rule, so buys can look like losses.`);
+      console.warn(`Neither GOLDRUSH_API_KEY nor MORALIS_API_KEY is set: ${label} equity will not include tokens bought outside a per-token rule, so buys can look like losses.`);
     }
+  }
   }
 
   // eslint-disable-next-line no-console
@@ -272,6 +279,7 @@ const bscConfig = configureEvmChainProvisioning("BSC (PancakeSwap)", "BSC", bsc,
   stablecoinAddress: USDT_ADDRESS_BSC,
   depositTokens: BSC_DEPOSIT_TOKENS,
   moralisChain: "bsc",
+  goldRushChain: "bsc-mainnet",
 });
 if (bscConfig) {
   evmSafeProvisioners[bsc.id] = bscConfig.provisioner;
