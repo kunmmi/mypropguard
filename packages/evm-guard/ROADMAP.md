@@ -322,3 +322,7 @@ the day can still get out. Per-token amount limits still apply to sells. The con
 the Guards must be redeployed and accounts created on the new Guard (the Safe from the earlier
 deploy keeps pointing at the old one; moving it needs the 24h removal cooldown).
 Limitation unchanged: amount limits are per input token in token units, not dollars.
+
+Update: per-token amount limits ("Max amount per buy") now also apply to buys only. A swap into
+BNB/ETH or WBNB/WETH is an exit and is never capped, counted, or blocked by a freeze. A swap into a
+stablecoin (for example a meme coin for USDT) is NOT an exit - it counts as a buy.

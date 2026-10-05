@@ -105,6 +105,7 @@ contract PancakeSwapLimitGuard is BaseGuard {
     bytes4 private constant MULTICALL_DEADLINE = bytes4(keccak256("multicall(uint256,bytes[])"));
     bytes4 private constant MULTICALL_PREV_BLOCKHASH = bytes4(keccak256("multicall(bytes32,bytes[])"));
 
+    /// @notice Max amount of `token` spent per BUY (sells are never capped).
     mapping(address => mapping(address => uint256)) public maxAmountPerTrade;
     /// @notice Max BUYS per UTC day (the name predates this: sells never count, see `_checkAndRecord`).
     mapping(address => uint256) public maxTradesPerDay;
@@ -388,21 +389,22 @@ contract PancakeSwapLimitGuard is BaseGuard {
             revert AccountIsFrozen(account);
         }
 
-        uint256 tokenLimit = maxAmountPerTrade[account][inputToken];
-        if (tokenLimit != 0 && inputAmount > tokenLimit) {
-            revert TradeAmountExceeded(inputToken, inputAmount, tokenLimit);
-        }
-
         uint256 today = block.timestamp / 1 days;
         AccountState memory existing = tradeState[account];
         uint256 countedToday = existing.lastTradeDay == today ? existing.tradesToday : 0;
 
-        // Only BUYS use up the daily allowance (`maxTradesPerDay` is a max-buys-per-day limit). An
-        // exit never opens exposure, so it must never be blocked by - or consume - the buy count;
-        // otherwise a trader who has used their buys for the day could not sell to get out.
+        // Limits apply to BUYS only (`maxAmountPerTrade` is a max-amount-per-buy limit and
+        // `maxTradesPerDay` a max-buys-per-day limit). An exit never opens exposure, so it is never
+        // capped, never blocked by the buy count and never consumes it - otherwise a trader could
+        // be trapped in a position.
         if (isExit) {
             emit SwapChecked(account, inputToken, inputAmount, countedToday);
             return;
+        }
+
+        uint256 tokenLimit = maxAmountPerTrade[account][inputToken];
+        if (tokenLimit != 0 && inputAmount > tokenLimit) {
+            revert TradeAmountExceeded(inputToken, inputAmount, tokenLimit);
         }
 
         uint256 tradesToday = countedToday + 1;

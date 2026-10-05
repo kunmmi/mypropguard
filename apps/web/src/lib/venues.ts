@@ -50,7 +50,7 @@ export const VENUES: VenueConfig[] = [
     summary: "Spot trading in a Safe wallet on BNB Chain. Rules are enforced on-chain.",
     supportedRules: ["MAX_POSITION_SIZE", "MAX_TRADE_FREQUENCY", "MAX_DAILY_LOSS"],
     ruleLabels: {
-      MAX_POSITION_SIZE: "Max amount per trade (per token)",
+      MAX_POSITION_SIZE: "Max amount per buy (per token)",
       MAX_TRADE_FREQUENCY: "Max buys per day",
       MAX_DAILY_LOSS: "Max daily loss ($)",
     },
@@ -77,7 +77,7 @@ export const VENUES: VenueConfig[] = [
     summary: "Spot trading in a Safe wallet on Ethereum. Rules are enforced on-chain.",
     supportedRules: ["MAX_POSITION_SIZE", "MAX_TRADE_FREQUENCY", "MAX_DAILY_LOSS"],
     ruleLabels: {
-      MAX_POSITION_SIZE: "Max amount per trade (per token)",
+      MAX_POSITION_SIZE: "Max amount per buy (per token)",
       MAX_TRADE_FREQUENCY: "Max buys per day",
       MAX_DAILY_LOSS: "Max daily loss ($)",
     },

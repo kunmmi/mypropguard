@@ -471,15 +471,20 @@ contract UniswapLimitGuardTest is Test {
         _checkAsSafe(v2Router, 0, _swapExactTokensForTokens(500e18, usdt, dai));
     }
 
-    function test_SellingForEthStillEnforcesTheTokenAmountLimit() public {
-        // The freeze exemption only skips the freeze check itself - the per-token amount limit
-        // still applies to an exit trade exactly as it would to any other trade.
+    function test_SellsAreNeverCappedByTheTokenAmountLimit() public {
+        // Selling into the native asset is never limited, even far above a configured limit and
+        // even while frozen - a cap on exits could trap a trader in a position.
         _setLimits(5, usdt, 1000e18);
         vm.prank(admin);
         guard.recordDailyLossBreach(safeAccount);
 
-        vm.expectRevert(abi.encodeWithSelector(UniswapLimitGuard.TradeAmountExceeded.selector, usdt, 2000e18, 1000e18));
         _checkAsSafe(v2Router, 0, _swapExactTokensForEth(2000e18, usdt));
+    }
+
+    function test_BuysAreStillCappedByTheTokenAmountLimit() public {
+        _setLimits(5, usdt, 1000e18);
+        vm.expectRevert(abi.encodeWithSelector(UniswapLimitGuard.TradeAmountExceeded.selector, usdt, 2000e18, 1000e18));
+        _checkAsSafe(v2Router, 0, _swapExactTokensForTokens(2000e18, usdt, dai));
     }
 
     // ---- the daily limit counts BUYS only ----------------------------------------------------

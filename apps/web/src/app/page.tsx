@@ -34,7 +34,7 @@ const GUIDE_STEPS = [
   },
   {
     title: "3. Set your risk rules",
-    body: "Add limits like max amount per trade, max buys per day and max daily loss. On-chain venues push them to the Guard so they are enforced on every transaction. The rules offered depend on the venue.",
+    body: "Add limits like max amount per buy, max buys per day and max daily loss. On-chain venues push them to the Guard so they are enforced on every transaction. The rules offered depend on the venue.",
   },
   {
     title: "4. Trade within your rules",
@@ -869,8 +869,8 @@ function Dashboard({ session }: { session: Session }) {
                 <p style={{ marginTop: "var(--space-2)", fontSize: 12, color: "var(--text-muted)" }}>
                   The limit is in units of the token you spend (for example 5 for 5 USDT, or 0.0006 for 0.0006
                   {venue.nativeSymbol ?? "native coin"}), pushed directly to the Guard contract and enforced for every
-                  trade that spends that token, whichever site it comes from. Set a limit for each token you trade
-                  with.
+                  buy that spends that token, whichever site it comes from. Set a limit for each token you buy
+                  with. Selling back to {venue.nativeSymbol ?? "the native coin"} is never limited.
                 </p>
               )}
             </div>
