@@ -171,6 +171,12 @@ export async function assertAccountOwnership(
   return true;
 }
 
+// Server logs must never carry key material: strip 32-byte hex values (private keys, but also tx
+// hashes) and URL query strings (RPC providers often put API keys there).
+function redactSecrets(text: string): string {
+  return text.replace(/0x[0-9a-fA-F]{64}\b/g, "[redacted-hex32]").replace(/(https?:\/\/[^\s?"')]+)\?[^\s"')]*/g, "$1?[redacted]");
+}
+
 export function buildApp(deps: AppDeps): FastifyInstance {
   const app = Fastify({ logger: false });
 
@@ -192,10 +198,11 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   // Route handlers already return typed errors (400/409/501) for expected
   // cases. Anything reaching here is unexpected (e.g. a database driver
   // error) and must not leak internals like raw connection error text.
-  app.setErrorHandler((error: Error & { statusCode?: number }, _request, reply) => {
+  app.setErrorHandler((error: Error & { statusCode?: number }, request, reply) => {
     if (typeof error.statusCode === "number" && error.statusCode < 500) {
       return reply.status(error.statusCode).send({ error: error.name, message: error.message });
     }
+    console.error(`[api] 500 ${request.method} ${request.url}: ${redactSecrets(error.stack ?? error.message)}`);
     return reply.status(500).send({ error: "INTERNAL_ERROR", message: "Something went wrong. Please try again." });
   });
 
