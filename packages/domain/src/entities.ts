@@ -66,6 +66,20 @@ export interface EvmFlowState {
   lastWithdrawn: Record<string, string>;
 }
 
+/**
+ * Hyperliquid (and any other venue-API) accounts: what is needed to turn the venue's account value
+ * into a daily profit/loss number that deposits and withdrawals cannot distort. See
+ * reconcileAccountFromVenue.
+ */
+export interface VenueFlowState {
+  /** The UTC date (YYYY-MM-DD) that `equityStartOfDay` is anchored to. */
+  day: string;
+  /** The venue's own clock (ms) up to which its ledger has been read. */
+  cursorMs: number;
+  /** Net USD moved into (+) and out of (-) the trading account since the first reconcile. */
+  cumulativeFlowUsd: Decimal;
+}
+
 export interface AccountRiskHead {
   accountId: string;
   /** Equity at the start of the current UTC risk day (excludes intraday capital flows). */
@@ -83,6 +97,8 @@ export interface AccountRiskHead {
   version: number;
   /** EVM Safe accounts only; null/absent for every other account. */
   evmFlowState?: EvmFlowState | null;
+  /** Venue-API (Hyperliquid) accounts only; null/absent for every other account. */
+  venueFlowState?: VenueFlowState | null;
 }
 
 /** Per-account, per-UTC-day rollover record used for daily-loss accounting. */

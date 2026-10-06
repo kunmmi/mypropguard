@@ -1,5 +1,5 @@
 import { Decimal } from "decimal.js";
-import type { AccountRiskHead, EvmFlowState, OrderReservation, ProtectedAccount, RuleVersion, StateCheckpoint } from "@mypropguard/domain";
+import type { AccountRiskHead, EvmFlowState, OrderReservation, VenueFlowState, ProtectedAccount, RuleVersion, StateCheckpoint } from "@mypropguard/domain";
 import { OrderReservationStatus, StateConfidence } from "@mypropguard/domain";
 
 export function rowToProtectedAccount(row: Record<string, unknown>): ProtectedAccount {
@@ -32,6 +32,7 @@ export function rowToAccountRiskHead(row: Record<string, unknown>): AccountRiskH
     version: Number(row.version),
     // Absent (undefined) when the column does not exist yet, so a deploy can precede the migration.
     evmFlowState: "evm_flow_state" in row ? rowToEvmFlowState(row.evm_flow_state) : undefined,
+    venueFlowState: "venue_flow_state" in row ? rowToVenueFlowState(row.venue_flow_state) : undefined,
   };
 }
 
@@ -55,6 +56,17 @@ function rowToEvmFlowState(raw: unknown): EvmFlowState | null {
     lastBalances: value.lastBalances ?? {},
     lastWithdrawn: value.lastWithdrawn ?? {},
   };
+}
+
+function rowToVenueFlowState(raw: unknown): VenueFlowState | null {
+  if (!raw) return null;
+  const value = (typeof raw === "string" ? JSON.parse(raw) : raw) as { day: string; cursorMs: number; cumulativeFlowUsd: string };
+  return { day: value.day, cursorMs: Number(value.cursorMs), cumulativeFlowUsd: new Decimal(value.cumulativeFlowUsd) };
+}
+
+export function venueFlowStateToJson(state: VenueFlowState | null | undefined): string | null {
+  if (!state) return null;
+  return JSON.stringify({ day: state.day, cursorMs: state.cursorMs, cumulativeFlowUsd: state.cumulativeFlowUsd.toString() });
 }
 
 export function evmFlowStateToJson(state: EvmFlowState | null | undefined): string | null {

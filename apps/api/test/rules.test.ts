@@ -289,12 +289,13 @@ describe("POST /v1/accounts/:accountId/rules - MAX_DAILY_LOSS freeze enforcement
   it("reports a breach to the Guard when the account's equity has already dropped below the new rule's budget", async () => {
     const store = new InMemoryRiskLedgerStore();
     const freezeCalls: string[] = [];
+    let accountValue = 10_000;
     const venueReader: VenueStateReader = {
       getClearinghouseState: async (): Promise<ClearinghouseState> => ({
-        accountValue: new Decimal(9_000), // down from the 10,000 initialEquity
+        accountValue: new Decimal(accountValue),
         totalMarginUsed: new Decimal(0),
         totalNotionalPosition: new Decimal(0),
-        withdrawable: new Decimal(9_000),
+        withdrawable: new Decimal(accountValue),
         positions: [],
       }),
     };
@@ -306,11 +307,11 @@ describe("POST /v1/accounts/:accountId/rules - MAX_DAILY_LOSS freeze enforcement
     });
     await createEvmSafeAccount(app, "acct_freeze_5");
 
-    await app.inject({
-      method: "POST",
-      url: "/v1/accounts/acct_freeze_5/reconcile",
-      payload: { venueAddress: "0xanything" },
-    });
+    // The first reconcile anchors today's baseline to the real account value ($10,000)...
+    await app.inject({ method: "POST", url: "/v1/accounts/acct_freeze_5/reconcile", payload: { venueAddress: "0xanything" } });
+    // ...so a later, lower reading is a genuine loss.
+    accountValue = 9_000;
+    await app.inject({ method: "POST", url: "/v1/accounts/acct_freeze_5/reconcile", payload: { venueAddress: "0xanything" } });
 
     const response = await app.inject({
       method: "POST",

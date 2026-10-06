@@ -15,6 +15,7 @@ import {
 } from "@mypropguard/domain";
 import {
   evmFlowStateToJson,
+  venueFlowStateToJson,
   rowToAccountRiskHead,
   rowToOrderReservation,
   rowToProtectedAccount,
@@ -52,13 +53,17 @@ export class PgRiskLedgerStore implements RiskLedgerStore {
         updateAccountRiskHead: async (head) => {
           // evm_flow_state is only written when the head carries it, so accounts that never use it (and a
           // database that has not had migration 0009 yet) are unaffected.
-          const writesFlowState = head.evmFlowState !== undefined;
+          const writesEvm = head.evmFlowState !== undefined;
+          const writesVenue = head.venueFlowState !== undefined;
+          const evmParam = 11;
+          const venueParam = writesEvm ? 12 : 11;
           await client.query(
             `UPDATE account_risk_heads SET
                equity_start_of_day = $2, current_equity = $3, realized_pnl_today = $4,
                peak_equity = $5, current_drawdown = $6, open_notional = $7, leverage = $8,
                trade_count_today = $9, last_trade_at = $10,
-               ${writesFlowState ? "evm_flow_state = $11::jsonb," : ""}
+               ${writesEvm ? `evm_flow_state = $${evmParam}::jsonb,` : ""}
+               ${writesVenue ? `venue_flow_state = $${venueParam}::jsonb,` : ""}
                version = version + 1, updated_at = now()
              WHERE account_id = $1`,
             [
@@ -72,7 +77,8 @@ export class PgRiskLedgerStore implements RiskLedgerStore {
               head.leverage.toString(),
               head.tradeCountToday,
               head.lastTradeAt,
-              ...(writesFlowState ? [evmFlowStateToJson(head.evmFlowState)] : []),
+              ...(writesEvm ? [evmFlowStateToJson(head.evmFlowState)] : []),
+              ...(writesVenue ? [venueFlowStateToJson(head.venueFlowState)] : []),
             ],
           );
         },

@@ -225,6 +225,17 @@ export interface ClearinghouseState {
   totalNotionalPosition: Decimal;
   withdrawable: Decimal;
   positions: readonly VenuePosition[];
+  /** The venue's own clock (ms) when this state was computed. */
+  time?: number;
+}
+
+/** USD moved into (+) or out of (-) a venue trading account by its owner - not profit or loss. */
+export interface VenueCapitalFlow {
+  /** Unique per flow (the venue transaction hash). */
+  id: string;
+  /** The venue's own clock (ms). */
+  timeMs: number;
+  amountUsd: Decimal;
 }
 
 /**
@@ -235,6 +246,11 @@ export interface ClearinghouseState {
  */
 export interface VenueStateReader {
   getClearinghouseState(address: string): Promise<ClearinghouseState>;
+  /**
+   * Deposits, withdrawals and transfers for the account after `afterMs` (exclusive), oldest first.
+   * Optional: without it a reconcile cannot tell a withdrawal from a loss.
+   */
+  getCapitalFlows?(address: string, afterMs: number): Promise<readonly VenueCapitalFlow[]>;
 }
 
 /**
