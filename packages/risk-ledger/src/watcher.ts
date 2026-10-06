@@ -47,8 +47,11 @@ export class WatcherMemory {
 export interface WatcherDeps {
   store: RiskLedgerStore;
   venueReader: VenueStateReader;
-  /** The executor for one account (its own agent wallet). Undefined when the account has none. */
-  enforcerFor: (account: ProtectedAccount) => VenueEnforcer | undefined;
+  /**
+   * The executor for one account: an agent wallet that Hyperliquid has actually approved for it. Undefined when
+   * there is none. May look it up on the venue.
+   */
+  enforcerFor: (account: ProtectedAccount) => Promise<VenueEnforcer | undefined> | VenueEnforcer | undefined;
   mode: WatcherMode;
   /** Re-reads the ledger (flows) and re-anchors equity at least this often. Default 60 seconds. */
   reconcileEveryMs?: number;
@@ -198,11 +201,11 @@ export async function runWatcherCycle(deps: WatcherDeps, accountId: string): Pro
       continue;
     }
 
-    const enforcer = deps.enforcerFor(account);
+    const enforcer = await deps.enforcerFor(account);
     if (!enforcer) {
       failed++;
       if (memory.shouldRecord(accountId, `${plan.kind}:${describePlan(plan)}:NOAGENT`, nowMs, throttleMs)) {
-        await record(plan.kind, coin, detail, "FAILED", "this account has no agent wallet to act with");
+        await record(plan.kind, coin, detail, "FAILED", "no approved agent wallet to act with: approve this account's agent wallet on Hyperliquid (API tab, Approve Agent)");
       }
       continue;
     }

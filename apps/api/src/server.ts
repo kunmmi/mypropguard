@@ -395,6 +395,15 @@ if (watcherEnabled) {
   const intervalMs = Number(process.env.HL_WATCHER_INTERVAL_MS ?? 5_000);
   const slippageBps = Number(process.env.HL_CLOSE_SLIPPAGE_BPS ?? 500);
   const enforcers = new Map<string, VenueEnforcer>();
+  const approvedCache = new Map<string, { agents: string[]; at: number }>();
+  const approvedAgentsFor = async (venueAddress: string): Promise<string[]> => {
+    const key = venueAddress.toLowerCase();
+    const cached = approvedCache.get(key);
+    if (cached && Date.now() - cached.at < 30_000) return cached.agents;
+    const agents = await venueReader.getApprovedAgents(venueAddress);
+    approvedCache.set(key, { agents, at: Date.now() });
+    return agents;
+  };
   const memory = new WatcherMemory();
   let running = false;
   const deps = {
@@ -402,12 +411,22 @@ if (watcherEnabled) {
     venueReader,
     mode: watcherMode,
     memory,
-    enforcerFor: (account: { agentWalletId: string | null }): VenueEnforcer | undefined => {
-      if (!account.agentWalletId || !privyClientForWatcher) return undefined;
-      let enforcer = enforcers.get(account.agentWalletId);
+    // Acts through a wallet Hyperliquid has really approved for the trader's account: the account's own agent wallet
+    // if it is approved, otherwise the shared server wallet if that one is. An unapproved wallet's orders are
+    // rejected, so asking Hyperliquid first turns a silent failure into a clear instruction.
+    enforcerFor: async (account: { agentWalletId: string | null; agentWalletAddress: string | null; venueAddress?: string | null }): Promise<VenueEnforcer | undefined> => {
+      if (!privyClientForWatcher || !account.venueAddress) return undefined;
+      const approved = await approvedAgentsFor(account.venueAddress);
+      const candidates = [
+        { id: account.agentWalletId, address: account.agentWalletAddress },
+        { id: process.env.PRIVY_AGENT_WALLET_ID, address: process.env.PRIVY_AGENT_WALLET_ADDRESS },
+      ];
+      const pick = candidates.find((c) => c.id && c.address && approved.includes(c.address.toLowerCase()));
+      if (!pick?.id) return undefined;
+      let enforcer = enforcers.get(pick.id);
       if (!enforcer) {
-        enforcer = new HyperliquidEnforcer({ privyClient: privyClientForWatcher, walletId: account.agentWalletId, isTestnet: hlIsTestnet, slippageBps });
-        enforcers.set(account.agentWalletId, enforcer);
+        enforcer = new HyperliquidEnforcer({ privyClient: privyClientForWatcher, walletId: pick.id, isTestnet: hlIsTestnet, slippageBps });
+        enforcers.set(pick.id, enforcer);
       }
       return enforcer;
     },

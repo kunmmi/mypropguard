@@ -211,3 +211,25 @@ describe("HyperliquidInfoClient - unified accounts", () => {
     expect(flows.map((f) => [f.id, f.amountUsd.toString()])).toEqual([["0xb", "898.99"]]);
   });
 });
+
+describe("HyperliquidInfoClient.getApprovedAgents", () => {
+  const response = (body: unknown) => ({ ok: true, status: 200, json: async () => body, text: async () => "" }) as Response;
+
+  it("lists the agent wallets approved for the account, lowercased, skipping expired approvals", async () => {
+    const fetchImpl = vi.fn(async () =>
+      response([
+        { name: "Propguard", address: "0x761B7b7565713a2D26cd34383a3880F9dBD098Ab", validUntil: Date.now() + 86_400_000 },
+        { name: "Old", address: "0xAAAA000000000000000000000000000000000001", validUntil: Date.now() - 1000 },
+        { name: "No expiry", address: "0xBBBB000000000000000000000000000000000002" },
+      ]),
+    );
+    const agents = await new HyperliquidInfoClient({ fetchImpl: fetchImpl as any }).getApprovedAgents(ME);
+    expect(agents).toEqual(["0x761b7b7565713a2d26cd34383a3880f9dbd098ab", "0xbbbb000000000000000000000000000000000002"]);
+    expect(JSON.parse((fetchImpl.mock.calls[0] as any)[1].body)).toEqual({ type: "extraAgents", user: ME });
+  });
+
+  it("returns an empty list when the account has none", async () => {
+    const fetchImpl = vi.fn(async () => response([]));
+    expect(await new HyperliquidInfoClient({ fetchImpl: fetchImpl as any }).getApprovedAgents(ME)).toEqual([]);
+  });
+});

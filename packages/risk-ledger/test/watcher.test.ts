@@ -293,7 +293,20 @@ describe("runWatcherCycle - when something goes wrong", () => {
     const s = await lockedWithNewPosition({ hasAgent: false });
     const r = await s.tick();
     expect(r.failed).toBe(1);
-    expect(s.actions().some((a) => a.result === "FAILED" && a.error?.includes("no agent wallet"))).toBe(true);
+    expect(s.actions().some((a) => a.result === "FAILED" && a.error?.includes("no approved agent wallet"))).toBe(true);
+  });
+
+  it("finds the executor asynchronously, so it can ask the venue which agent wallet is approved", async () => {
+    const s = await lockedWithNewPosition();
+    let asked = 0;
+    s.deps.enforcerFor = async () => {
+      asked++;
+      await new Promise((r) => setTimeout(r, 1));
+      return s.enforcer;
+    };
+    const r = await s.tick();
+    expect(asked).toBe(1);
+    expect(r.executed).toBe(1);
   });
 
   it("sends no more than the per-cycle limit of orders", async () => {

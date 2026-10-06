@@ -201,6 +201,13 @@ export class HyperliquidInfoClient implements VenueStateReader {
     return mode;
   }
 
+  /** The agent wallets currently approved to trade for `address` (lowercase addresses), skipping expired approvals. */
+  async getApprovedAgents(address: string): Promise<string[]> {
+    const agents = await this.info<Array<{ address: string; validUntil?: number }>>({ type: "extraAgents", user: address });
+    if (!Array.isArray(agents)) return [];
+    return agents.filter((a) => !a.validUntil || a.validUntil > Date.now()).map((a) => a.address.toLowerCase());
+  }
+
   /** The latest point of Hyperliquid's own account-value history (all balances combined), or null if it has none. */
   private async getPortfolioValue(address: string): Promise<Decimal | null> {
     const portfolio = await this.info<Array<[string, { accountValueHistory?: Array<[number, string]> }]>>({ type: "portfolio", user: address });
