@@ -22,7 +22,7 @@ contract SpotRiskGuardSafeEndToEndTest is Test {
     address constant USDC = 0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d;
     address constant BUSD = 0xe9e7CEA3DedcA5984780Bafc599bD69ADd087D56;
     address constant CAKE = 0x0E09FaBB73Bd3Ade0a17ECC321fD13a19e81cE82;
-    address constant SAFE_SINGLETON_141 = 0x41675C099F32341bf84BFc5382aF534df5C7461a;
+    address constant SAFE_SINGLETON_141 = 0x29fcB43b46531BcA003ddC8FCB67FFE91900C762; // SafeL2 v1.4.1: the variant Safe{Wallet} supports on BNB Chain
     address constant SAFE_PROXY_FACTORY_141 = 0x4e1DCf7AD4e460CfD30791CCC4F9c8a4f820ec67;
     address constant MULTISEND_CALL_ONLY_141 = 0x9641d764fc13c8B624c04430C7356C1C7C8102e2;
 

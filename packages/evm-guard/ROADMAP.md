@@ -385,3 +385,14 @@ Limits: Safes on the older Guards have no `withdrawnTotal`, so their withdrawals
 Tokens with no PancakeSwap V2 pool are valued at $0 (a buy of one looks like a loss). Withdrawals by a
 method other than plain send or `transfer` are not recorded. The sweep only runs while the server is
 awake, so on a free Render plan something must ping `/healthz` (public, no login) every few minutes.
+
+## Found live: BNB Chain Safes must use the SafeL2 singleton
+
+Safe{Wallet} showed "This Safe account was created with an unsupported base contract" and disabled
+Continue for the Safe created on the standard v1.4.1 singleton (0x41675C09...). On BNB Chain the app
+only supports SafeL2 v1.4.1 (0x29fcB43b46531BcA003ddC8FCB67FFE91900C762), which also emits the events
+the Safe indexer needs - the likely cause of the long "indexing" delays seen earlier. Set
+`EVM_BSC_SAFE_SINGLETON` to the L2 address and create new accounts; the Guard is unchanged and the
+real-Safe end-to-end tests now run against SafeL2. Existing standard-singleton Safes cannot be migrated
+through the app because the migration is a delegatecall, which the Guard blocks by design; their funds
+can still be moved with a direct approveHash + execTransaction call.
