@@ -10,14 +10,20 @@ import type {
   OrderLifecycleReader,
   OrderSubmitter,
   SignerGateway,
+  VenueEnforcer,
 } from "@mypropguard/domain";
 import {
   createPool,
   PgExecutionSequencer,
   PgRiskLedgerStore,
+  WatcherMemory,
   reconcileAllEvmAccountsWithDailyLossRule,
+  watchAllHyperliquidAccounts,
 } from "@mypropguard/risk-ledger";
 import {
+  HYPERLIQUID_MAINNET_INFO_URL,
+  HYPERLIQUID_TESTNET_INFO_URL,
+  HyperliquidEnforcer,
   HyperliquidInfoClient,
   HyperliquidActionHasher,
   HyperliquidAgentWalletProvisioner,
@@ -82,7 +88,17 @@ const pool = createPool(DATABASE_URL);
 const store = new PgRiskLedgerStore(pool);
 // Read-only public Hyperliquid Info API client (Phase 2) — no credentials,
 // cannot place orders or move funds.
-const venueReader = new HyperliquidInfoClient();
+// HYPERLIQUID_NETWORK picks the venue network for reads and for everything that signs ("testnet" or
+// "mainnet"). Left unset it keeps the long-standing behaviour: public reads on mainnet, signing on testnet.
+// The watcher refuses to start without it set explicitly, so reads and orders can never target different networks.
+const hlNetworkEnv = process.env.HYPERLIQUID_NETWORK?.trim().toLowerCase();
+if (hlNetworkEnv && hlNetworkEnv !== "testnet" && hlNetworkEnv !== "mainnet") {
+  throw new Error('HYPERLIQUID_NETWORK must be "testnet" or "mainnet".');
+}
+const hlIsTestnet = hlNetworkEnv !== "mainnet";
+const venueReader = new HyperliquidInfoClient(
+  hlNetworkEnv ? { baseUrl: hlIsTestnet ? HYPERLIQUID_TESTNET_INFO_URL : HYPERLIQUID_MAINNET_INFO_URL } : {},
+);
 // Durable: an in-memory counter loses its high-water mark on every restart,
 // which risks re-issuing a nonce Hyperliquid already saw for this account -
 // it rejects anything lower than the last one it received. Real Postgres
@@ -101,6 +117,7 @@ let orderLifecycleReader: OrderLifecycleReader | undefined;
 let agentWalletProvisioner: AgentWalletProvisioner | undefined;
 let signerFactory: ((walletId: string, walletAddress: string) => SignerGateway) | undefined;
 let orderLifecycleFactory: ((walletId: string) => OrderSubmitter & OrderCanceller & OrderLifecycleReader) | undefined;
+let privyClientForWatcher: PrivyClient | undefined;
 
 if (process.env.ENABLE_REAL_SIGNER === "true") {
   const { PRIVY_APP_ID, PRIVY_APP_SECRET, PRIVY_AGENT_WALLET_ID, PRIVY_AGENT_WALLET_ADDRESS } = process.env;
@@ -110,12 +127,13 @@ if (process.env.ENABLE_REAL_SIGNER === "true") {
     );
   }
   const privyClient = new PrivyClient({ appId: PRIVY_APP_ID, appSecret: PRIVY_APP_SECRET });
+  privyClientForWatcher = privyClient;
   hasher = new HyperliquidActionHasher();
   signer = new PrivySignerGateway({
     privyClient,
     walletId: PRIVY_AGENT_WALLET_ID,
     walletAddress: PRIVY_AGENT_WALLET_ADDRESS as `0x${string}`,
-    isTestnet: true,
+    isTestnet: hlIsTestnet,
   });
   // Reuses the same Privy credentials - this is just "create a wallet",
   // not "sign with the server-wide one" - genuinely independent of the
@@ -129,7 +147,7 @@ if (process.env.ENABLE_REAL_SIGNER === "true") {
       privyClient,
       walletId,
       walletAddress: walletAddress as `0x${string}`,
-      isTestnet: true,
+      isTestnet: hlIsTestnet,
     });
   // eslint-disable-next-line no-console
   console.log("Real signer enabled: HyperliquidActionHasher + PrivySignerGateway. New accounts get a real provisioned wallet.");
@@ -141,13 +159,13 @@ if (process.env.ENABLE_REAL_SIGNER === "true") {
     const lifecycle = new HyperliquidOrderLifecycle({
       privyClient,
       walletId: PRIVY_AGENT_WALLET_ID,
-      isTestnet: true,
+      isTestnet: hlIsTestnet,
     });
     orderSubmitter = lifecycle;
     orderCanceller = lifecycle;
     orderLifecycleReader = lifecycle;
     // Per-account equivalent of signerFactory - see resolveOrderSubmitterForAccount and siblings in app.ts.
-    orderLifecycleFactory = (walletId) => new HyperliquidOrderLifecycle({ privyClient, walletId, isTestnet: true });
+    orderLifecycleFactory = (walletId) => new HyperliquidOrderLifecycle({ privyClient, walletId, isTestnet: hlIsTestnet });
     // eslint-disable-next-line no-console
     console.log("Venue submission enabled: orders placed via /v1/execution/dry-run now actually reach Hyperliquid.");
   }
@@ -307,8 +325,23 @@ if (ethereumConfig) {
   if (ethereumConfig.guardSyncer) evmGuardSyncers[mainnet.id] = ethereumConfig.guardSyncer;
 }
 
+// Hyperliquid watcher (see packages/risk-ledger/src/watcher.ts). Off by default. "log" only records what it would do;
+// "enforce" really cancels orders and places reduce-only closes through each account's own agent wallet. It needs
+// the real signer (Privy) for "enforce", and HYPERLIQUID_NETWORK set explicitly so reads and orders share a network.
+const watcherEnabled = process.env.ENABLE_HL_WATCHER === "true";
+const watcherMode: "log" | "enforce" = process.env.HL_WATCHER_MODE?.trim().toLowerCase() === "enforce" ? "enforce" : "log";
+if (watcherEnabled) {
+  if (!hlNetworkEnv) {
+    throw new Error('ENABLE_HL_WATCHER=true requires HYPERLIQUID_NETWORK to be set to "testnet" or "mainnet".');
+  }
+  if (watcherMode === "enforce" && !privyClientForWatcher) {
+    throw new Error("HL_WATCHER_MODE=enforce requires ENABLE_REAL_SIGNER=true (the agent wallets are Privy wallets).");
+  }
+}
+
 const app = buildApp({
   store,
+  watcherMode: watcherEnabled ? watcherMode : undefined,
   venueReader,
   executionSequencer,
   hasher,
@@ -356,6 +389,49 @@ if (Object.keys(evmEquityReaders).length > 0) {
   }, sweepIntervalMs);
   // eslint-disable-next-line no-console
   console.log(`Max-daily-loss sweep enabled, running every ${sweepIntervalMs}ms.`);
+}
+
+if (watcherEnabled) {
+  const intervalMs = Number(process.env.HL_WATCHER_INTERVAL_MS ?? 5_000);
+  const slippageBps = Number(process.env.HL_CLOSE_SLIPPAGE_BPS ?? 500);
+  const enforcers = new Map<string, VenueEnforcer>();
+  const memory = new WatcherMemory();
+  let running = false;
+  const deps = {
+    store,
+    venueReader,
+    mode: watcherMode,
+    memory,
+    enforcerFor: (account: { agentWalletId: string | null }): VenueEnforcer | undefined => {
+      if (!account.agentWalletId || !privyClientForWatcher) return undefined;
+      let enforcer = enforcers.get(account.agentWalletId);
+      if (!enforcer) {
+        enforcer = new HyperliquidEnforcer({ privyClient: privyClientForWatcher, walletId: account.agentWalletId, isTestnet: hlIsTestnet, slippageBps });
+        enforcers.set(account.agentWalletId, enforcer);
+      }
+      return enforcer;
+    },
+  };
+  setInterval(() => {
+    if (running) return; // a slow pass must never overlap the next one
+    running = true;
+    watchAllHyperliquidAccounts(deps)
+      .then(({ errors }) => {
+        for (const { accountId, error } of errors) {
+          // eslint-disable-next-line no-console
+          console.error(`Hyperliquid watcher: ${accountId} failed this cycle:`, error instanceof Error ? error.message : error);
+        }
+      })
+      .catch((error) => {
+        // eslint-disable-next-line no-console
+        console.error("Hyperliquid watcher pass failed entirely:", error);
+      })
+      .finally(() => {
+        running = false;
+      });
+  }, intervalMs);
+  // eslint-disable-next-line no-console
+  console.log(`Hyperliquid watcher on (${hlIsTestnet ? "testnet" : "MAINNET"}, mode=${watcherMode}), every ${intervalMs}ms.`);
 }
 
 const port = Number(process.env.PORT ?? 3000);

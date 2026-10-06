@@ -13,3 +13,4 @@ export * from "./postgres/pool.js";
 export * from "./postgres/pgRiskLedgerStore.js";
 export * from "./postgres/pgExecutionSequencer.js";
 export * from "./postgres/mappers.js";
+export * from "./watcher.js";

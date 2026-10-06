@@ -77,6 +77,18 @@ export function evaluate(input: ProjectedRiskInput): DecisionArtifact {
     );
   }
 
+  // The Hyperliquid watcher has locked this account for the UTC day after a rule was broken: no new exposure
+  // may be opened until it lifts at the next UTC day (closing and reducing were already allowed above).
+  const lockedDay = accountRiskHead.enforcement?.lockedDay;
+  if (lockedDay && lockedDay === new Date().toISOString().slice(0, 10)) {
+    return decision(
+      DecisionOutcome.BLOCK,
+      ReasonCode.ACCOUNT_LOCKED_FOR_TODAY,
+      `Account is locked for today (${accountRiskHead.enforcement?.reason ?? "a rule was broken"}). Existing positions can be reduced or closed.`,
+      null,
+    );
+  }
+
   const cooldownRule = findRule(rules, RuleType.COOLDOWN);
   if (cooldownRule && accountRiskHead.lastTradeAt) {
     const cooldownEndsAt = accountRiskHead.lastTradeAt.getTime() + cooldownRule.param.toNumber() * 1000;

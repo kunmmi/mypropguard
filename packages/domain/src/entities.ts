@@ -8,6 +8,8 @@ import type {
 /** A provisioned account's identity/ownership record - separate from AccountRiskHead, which is the risk numbers. */
 export interface ProtectedAccount {
   accountId: string;
+  /** Hyperliquid accounts: the trader's own Hyperliquid address, which the watcher reads and the agent wallet trades for. */
+  venueAddress?: string | null;
   ownerUserId: string;
   venue: string;
   protectionEnabled: boolean;
@@ -80,6 +82,25 @@ export interface VenueFlowState {
   cumulativeFlowUsd: Decimal;
 }
 
+/**
+ * Hyperliquid watcher state. While an account is locked for a UTC day, any NEW exposure is cancelled or
+ * trimmed straight away; existing positions are left alone and may be reduced but not grown.
+ */
+export interface EnforcementState {
+  /** The UTC date (YYYY-MM-DD) the account is locked for, or null when it is not locked. */
+  lockedDay: string | null;
+  /** The rule type that caused the lock (e.g. "MAX_DAILY_LOSS"). */
+  reason: string | null;
+  lockedAtMs: number | null;
+  /**
+   * Largest signed size allowed per coin while locked (+ long, - short; 0 or absent = none). It only ever
+   * shrinks as the trader reduces a position, so exposure that was closed cannot be reopened.
+   */
+  ceilings: Record<string, Decimal>;
+  /** Positions the last time no rule was broken: what "before the breaching trade" means. */
+  lastCompliant: { atMs: number; positions: Record<string, Decimal> } | null;
+}
+
 export interface AccountRiskHead {
   accountId: string;
   /** Equity at the start of the current UTC risk day (excludes intraday capital flows). */
@@ -99,6 +120,8 @@ export interface AccountRiskHead {
   evmFlowState?: EvmFlowState | null;
   /** Venue-API (Hyperliquid) accounts only; null/absent for every other account. */
   venueFlowState?: VenueFlowState | null;
+  /** Hyperliquid accounts only; null/absent when the watcher has never run for the account. */
+  enforcement?: EnforcementState | null;
 }
 
 /** Per-account, per-UTC-day rollover record used for daily-loss accounting. */

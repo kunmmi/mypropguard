@@ -8,12 +8,14 @@ import {
   type NewAccountRuleInput,
   type NewReservationInput,
   type NewStateCheckpointInput,
+  type EnforcementActionRecord,
   type OrderReservation,
   type ProtectedAccount,
   type RiskLedgerStore,
   type RuleType,
 } from "@mypropguard/domain";
 import {
+  enforcementStateToJson,
   evmFlowStateToJson,
   venueFlowStateToJson,
   rowToAccountRiskHead,
@@ -51,19 +53,19 @@ export class PgRiskLedgerStore implements RiskLedgerStore {
           return rowToAccountRiskHead(row);
         },
         updateAccountRiskHead: async (head) => {
-          // evm_flow_state is only written when the head carries it, so accounts that never use it (and a
-          // database that has not had migration 0009 yet) are unaffected.
-          const writesEvm = head.evmFlowState !== undefined;
-          const writesVenue = head.venueFlowState !== undefined;
-          const evmParam = 11;
-          const venueParam = writesEvm ? 12 : 11;
+          // The JSON state columns are only written when the head carries them, so accounts that never use
+          // them (and a database that has not had their migration yet) are unaffected.
+          const optional: Array<[string, string | null]> = [];
+          if (head.evmFlowState !== undefined) optional.push(["evm_flow_state", evmFlowStateToJson(head.evmFlowState)]);
+          if (head.venueFlowState !== undefined) optional.push(["venue_flow_state", venueFlowStateToJson(head.venueFlowState)]);
+          if (head.enforcement !== undefined) optional.push(["enforcement_state", enforcementStateToJson(head.enforcement)]);
+          const optionalSql = optional.map(([column], i) => `${column} = $${11 + i}::jsonb,`).join(" ");
           await client.query(
             `UPDATE account_risk_heads SET
                equity_start_of_day = $2, current_equity = $3, realized_pnl_today = $4,
                peak_equity = $5, current_drawdown = $6, open_notional = $7, leverage = $8,
                trade_count_today = $9, last_trade_at = $10,
-               ${writesEvm ? `evm_flow_state = $${evmParam}::jsonb,` : ""}
-               ${writesVenue ? `venue_flow_state = $${venueParam}::jsonb,` : ""}
+               ${optionalSql}
                version = version + 1, updated_at = now()
              WHERE account_id = $1`,
             [
@@ -77,8 +79,7 @@ export class PgRiskLedgerStore implements RiskLedgerStore {
               head.leverage.toString(),
               head.tradeCountToday,
               head.lastTradeAt,
-              ...(writesEvm ? [evmFlowStateToJson(head.evmFlowState)] : []),
-              ...(writesVenue ? [venueFlowStateToJson(head.venueFlowState)] : []),
+              ...optional.map(([, value]) => value),
             ],
           );
         },
@@ -187,6 +188,40 @@ export class PgRiskLedgerStore implements RiskLedgerStore {
       [ruleType],
     );
     return result.rows.map(rowToProtectedAccount);
+  }
+
+  async listAccountsByVenue(venue: string): Promise<readonly ProtectedAccount[]> {
+    const result = await this.pool.query("SELECT * FROM protected_accounts WHERE venue = $1", [venue]);
+    return result.rows.map(rowToProtectedAccount);
+  }
+
+  async setVenueAddress(accountId: string, venueAddress: string): Promise<void> {
+    await this.pool.query("UPDATE protected_accounts SET venue_address = $2 WHERE account_id = $1", [accountId, venueAddress]);
+  }
+
+  async recordEnforcementAction(record: EnforcementActionRecord): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO enforcement_actions (account_id, mode, kind, coin, detail, result, error)
+       VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7)`,
+      [record.accountId, record.mode, record.kind, record.coin ?? null, JSON.stringify(record.detail), record.result, record.error ?? null],
+    );
+  }
+
+  async listEnforcementActions(accountId: string, limit: number): Promise<readonly EnforcementActionRecord[]> {
+    const result = await this.pool.query(
+      "SELECT * FROM enforcement_actions WHERE account_id = $1 ORDER BY created_at DESC, id DESC LIMIT $2",
+      [accountId, limit],
+    );
+    return result.rows.map((row) => ({
+      accountId: row.account_id as string,
+      createdAt: new Date(row.created_at as string),
+      mode: row.mode as EnforcementActionRecord["mode"],
+      kind: row.kind as EnforcementActionRecord["kind"],
+      coin: (row.coin as string | null) ?? null,
+      detail: (row.detail as Record<string, unknown>) ?? {},
+      result: row.result as EnforcementActionRecord["result"],
+      error: (row.error as string | null) ?? null,
+    }));
   }
 
   async createAccount(input: NewAccountInput): Promise<void> {

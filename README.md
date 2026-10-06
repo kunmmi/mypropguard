@@ -297,3 +297,26 @@ yourself:
 
 No Dockerfile/CI deploy workflow exists yet — add one if/when you pick a
 specific host, since the exact shape depends on which one.
+
+## Hyperliquid watcher (react, don't intercept)
+
+Hyperliquid accounts are not programmable, so a trader who clicks Buy on Hyperliquid's own site cannot be stopped
+before the order is placed. Instead the watcher (`packages/risk-ledger/src/watcher.ts`, decisions in
+`packages/risk-engine/src/enforcement.ts`) reads the trader's account every few seconds and reacts:
+
+- When a watched rule is broken (daily loss, drawdown, leverage, position size, exposure) the account is locked for
+  the rest of the UTC day. Positions open at that moment are left alone. The trade that broke the rule - found by
+  comparing with the last compliant reading - and every new trade after it is cancelled or trimmed with a
+  reduce-only IOC order. The trader may still reduce or close what they hold; a position that shrank cannot be
+  grown back, a closed one cannot be reopened, and a flip's new side is closed.
+- It acts through the account's own approved agent wallet, which Hyperliquid restricts to trading. Every order it
+  sends is reduce-only, so a repeated or mistaken instruction can never open or flip a position.
+- A lock based on equity is only created after the ledger of deposits and withdrawals has been re-read, so a
+  withdrawal is never mistaken for a loss. A failed read changes nothing.
+- MyPropGuard-routed orders are also blocked while locked (`ACCOUNT_LOCKED_FOR_TODAY`); reducing is still allowed.
+- Every decision is written to `enforcement_actions`, shown on the dashboard. In `log` mode it only records what it
+  would do. Not yet watched: trade frequency and cooldown (they need fill history).
+
+Limits: it reacts after the fact (a bad trade is live for seconds; closes happen at market with slippage); the trader
+can revoke the agent approval on Hyperliquid; it covers one account (not sub-accounts); the Info API rate limit
+(about 1200 weight/min per IP) bounds how many accounts one server can watch at a 5 second interval.

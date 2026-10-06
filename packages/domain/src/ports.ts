@@ -229,6 +229,27 @@ export interface ClearinghouseState {
   time?: number;
 }
 
+/** A resting order on a venue account. */
+export interface VenueOpenOrder {
+  coin: string;
+  /** The venue's own order id. */
+  oid: number;
+  isBuy: boolean;
+  size: Decimal;
+  reduceOnly: boolean;
+}
+
+/**
+ * Acts on a trader's venue account on MyPropGuard's behalf, through the account's own approved agent wallet.
+ * Deliberately narrow: it can only cancel orders and place reduce-only closing orders, so it can shrink or
+ * remove exposure but never open any, and never move funds.
+ */
+export interface VenueEnforcer {
+  cancelOrder(coin: string, oid: number): Promise<void>;
+  /** Places a reduce-only, immediate-or-cancel order that can only shrink an existing position. */
+  reduceOnlyClose(input: { coin: string; isBuy: boolean; size: Decimal }): Promise<{ detail: string }>;
+}
+
 /** USD moved into (+) or out of (-) a venue trading account by its owner - not profit or loss. */
 export interface VenueCapitalFlow {
   /** Unique per flow (the venue transaction hash). */
@@ -251,6 +272,8 @@ export interface VenueStateReader {
    * Optional: without it a reconcile cannot tell a withdrawal from a loss.
    */
   getCapitalFlows?(address: string, afterMs: number): Promise<readonly VenueCapitalFlow[]>;
+  /** Resting orders on the account. Optional: only the watcher needs them. */
+  getOpenOrders?(address: string): Promise<readonly VenueOpenOrder[]>;
 }
 
 /**
@@ -261,6 +284,19 @@ export interface VenueStateReader {
  * with `SELECT ... FOR UPDATE`; an in-memory implementation can use a plain
  * mutex — both must guarantee only one `fn` runs at a time per accountId.
  */
+/** One thing the watcher decided to do (or, in log-only mode, would have done), and what happened. */
+export interface EnforcementActionRecord {
+  accountId: string;
+  createdAt?: Date;
+  mode: "log" | "enforce";
+  kind: "LOCK" | "UNLOCK" | "CANCEL" | "TRIM" | "WARNING";
+  coin?: string | null;
+  detail: Record<string, unknown>;
+  /** WOULD_DO: log-only mode. DONE / FAILED: enforce mode. INFO: a state change with nothing to execute. */
+  result: "WOULD_DO" | "DONE" | "FAILED" | "INFO";
+  error?: string | null;
+}
+
 export interface RiskLedgerStore {
   runExclusive<T>(accountId: string, fn: (ctx: LedgerContext) => Promise<T>): Promise<T>;
   /** Provisions a brand-new account. Throws AccountAlreadyExistsError on a duplicate accountId. */
@@ -282,6 +318,13 @@ export interface RiskLedgerStore {
    * type. Read-only, no per-account lock needed.
    */
   listAccountsWithActiveRuleType(ruleType: RuleType): Promise<readonly ProtectedAccount[]>;
+  /** Every account on a venue (e.g. "hyperliquid"), regardless of owner - for the watcher sweep. */
+  listAccountsByVenue(venue: string): Promise<readonly ProtectedAccount[]>;
+  /** Saves the trader's own address on the venue (Hyperliquid) so the watcher can read it. */
+  setVenueAddress(accountId: string, venueAddress: string): Promise<void>;
+  recordEnforcementAction(record: EnforcementActionRecord): Promise<void>;
+  /** Newest first. */
+  listEnforcementActions(accountId: string, limit: number): Promise<readonly EnforcementActionRecord[]>;
 }
 
 export class AccountAlreadyExistsError extends Error {

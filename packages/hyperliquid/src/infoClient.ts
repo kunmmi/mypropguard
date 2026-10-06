@@ -1,5 +1,5 @@
 import { Decimal } from "decimal.js";
-import type { ClearinghouseState, VenueCapitalFlow, VenuePosition, VenueStateReader } from "@mypropguard/domain";
+import type { ClearinghouseState, VenueCapitalFlow, VenueOpenOrder, VenuePosition, VenueStateReader } from "@mypropguard/domain";
 
 export const HYPERLIQUID_MAINNET_INFO_URL = "https://api.hyperliquid.xyz/info";
 export const HYPERLIQUID_TESTNET_INFO_URL = "https://api.hyperliquid-testnet.xyz/info";
@@ -45,6 +45,19 @@ export function mapClearinghouseState(raw: RawClearinghouseState): Clearinghouse
     positions,
     time: raw.time,
   };
+}
+
+/** One entry of Hyperliquid's `frontendOpenOrders`. Side is "B" for a buy (bid) and "A" for a sell (ask). */
+export interface RawOpenOrder {
+  coin: string;
+  side: string;
+  sz: string;
+  oid: number;
+  reduceOnly?: boolean;
+}
+
+export function mapOpenOrder(raw: RawOpenOrder): VenueOpenOrder {
+  return { coin: raw.coin, oid: raw.oid, isBuy: raw.side === "B", size: new Decimal(raw.sz), reduceOnly: raw.reduceOnly === true };
 }
 
 /** One entry of Hyperliquid's `userNonFundingLedgerUpdates`, as returned (only fields we read are declared). */
@@ -179,5 +192,18 @@ export class HyperliquidInfoClient implements VenueStateReader {
       startTime = updates[updates.length - 1]!.time + 1;
     }
     return flows;
+  }
+
+  /** Resting orders on the account, including trigger orders (stops and take-profits). */
+  async getOpenOrders(address: string): Promise<readonly VenueOpenOrder[]> {
+    const response = await this.fetchImpl(this.baseUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ type: "frontendOpenOrders", user: address }),
+    });
+    if (!response.ok) {
+      throw new Error(`Hyperliquid open-orders request failed: ${response.status} ${await response.text()}`);
+    }
+    return ((await response.json()) as RawOpenOrder[]).map(mapOpenOrder);
   }
 }

@@ -73,6 +73,8 @@ export function registerAccountRoutes(app: FastifyInstance, deps: AppDeps): void
       throw error;
     }
 
+    if (body.venueAddress) await deps.store.setVenueAddress(body.accountId, body.venueAddress);
+
     const response: CreateAccountResponse = {
       accountId: body.accountId,
       protectionOn: false,
@@ -112,6 +114,7 @@ export function registerAccountRoutes(app: FastifyInstance, deps: AppDeps): void
         createdAt: a.createdAt.toISOString(),
         agentWalletAddress: a.agentWalletAddress,
         evmSafeAddress: a.evmSafeAddress,
+        venueAddress: a.venueAddress ?? null,
       })),
     };
     return reply.send(listAccountsResponseSchema.parse(response));

@@ -21,6 +21,7 @@ import type { AuthPreHandler } from "./auth.js";
 import { registerAccountRoutes } from "./routes/accounts.js";
 import { registerOrderRoutes } from "./routes/orders.js";
 import { registerProtectionRoutes } from "./routes/protection.js";
+import { registerEnforcementRoutes } from "./routes/enforcement.js";
 import { registerReconciliationRoutes } from "./routes/reconciliation.js";
 import { registerExecutionRoutes } from "./routes/execution.js";
 import { registerRuleRoutes } from "./routes/rules.js";
@@ -82,6 +83,8 @@ export interface AppDeps {
    * over but cannot net deposits and withdrawals out.
    */
   evmStateReaders?: Record<number, EvmSafeStateReader>;
+  /** How the Hyperliquid watcher is running on this server: "log" (records only), "enforce" (acts), or absent (off). Shown on the dashboard. */
+  watcherMode?: "log" | "enforce";
   /** Finds the tokens a Safe holds (Moralis), keyed by chain id. Optional; see evmStateReaders. */
   evmTokenDiscoveries?: Record<number, EvmTokenDiscovery>;
   /**
@@ -215,6 +218,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   registerReconciliationRoutes(app, deps);
   registerExecutionRoutes(app, deps);
   registerRuleRoutes(app, deps);
+  registerEnforcementRoutes(app, deps);
 
   // Route handlers already return typed errors (400/409/501) for expected
   // cases. Anything reaching here is unexpected (e.g. a database driver

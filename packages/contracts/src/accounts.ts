@@ -33,6 +33,8 @@ export const createAccountRequestSchema = z.object({
    */
   evmOwnerWalletAddress: z.string().min(1).optional(),
   evmChainId: z.number().int().positive().optional(),
+  /** Hyperliquid accounts: the trader's own Hyperliquid address, which the watcher reads. */
+  venueAddress: z.string().min(1).optional(),
 });
 export type CreateAccountRequest = z.infer<typeof createAccountRequestSchema>;
 
@@ -54,6 +56,7 @@ export const protectedAccountSchema = z.object({
   createdAt: isoDateTime,
   agentWalletAddress: z.string().nullable(),
   evmSafeAddress: z.string().nullable().optional(),
+  venueAddress: z.string().nullable().optional(),
 });
 export type ProtectedAccountResponse = z.infer<typeof protectedAccountSchema>;
 

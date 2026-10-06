@@ -4,3 +4,4 @@ export * from "./riskDayRollover.js";
 export * from "./safeSize.js";
 export * from "./riskEngine.js";
 export * from "./protectionGate.js";
+export * from "./enforcement.js";

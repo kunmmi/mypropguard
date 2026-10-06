@@ -1,5 +1,5 @@
 import { Decimal } from "decimal.js";
-import type { AccountRiskHead, EvmFlowState, OrderReservation, VenueFlowState, ProtectedAccount, RuleVersion, StateCheckpoint } from "@mypropguard/domain";
+import type { AccountRiskHead, EnforcementState, EvmFlowState, OrderReservation, VenueFlowState, ProtectedAccount, RuleVersion, StateCheckpoint } from "@mypropguard/domain";
 import { OrderReservationStatus, StateConfidence } from "@mypropguard/domain";
 
 export function rowToProtectedAccount(row: Record<string, unknown>): ProtectedAccount {
@@ -14,6 +14,7 @@ export function rowToProtectedAccount(row: Record<string, unknown>): ProtectedAc
     evmOwnerWalletAddress: (row.evm_owner_wallet_address as string | null) ?? null,
     evmSafeAddress: (row.evm_safe_address as string | null) ?? null,
     evmChainId: (row.evm_chain_id as number | null) ?? null,
+    venueAddress: (row.venue_address as string | null) ?? null,
   };
 }
 
@@ -33,6 +34,7 @@ export function rowToAccountRiskHead(row: Record<string, unknown>): AccountRiskH
     // Absent (undefined) when the column does not exist yet, so a deploy can precede the migration.
     evmFlowState: "evm_flow_state" in row ? rowToEvmFlowState(row.evm_flow_state) : undefined,
     venueFlowState: "venue_flow_state" in row ? rowToVenueFlowState(row.venue_flow_state) : undefined,
+    enforcement: "enforcement_state" in row ? rowToEnforcementState(row.enforcement_state) : undefined,
   };
 }
 
@@ -67,6 +69,42 @@ function rowToVenueFlowState(raw: unknown): VenueFlowState | null {
 export function venueFlowStateToJson(state: VenueFlowState | null | undefined): string | null {
   if (!state) return null;
   return JSON.stringify({ day: state.day, cursorMs: state.cursorMs, cumulativeFlowUsd: state.cumulativeFlowUsd.toString() });
+}
+
+function decimalRecord(raw: Record<string, string> | undefined): Record<string, Decimal> {
+  return Object.fromEntries(Object.entries(raw ?? {}).map(([coin, size]) => [coin, new Decimal(size)]));
+}
+
+function rowToEnforcementState(raw: unknown): EnforcementState | null {
+  if (!raw) return null;
+  const value = (typeof raw === "string" ? JSON.parse(raw) : raw) as {
+    lockedDay: string | null;
+    reason: string | null;
+    lockedAtMs: number | null;
+    ceilings?: Record<string, string>;
+    lastCompliant?: { atMs: number; positions: Record<string, string> } | null;
+  };
+  return {
+    lockedDay: value.lockedDay ?? null,
+    reason: value.reason ?? null,
+    lockedAtMs: value.lockedAtMs ?? null,
+    ceilings: decimalRecord(value.ceilings),
+    lastCompliant: value.lastCompliant
+      ? { atMs: Number(value.lastCompliant.atMs), positions: decimalRecord(value.lastCompliant.positions) }
+      : null,
+  };
+}
+
+export function enforcementStateToJson(state: EnforcementState | null | undefined): string | null {
+  if (!state) return null;
+  const strings = (record: Record<string, Decimal>) => Object.fromEntries(Object.entries(record).map(([k, v]) => [k, v.toString()]));
+  return JSON.stringify({
+    lockedDay: state.lockedDay,
+    reason: state.reason,
+    lockedAtMs: state.lockedAtMs,
+    ceilings: strings(state.ceilings),
+    lastCompliant: state.lastCompliant ? { atMs: state.lastCompliant.atMs, positions: strings(state.lastCompliant.positions) } : null,
+  });
 }
 
 export function evmFlowStateToJson(state: EvmFlowState | null | undefined): string | null {

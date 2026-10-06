@@ -13,6 +13,7 @@ import { VENUES, getVenue, isSafeVenue, type VenueConfig } from "@/lib/venues";
 import {
   api,
   type DryRunOrderResult,
+  type EnforcementStatus,
   type ProtectedAccountSummary,
   type ProtectionStatus,
   type ReconcileResult,
@@ -212,6 +213,7 @@ function Dashboard({ session }: { session: Session }) {
 
   const [venueAddress, setVenueAddress] = useState("");
   const [reconcileResult, setReconcileResult] = useState<ReconcileResult | null>(null);
+  const [enforcement, setEnforcement] = useState<EnforcementStatus | null>(null);
 
   const [coin, setCoin] = useState("BTC");
   const [side, setSide] = useState<"BUY" | "SELL">("BUY");
@@ -248,6 +250,13 @@ function Dashboard({ session }: { session: Session }) {
   const [showGuide, setShowGuide] = useState(false);
 
   useEffect(() => {
+    if (!accountId || !status || isSafeVenue(venue)) return;
+    const timer = window.setInterval(() => void loadEnforcement(accountId), 10_000);
+    return () => window.clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accountId, status, venue.id]);
+
+  useEffect(() => {
     const saved = window.localStorage.getItem(STORAGE_KEY);
     if (saved) {
       setAccountId(saved);
@@ -280,11 +289,20 @@ function Dashboard({ session }: { session: Session }) {
       setStatus(result);
       window.localStorage.setItem(STORAGE_KEY, id);
       await loadRules(id);
+      void loadEnforcement(id);
     } catch (err) {
       setStatus(null);
       setError(err instanceof Error ? err.message : "Failed to load account");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function loadEnforcement(id: string) {
+    try {
+      setEnforcement(await api.getEnforcement(id));
+    } catch {
+      setEnforcement(null); // the watcher panel is informational; a failed read must not break the page
     }
   }
 
@@ -377,6 +395,7 @@ function Dashboard({ session }: { session: Session }) {
         ...(newIsSafe && evmOwnerWalletAddress && newVenueConfig.chainId
           ? { evmOwnerWalletAddress, evmChainId: newVenueConfig.chainId }
           : {}),
+        ...(!newIsSafe && venueAddress ? { venueAddress } : {}),
       });
       await Promise.all([loadAccount(accountId), loadAccounts()]);
       setShowNewAccount(false);
@@ -551,6 +570,8 @@ function Dashboard({ session }: { session: Session }) {
                         key={account.accountId}
                         onClick={() => {
                           setAccountId(account.accountId);
+                          setVenueAddress(account.venueAddress ?? "");
+                          setEnforcement(null);
                           setEvmReconcile(null);
                           setShowNewAccount(false);
                           void loadAccount(account.accountId);
@@ -648,6 +669,18 @@ function Dashboard({ session }: { session: Session }) {
                 />
               )}
             </div>
+
+            {!newIsSafe && (
+              <div style={{ marginTop: "var(--space-3)" }}>
+                <Input
+                  label="Your Hyperliquid address"
+                  value={venueAddress}
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => setVenueAddress(e.target.value)}
+                  placeholder="0x..."
+                  helpText="The Hyperliquid account you trade on. MyPropGuard's watcher reads it, and can only cancel orders and close positions - it can never withdraw."
+                />
+              </div>
+            )}
 
             {newIsSafe && (
               <div style={{ marginTop: "var(--space-3)" }}>
@@ -959,6 +992,82 @@ function Dashboard({ session }: { session: Session }) {
                 Equity ${evmReconcile.currentEquity}, peak ${evmReconcile.peakEquity}
               </div>
             )}
+          </Panel>
+        )}
+
+        {status && !isSafeVenue(venue) && (
+          <Panel title="Watcher">
+            <p style={{ marginTop: 0, fontSize: 13, color: "var(--text-muted)" }}>
+              Watches your Hyperliquid account every few seconds, so you can keep trading on Hyperliquid itself. If a
+              rule is broken the account is locked until midnight UTC: positions you already hold are left alone, but
+              the trade that broke the rule, and every new trade after it, is closed straight away. You can still
+              reduce or close what you hold.
+            </p>
+            <div style={{ display: "flex", gap: "var(--space-2)", flexWrap: "wrap", marginBottom: "var(--space-3)" }}>
+              {enforcement && (
+                <StatusBadge tone={enforcement.watcherMode === "enforce" ? "success" : enforcement.watcherMode === "log" ? "warning" : "neutral"}>
+                  {enforcement.watcherMode === "enforce"
+                    ? "Watching and acting"
+                    : enforcement.watcherMode === "log"
+                      ? "Log only: not acting yet"
+                      : "Watcher is off on this server"}
+                </StatusBadge>
+              )}
+              {enforcement?.lockedToday && (
+                <StatusBadge tone="danger">Locked until 00:00 UTC ({enforcement.reason})</StatusBadge>
+              )}
+              {enforcement && !enforcement.lockedToday && enforcement.watcherMode !== "off" && (
+                <StatusBadge tone="success">No rule broken today</StatusBadge>
+              )}
+            </div>
+            {!selectedAccount?.venueAddress && (
+              <p style={{ fontSize: 13, color: "var(--text-muted)" }}>
+                Save your Hyperliquid address (use the Reconcile box below) so the watcher can see this account.
+              </p>
+            )}
+            {enforcement && Object.keys(enforcement.ceilings).length > 0 && (
+              <p style={{ fontSize: 13, color: "var(--text-muted)" }}>
+                While locked, the most you may hold:{" "}
+                {Object.entries(enforcement.ceilings)
+                  .map(([coin, size]) => `${coin} ${size}`)
+                  .join(", ")}
+                . It only goes down as you reduce a position.
+              </p>
+            )}
+            {enforcement && enforcement.actions.length > 0 && (
+              <div style={{ display: "grid", gap: "var(--space-2)", marginTop: "var(--space-3)" }}>
+                <div style={{ fontSize: 13, fontWeight: 600 }}>Recent activity</div>
+                {enforcement.actions.slice(0, 10).map((action, i) => (
+                  <div
+                    key={`${action.at}-${i}`}
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      gap: "var(--space-3)",
+                      padding: "var(--space-2) var(--space-3)",
+                      borderRadius: "var(--radius-md)",
+                      border: "1px solid var(--border-default)",
+                      fontSize: 12,
+                    }}
+                  >
+                    <span>
+                      <strong>{action.kind}</strong>
+                      {action.coin ? ` ${action.coin}` : ""}{" "}
+                      {typeof action.detail.plan === "string" ? action.detail.plan : typeof action.detail.rule === "string" ? `(${action.detail.rule})` : ""}
+                      {action.error ? ` - ${action.error}` : ""}
+                    </span>
+                    <span style={{ color: "var(--text-muted)", whiteSpace: "nowrap" }}>
+                      {action.result === "WOULD_DO" ? "would do" : action.result.toLowerCase()} · {new Date(action.at).toLocaleTimeString()}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div style={{ marginTop: "var(--space-3)" }}>
+              <Button variant="subtle" size="sm" onClick={() => void loadEnforcement(accountId)}>
+                Refresh
+              </Button>
+            </div>
           </Panel>
         )}
 

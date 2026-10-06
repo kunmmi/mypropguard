@@ -46,6 +46,8 @@ export interface CreateAccountInput {
   /** EVM-chain venues only (e.g. "arbitrum-gmx") - your own wallet address and which chain to provision a Safe on. Both required together. */
   evmOwnerWalletAddress?: string;
   evmChainId?: number;
+  /** Hyperliquid accounts: your own Hyperliquid address, which the watcher reads. */
+  venueAddress?: string;
 }
 
 export interface ReconcileResult {
@@ -74,6 +76,27 @@ export interface ProtectedAccountSummary {
   createdAt: string;
   agentWalletAddress: string | null;
   evmSafeAddress?: string | null;
+  venueAddress?: string | null;
+}
+
+export interface EnforcementAction {
+  at: string;
+  mode: "log" | "enforce";
+  kind: "LOCK" | "UNLOCK" | "CANCEL" | "TRIM" | "WARNING";
+  coin: string | null;
+  result: "WOULD_DO" | "DONE" | "FAILED" | "INFO";
+  detail: Record<string, unknown>;
+  error: string | null;
+}
+
+export interface EnforcementStatus {
+  watcherMode: "off" | "log" | "enforce";
+  lockedToday: boolean;
+  lockedDay: string | null;
+  reason: string | null;
+  lockedAt: string | null;
+  ceilings: Record<string, string>;
+  actions: EnforcementAction[];
 }
 
 export interface RuleVersion {
@@ -137,6 +160,8 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ venueAddress }),
     }),
+
+  getEnforcement: (accountId: string) => request<EnforcementStatus>(`/v1/accounts/${encodeURIComponent(accountId)}/enforcement`),
 
   reconcileEvm: (accountId: string) =>
     request<{ accountId: string; currentEquity: string; peakEquity: string }>(

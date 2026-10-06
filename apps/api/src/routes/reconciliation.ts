@@ -60,6 +60,14 @@ export function registerReconciliationRoutes(app: FastifyInstance, deps: AppDeps
       accountId,
       venueAddress: body.venueAddress,
     });
+    // Remember the address so the watcher can read this account without being told each time.
+    try {
+      await deps.store.setVenueAddress(accountId, body.venueAddress);
+    } catch (error) {
+      // Saving the address is a convenience for the watcher: it must never fail a reconcile (for example while
+      // the watcher migration has not been applied yet).
+      console.warn("Could not save the Hyperliquid address:", error instanceof Error ? error.message : error);
+    }
 
     return reply.send({
       accountId: head.accountId,

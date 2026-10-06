@@ -3,6 +3,7 @@ import {
   AccountAlreadyExistsError,
   OrderReservationStatus,
   type AccountRiskHead,
+  type EnforcementActionRecord,
   type LedgerContext,
   type NewAccountInput,
   type NewAccountRuleInput,
@@ -77,6 +78,29 @@ export class InMemoryRiskLedgerStore implements RiskLedgerStore {
         .map(([accountId]) => accountId),
     );
     return [...this.accounts.values()].filter((a) => matchingAccountIds.has(a.accountId));
+  }
+
+  async listAccountsByVenue(venue: string): Promise<readonly ProtectedAccount[]> {
+    return [...this.accounts.values()].filter((a) => a.venue === venue);
+  }
+
+  async setVenueAddress(accountId: string, venueAddress: string): Promise<void> {
+    const account = this.accounts.get(accountId);
+    if (account) this.accounts.set(accountId, { ...account, venueAddress });
+  }
+
+  readonly enforcementActions: EnforcementActionRecord[] = [];
+
+  async recordEnforcementAction(record: EnforcementActionRecord): Promise<void> {
+    this.enforcementActions.push({ ...record, createdAt: record.createdAt ?? new Date() });
+  }
+
+  async listEnforcementActions(accountId: string, limit: number): Promise<readonly EnforcementActionRecord[]> {
+    return this.enforcementActions
+      .filter((a) => a.accountId === accountId)
+      .slice()
+      .reverse()
+      .slice(0, limit);
   }
 
   async createAccount(input: NewAccountInput): Promise<void> {

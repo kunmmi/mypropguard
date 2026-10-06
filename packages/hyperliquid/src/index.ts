@@ -12,3 +12,4 @@ export * from "./cancelAction.js";
 export * from "./orderStatus.js";
 export * from "./orderLifecycle.js";
 export * from "./agentWalletProvisioner.js";
+export * from "./enforcer.js";
