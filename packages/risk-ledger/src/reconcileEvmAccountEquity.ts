@@ -141,7 +141,7 @@ export async function reconcileEvmAccountEquity(
       snapshot = await stateReader.getSnapshot({ safeAddress, extraAssets: union(ruleTokens, knownTokens), blockNumber: readBlock });
 
       if (discovery && (!previous || snapshot.nonce !== previous.lastNonce)) {
-        const merged = union(knownTokens, await discovery.discoverTokens(safeAddress));
+        const merged = union(knownTokens, await discovery.discoverTokens(safeAddress, { nonce: snapshot.nonce }));
         if (merged.length !== knownTokens.length) {
           knownTokens = merged;
           snapshot = await stateReader.getSnapshot({ safeAddress, extraAssets: union(ruleTokens, knownTokens), blockNumber: readBlock });

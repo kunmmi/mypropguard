@@ -37,6 +37,7 @@ import {
   PancakeSwapEquityReader,
   GoldRushTokenDiscovery,
   MoralisTokenDiscovery,
+  SafeTxServiceTokenDiscovery,
   SafeStateReader,
 } from "@mypropguard/evm";
 
@@ -183,6 +184,7 @@ function configureEvmChainProvisioning(
     depositTokens: Address[];
     moralisChain: string;
     goldRushChain: string;
+    safeTxServiceSlug: string;
   },
 ): {
   provisioner: EvmSafeProvisioner;
@@ -243,18 +245,25 @@ function configureEvmChainProvisioning(
       guardAddress: guardAddress as Address,
       baseTokens: equityReaderConfig.depositTokens,
     });
-    // Finding the tokens a Safe holds needs a wallet-token API. GoldRush is preferred (its free plan
-    // covers BNB Chain); Moralis works too. Without either key the reconcile still runs but only
-    // values BNB, the base tokens and tokens that have a per-token rule.
+    // Finding the tokens a Safe holds: by default Safe's own free Transaction Service, which indexes every
+    // transfer for Safes built on the L2 singleton and needs no key. TOKEN_DISCOVERY_PROVIDER can pick
+    // "goldrush" or "moralis" instead (each needs its key); "none" turns discovery off, in which case
+    // only BNB, the base tokens and tokens with a per-token rule are valued.
+    const provider = (process.env.TOKEN_DISCOVERY_PROVIDER ?? "safe").trim().toLowerCase();
     const goldRushApiKey = process.env.GOLDRUSH_API_KEY?.trim();
     const moralisApiKey = process.env.MORALIS_API_KEY?.trim();
-    if (goldRushApiKey) {
+    if (provider === "safe") {
+      tokenDiscovery = new SafeTxServiceTokenDiscovery({
+        chainSlug: equityReaderConfig.safeTxServiceSlug,
+        apiKey: process.env.SAFE_API_KEY?.trim() || undefined,
+      });
+    } else if (provider === "goldrush" && goldRushApiKey) {
       tokenDiscovery = new GoldRushTokenDiscovery({ apiKey: goldRushApiKey, chain: equityReaderConfig.goldRushChain });
-    } else if (moralisApiKey) {
+    } else if (provider === "moralis" && moralisApiKey) {
       tokenDiscovery = new MoralisTokenDiscovery({ apiKey: moralisApiKey, chain: equityReaderConfig.moralisChain });
     } else {
       // eslint-disable-next-line no-console
-      console.warn(`Neither GOLDRUSH_API_KEY nor MORALIS_API_KEY is set: ${label} equity will not include tokens bought outside a per-token rule, so buys can look like losses.`);
+      console.warn(`Token discovery is off for ${label} (TOKEN_DISCOVERY_PROVIDER=${provider}): equity will not include tokens bought outside a per-token rule, so buys can look like losses.`);
     }
   }
 
@@ -279,6 +288,7 @@ const bscConfig = configureEvmChainProvisioning("BSC (PancakeSwap)", "BSC", bsc,
   depositTokens: BSC_DEPOSIT_TOKENS,
   moralisChain: "bsc",
   goldRushChain: "bsc-mainnet",
+  safeTxServiceSlug: "bnb",
 });
 if (bscConfig) {
   evmSafeProvisioners[bsc.id] = bscConfig.provisioner;

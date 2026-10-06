@@ -157,7 +157,12 @@ export interface EvmSafeStateReader {
  * the owner chose to buy.
  */
 export interface EvmTokenDiscovery {
-  discoverTokens(safeAddress: string): Promise<string[]>;
+  /**
+   * `context.nonce` is the Safe's transaction count on-chain. A provider that works from an index of
+   * the Safe's own transactions must throw if its index has not caught up to it, rather than
+   * return a stale token list that would make a fresh buy look like a loss.
+   */
+  discoverTokens(safeAddress: string, context?: { nonce: number }): Promise<string[]>;
 }
 
 /**
