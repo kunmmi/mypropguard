@@ -91,12 +91,29 @@ export interface RawLedgerUpdate {
  * source/destination dex), and vault deposits/withdrawals. Any type not listed is ignored, so an unknown
  * future entry can never invent a flow.
  */
-export function mapLedgerUpdate(update: RawLedgerUpdate, address: string): VenueCapitalFlow | null {
+export type LedgerMode = "unified" | "standard";
+
+export function mapLedgerUpdate(update: RawLedgerUpdate, address: string, mode: LedgerMode = "standard"): VenueCapitalFlow | null {
   const me = address.toLowerCase();
   const d = update.delta;
   const num = (value: string | undefined): Decimal => new Decimal(value ?? "0");
   const isMe = (other: string | undefined): boolean => other?.toLowerCase() === me;
   let amount: Decimal | null = null;
+
+  if (mode === "unified") {
+    // One combined balance: moving money between spot and perps changes nothing, and any send is judged only by
+    // whether the other party is someone else.
+    if (d.type === "accountClassTransfer") return null;
+    if (d.type === "send" || d.type === "spotTransfer") {
+      const sent = isMe(d.user);
+      const received = isMe(d.destination);
+      if (sent === received) return null; // a transfer to oneself, or one this address is not part of
+      const value = num(d.usdcValue ?? (d.token === "USDC" ? d.amount : undefined));
+      if (value.isZero()) return null;
+      amount = sent ? value.plus(num(d.fee)).neg() : value;
+      return { id: update.hash, timeMs: update.time, amountUsd: amount };
+    }
+  }
 
   switch (d.type) {
     case "deposit":
@@ -149,6 +166,7 @@ export function mapLedgerUpdate(update: RawLedgerUpdate, address: string): Venue
 export class HyperliquidInfoClient implements VenueStateReader {
   private readonly baseUrl: string;
   private readonly fetchImpl: typeof fetch;
+  private readonly modeCache = new Map<string, { mode: LedgerMode; at: number }>();
 
   constructor(options: HyperliquidInfoClientOptions = {}) {
     this.baseUrl = options.baseUrl ?? HYPERLIQUID_MAINNET_INFO_URL;
@@ -156,22 +174,57 @@ export class HyperliquidInfoClient implements VenueStateReader {
   }
 
   async getClearinghouseState(address: string): Promise<ClearinghouseState> {
+    const raw = await this.info<RawClearinghouseState>({ type: "clearinghouseState", user: address });
+    const state = mapClearinghouseState(raw);
+
+    const mode = await this.getAccountMode(address);
+    if (mode === "standard") return { ...state, accountMode: mode };
+
+    // A unified account keeps one balance: the perps view reads 0 for it, and Hyperliquid itself says the perps
+    // state is "not meaningful". Its own portfolio equity (the figure its website shows, live to the second)
+    // is the account value.
+    const equity = await this.getPortfolioValue(address);
+    return { ...state, accountValue: equity ?? state.accountValue, accountMode: mode };
+  }
+
+  /**
+   * "unified" when spot and perps are one balance (unified account and portfolio margin), else "standard".
+   * Cached for ten minutes: the mode is a rarely changed account setting.
+   */
+  async getAccountMode(address: string): Promise<LedgerMode> {
+    const key = address.toLowerCase();
+    const cached = this.modeCache.get(key);
+    if (cached && Date.now() - cached.at < 10 * 60 * 1000) return cached.mode;
+    const abstraction = await this.info<unknown>({ type: "userAbstraction", user: address });
+    const mode: LedgerMode = abstraction === "unifiedAccount" || abstraction === "portfolioMargin" ? "unified" : "standard";
+    this.modeCache.set(key, { mode, at: Date.now() });
+    return mode;
+  }
+
+  /** The latest point of Hyperliquid's own account-value history (all balances combined), or null if it has none. */
+  private async getPortfolioValue(address: string): Promise<Decimal | null> {
+    const portfolio = await this.info<Array<[string, { accountValueHistory?: Array<[number, string]> }]>>({ type: "portfolio", user: address });
+    const day = Array.isArray(portfolio) ? portfolio.find((frame) => frame[0] === "day") : undefined;
+    const history = day?.[1]?.accountValueHistory;
+    const last = history && history.length > 0 ? history[history.length - 1] : undefined;
+    return last ? new Decimal(last[1]) : null;
+  }
+
+  private async info<T>(body: Record<string, unknown>): Promise<T> {
     const response = await this.fetchImpl(this.baseUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ type: "clearinghouseState", user: address }),
+      body: JSON.stringify(body),
     });
-
     if (!response.ok) {
       throw new Error(`Hyperliquid info request failed: ${response.status} ${await response.text()}`);
     }
-
-    const raw = (await response.json()) as RawClearinghouseState;
-    return mapClearinghouseState(raw);
+    return (await response.json()) as T;
   }
 
   /** Deposits, withdrawals and transfers after `afterMs` (exclusive), oldest first. Pages through the ledger. */
   async getCapitalFlows(address: string, afterMs: number): Promise<readonly VenueCapitalFlow[]> {
+    const mode = await this.getAccountMode(address);
     const flows: VenueCapitalFlow[] = [];
     let startTime = afterMs + 1;
     for (let page = 0; page < 50; page++) {
@@ -185,7 +238,7 @@ export class HyperliquidInfoClient implements VenueStateReader {
       }
       const updates = (await response.json()) as RawLedgerUpdate[];
       for (const update of updates) {
-        const flow = mapLedgerUpdate(update, address);
+        const flow = mapLedgerUpdate(update, address, mode);
         if (flow) flows.push(flow);
       }
       if (updates.length < 2000) break; // the API returns at most 2000 entries per call

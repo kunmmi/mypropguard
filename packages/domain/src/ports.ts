@@ -227,6 +227,12 @@ export interface ClearinghouseState {
   positions: readonly VenuePosition[];
   /** The venue's own clock (ms) when this state was computed. */
   time?: number;
+  /**
+   * Hyperliquid accounts: "unified" means spot and perps are ONE balance (spot USDC collateralizes perps), and
+   * `accountValue` is that single balance's total; "standard" means separate perps and spot balances, and
+   * `accountValue` is the perps account alone.
+   */
+  accountMode?: "unified" | "standard";
 }
 
 /** A resting order on a venue account. */

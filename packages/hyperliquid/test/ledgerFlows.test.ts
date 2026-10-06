@@ -71,19 +71,30 @@ describe("mapLedgerUpdate", () => {
 
 describe("HyperliquidInfoClient.getCapitalFlows", () => {
   const response = (body: unknown) => ({ ok: true, status: 200, json: async () => body, text: async () => "" }) as Response;
+  /** Answers by request type, the way Hyperliquid does; `ledger` may be a list or a function of the call number. */
+  const router = (opts: { mode?: unknown; ledger: unknown[] | ((call: number) => unknown[]) }) => {
+    let ledgerCalls = 0;
+    return vi.fn(async (_url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body));
+      if (body.type === "userAbstraction") return response(opts.mode ?? "default");
+      ledgerCalls++;
+      return response(typeof opts.ledger === "function" ? opts.ledger(ledgerCalls) : opts.ledger);
+    });
+  };
+  const ledgerBodies = (fn: ReturnType<typeof router>) =>
+    fn.mock.calls.map((c) => JSON.parse(String((c[1] as RequestInit).body))).filter((b) => b.type === "userNonFundingLedgerUpdates");
 
   it("asks the ledger from just after the cursor and returns only capital flows, oldest first", async () => {
-    const fetchImpl = vi.fn(async () =>
-      response([
+    const fetchImpl = router({
+      ledger: [
         entry({ type: "deposit", usdc: "100" }, 2000, "0xa"),
         entry({ type: "liquidation" }, 2500, "0xb"),
         entry({ type: "withdraw", usdc: "40", fee: "1" }, 3000, "0xc"),
-      ]),
-    );
+      ],
+    });
     const flows = await new HyperliquidInfoClient({ fetchImpl: fetchImpl as any }).getCapitalFlows(ME, 1500);
 
-    const body = JSON.parse((fetchImpl.mock.calls[0] as any)[1].body);
-    expect(body).toEqual({ type: "userNonFundingLedgerUpdates", user: ME, startTime: 1501 });
+    expect(ledgerBodies(fetchImpl)[0]).toEqual({ type: "userNonFundingLedgerUpdates", user: ME, startTime: 1501 });
     expect(flows.map((f) => [f.id, f.timeMs, f.amountUsd.toString()])).toEqual([
       ["0xa", 2000, "100"],
       ["0xc", 3000, "-41"],
@@ -92,19 +103,111 @@ describe("HyperliquidInfoClient.getCapitalFlows", () => {
 
   it("pages through a long ledger (the API returns at most 2000 entries per call)", async () => {
     const full = Array.from({ length: 2000 }, (_, i) => entry({ type: "deposit", usdc: "1" }, 10_000 + i, `0x${i}`));
-    const fetchImpl = vi
-      .fn()
-      .mockResolvedValueOnce(response(full))
-      .mockResolvedValueOnce(response([entry({ type: "deposit", usdc: "5" }, 50_000, "0xlast")]));
+    const fetchImpl = router({ ledger: (call) => (call === 1 ? full : [entry({ type: "deposit", usdc: "5" }, 50_000, "0xlast")]) });
     const flows = await new HyperliquidInfoClient({ fetchImpl: fetchImpl as any }).getCapitalFlows(ME, 0);
 
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
-    expect(JSON.parse((fetchImpl.mock.calls[1] as any)[1].body).startTime).toBe(10_000 + 1999 + 1);
+    expect(ledgerBodies(fetchImpl)).toHaveLength(2);
+    expect(ledgerBodies(fetchImpl)[1].startTime).toBe(10_000 + 1999 + 1);
     expect(flows).toHaveLength(2001);
   });
 
   it("throws on an error response so a failed read never looks like 'no flows'", async () => {
     const fetchImpl = vi.fn(async () => ({ ok: false, status: 429, json: async () => ({}), text: async () => "rate limited" }) as Response);
     await expect(new HyperliquidInfoClient({ fetchImpl: fetchImpl as any }).getCapitalFlows(ME, 0)).rejects.toThrow("429");
+  });
+});
+
+describe("mapLedgerUpdate - a unified account (spot and perps are one balance)", () => {
+  const unified = (update: RawLedgerUpdate) => mapLedgerUpdate(update, ME, "unified")?.amountUsd.toString() ?? null;
+
+  it("ignores a spot <-> perps transfer, which moves nothing in a single combined balance", () => {
+    expect(unified(entry({ type: "accountClassTransfer", usdc: "250", toPerp: true }))).toBeNull();
+    expect(unified(entry({ type: "accountClassTransfer", usdc: "250", toPerp: false }))).toBeNull();
+  });
+
+  it("still counts deposits, withdrawals, vaults and transfers to or from other accounts", () => {
+    expect(unified(entry({ type: "deposit", usdc: "898.99" }))).toBe("898.99");
+    expect(unified(entry({ type: "withdraw", usdc: "87.0", fee: "1.0" }))).toBe("-88");
+    expect(unified(entry({ type: "vaultDeposit", usdc: "100.0" }))).toBe("-100");
+    expect(unified(entry({ type: "subAccountTransfer", usdc: "50", user: ME, destination: OTHER }))).toBe("-50");
+  });
+
+  it("judges a send only by who the other party is, whichever balance it came from", () => {
+    const base = { type: "send", token: "USDC", amount: "10", usdcValue: "10", fee: "0.5" };
+    expect(unified(entry({ ...base, user: ME, destination: OTHER, sourceDex: "spot", destinationDex: "" }))).toBe("-10.5");
+    expect(unified(entry({ ...base, user: ME, destination: OTHER, sourceDex: "", destinationDex: "spot" }))).toBe("-10.5");
+    expect(unified(entry({ ...base, user: OTHER, destination: ME, sourceDex: "", destinationDex: "spot" }))).toBe("10");
+    expect(unified(entry({ ...base, user: ME, destination: ME, sourceDex: "spot", destinationDex: "" }))).toBeNull();
+  });
+
+  it("counts a token sent to someone else at its USDC value, and ignores a worthless one", () => {
+    const base = { type: "spotTransfer", token: "HYPE", amount: "10", fee: "0.0" };
+    expect(unified(entry({ ...base, usdcValue: "450.5", user: ME, destination: OTHER }))).toBe("-450.5");
+    expect(unified(entry({ ...base, usdcValue: "0.0", user: ME, destination: OTHER }))).toBeNull();
+  });
+});
+
+describe("HyperliquidInfoClient - unified accounts", () => {
+  const response = (body: unknown) => ({ ok: true, status: 200, json: async () => body, text: async () => "" }) as Response;
+  const PERPS_ZERO = { marginSummary: { accountValue: "0.0", totalMarginUsed: "0.0", totalNtlPos: "0.0" }, withdrawable: "0.0", assetPositions: [], time: 123 };
+
+  function venue(opts: { mode: unknown; portfolio?: unknown }) {
+    return vi.fn(async (_url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body));
+      if (body.type === "userAbstraction") return response(opts.mode);
+      if (body.type === "portfolio") return response(opts.portfolio ?? []);
+      return response(PERPS_ZERO);
+    });
+  }
+  const portfolioOf = (...values: string[]) => [
+    ["day", { accountValueHistory: values.map((v, i) => [1000 + i, v]) }],
+    ["perpDay", { accountValueHistory: [[1000, "0.0"]] }],
+  ];
+
+  it("reads a unified account's equity from Hyperliquid's own portfolio figure, not the perps view that shows 0", async () => {
+    const fetchImpl = venue({ mode: "unifiedAccount", portfolio: portfolioOf("880.5", "898.999373") });
+    const state = await new HyperliquidInfoClient({ fetchImpl: fetchImpl as any }).getClearinghouseState(ME);
+    expect(state.accountValue.toString()).toBe("898.999373");
+    expect(state.accountMode).toBe("unified");
+  });
+
+  it("treats portfolio margin the same way", async () => {
+    const fetchImpl = venue({ mode: "portfolioMargin", portfolio: portfolioOf("1500") });
+    expect((await new HyperliquidInfoClient({ fetchImpl: fetchImpl as any }).getClearinghouseState(ME)).accountValue.toString()).toBe("1500");
+  });
+
+  it("keeps the perps value for a standard account and does not ask for the portfolio", async () => {
+    const fetchImpl = venue({ mode: "default", portfolio: portfolioOf("999") });
+    const state = await new HyperliquidInfoClient({ fetchImpl: fetchImpl as any }).getClearinghouseState(ME);
+    expect(state.accountValue.toString()).toBe("0");
+    expect(state.accountMode).toBe("standard");
+    expect(fetchImpl.mock.calls.some((c) => JSON.parse(String((c[1] as RequestInit).body)).type === "portfolio")).toBe(false);
+  });
+
+  it("falls back to the perps value when a unified account has no portfolio history yet", async () => {
+    const fetchImpl = venue({ mode: "unifiedAccount", portfolio: [["day", { accountValueHistory: [] }]] });
+    expect((await new HyperliquidInfoClient({ fetchImpl: fetchImpl as any }).getClearinghouseState(ME)).accountValue.toString()).toBe("0");
+  });
+
+  it("asks for the account mode once and remembers it", async () => {
+    const fetchImpl = venue({ mode: "unifiedAccount", portfolio: portfolioOf("5") });
+    const client = new HyperliquidInfoClient({ fetchImpl: fetchImpl as any });
+    await client.getClearinghouseState(ME);
+    await client.getClearinghouseState(ME);
+    const modeCalls = fetchImpl.mock.calls.filter((c) => JSON.parse(String((c[1] as RequestInit).body)).type === "userAbstraction");
+    expect(modeCalls).toHaveLength(1);
+  });
+
+  it("reads the ledger with the unified rules for a unified account", async () => {
+    const fetchImpl = vi.fn(async (_url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body));
+      if (body.type === "userAbstraction") return response("unifiedAccount");
+      return response([
+        entry({ type: "accountClassTransfer", usdc: "500", toPerp: true }, 2000, "0xa"),
+        entry({ type: "deposit", usdc: "898.99" }, 3000, "0xb"),
+      ]);
+    });
+    const flows = await new HyperliquidInfoClient({ fetchImpl: fetchImpl as any }).getCapitalFlows(ME, 0);
+    expect(flows.map((f) => [f.id, f.amountUsd.toString()])).toEqual([["0xb", "898.99"]]);
   });
 });

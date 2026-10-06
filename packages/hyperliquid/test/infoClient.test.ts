@@ -48,21 +48,22 @@ describe("mapClearinghouseState (pure, no network)", () => {
 
 describe("HyperliquidInfoClient with an injected fetch (no real network)", () => {
   it("posts the clearinghouseState request and parses the response", async () => {
-    let capturedUrl: string | undefined;
-    let capturedBody: string | undefined;
+    const requests: Array<{ url: string; body: any }> = [];
 
     const fakeFetch = (async (url: string, init?: RequestInit) => {
-      capturedUrl = url;
-      capturedBody = init?.body as string;
-      return new Response(JSON.stringify(FIXTURE_RESPONSE), { status: 200 });
+      const body = JSON.parse(init?.body as string);
+      requests.push({ url, body });
+      // A standard (non-unified) account: the perps balance is the account value.
+      return new Response(JSON.stringify(body.type === "userAbstraction" ? "default" : FIXTURE_RESPONSE), { status: 200 });
     }) as typeof fetch;
 
     const client = new HyperliquidInfoClient({ fetchImpl: fakeFetch });
     const state = await client.getClearinghouseState("0xabc123");
 
-    expect(capturedUrl).toBe(HYPERLIQUID_MAINNET_INFO_URL);
-    expect(JSON.parse(capturedBody!)).toEqual({ type: "clearinghouseState", user: "0xabc123" });
+    expect(requests.every((r) => r.url === HYPERLIQUID_MAINNET_INFO_URL)).toBe(true);
+    expect(requests[0]!.body).toEqual({ type: "clearinghouseState", user: "0xabc123" });
     expect(state.accountValue.toString()).toBe("12345.67");
+    expect(state.accountMode).toBe("standard");
   });
 
   it("throws with the status code on a non-OK response", async () => {
