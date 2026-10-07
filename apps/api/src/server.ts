@@ -51,6 +51,7 @@ import { OneClickStore } from "./oneClick/oneClickStore.js";
 import { OneClickRequestHandler } from "./oneClick/oneClickRequestHandler.js";
 import { PgWalletConnectStorage } from "./oneClick/pgWalletConnectStorage.js";
 import { WalletConnectService } from "./oneClick/walletConnectService.js";
+import { PgLeaseStore, WalletConnectLease } from "./oneClick/walletConnectLease.js";
 import type { OneClickDeps } from "./routes/oneClick.js";
 
 // PancakeSwap's own canonical BSC mainnet addresses - public, not secrets, so hardcoded rather
@@ -398,21 +399,56 @@ async function setUpOneClick(): Promise<OneClickDeps | undefined> {
   const findAccount = (accountId: string) => store.findAccountById(accountId);
   const handler = new OneClickRequestHandler({ store: oneClickStore, findAccount, executors: { [bsc.id]: executor } });
   const publicUrl = process.env.PUBLIC_WEB_URL?.trim() || "https://mypropguard.com";
-  const started = WalletConnectService.start({
-    projectId,
-    storage: new PgWalletConnectStorage(pool),
-    store: oneClickStore,
-    handler,
-    findAccount,
-    metadata: { name: "MyPropGuard", description: "Trade with your protected account, with your risk rules enforced.", url: publicUrl, icons: [`${publicUrl}/favicon.ico`] },
-    log: (message) => console.log(`[one-click] ${message}`),
-  });
-  // Do not let a slow relay hold the whole server's startup hostage.
-  const service = await Promise.race([
-    started,
-    new Promise<never>((_, reject) => setTimeout(() => reject(new Error("the WalletConnect relay did not answer within 30 seconds")), 30_000)),
-  ]);
-  console.log(`One-click trading on (BSC). Gas is paid by ${gasAccount.address}.`);
+  // Only one copy of the server may own the WalletConnect connection. The host runs the old and the new copy side by
+  // side during a deploy, so the new one waits for the old one to let go. This runs in the background: the server
+  // itself must come up at once so the host sees it as healthy and stops the old copy.
+  const log = (message: string) => console.log(`[one-click] ${message}`);
+  const lease = new WalletConnectLease(new PgLeaseStore(pool), { log });
+  let running: WalletConnectService | undefined;
+  const ready = (async () => {
+    try {
+      try {
+        await lease.acquire();
+      } catch (error) {
+        // A problem with the lease itself must not keep one-click off: carry on as before, without it.
+        console.error(`[one-click] could not use the WalletConnect lease, starting without it: ${error instanceof Error ? error.message : error}`);
+      }
+      const starting = WalletConnectService.start({
+        projectId,
+        storage: new PgWalletConnectStorage(pool),
+        store: oneClickStore,
+        handler,
+        findAccount,
+        metadata: { name: "MyPropGuard", description: "Trade with your protected account, with your risk rules enforced.", url: publicUrl, icons: [`${publicUrl}/favicon.ico`] },
+        log,
+      });
+      // Do not let a slow relay hold the connection setup hostage.
+      running = await Promise.race([
+        starting,
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error("the WalletConnect relay did not answer within 30 seconds")), 30_000)),
+      ]);
+      console.log(`One-click trading on (BSC). Gas is paid by ${gasAccount.address}.`);
+    } catch (error) {
+      console.error(`[one-click] NOT started, the rest of the server is running without it: ${error instanceof Error ? error.message : error}`);
+    }
+  })();
+  const whenRunning = async (): Promise<WalletConnectService> => {
+    await Promise.race([ready, new Promise((resolve) => setTimeout(resolve, 25_000))]);
+    if (!running) throw new Error("One-click trading is still starting up. Try again in a minute.");
+    return running;
+  };
+  const service: OneClickDeps["service"] = {
+    pair: async (accountId, uri) => (await whenRunning()).pair(accountId, uri),
+    disconnect: async (topic) => (await whenRunning()).disconnect(topic),
+    disconnectAccount: async (accountId) => (await whenRunning()).disconnectAccount(accountId),
+  };
+  // Told to stop (a deploy): let go of the connection and the lease at once so the new copy does not wait.
+  const handOver = () => {
+    void Promise.allSettled([running?.stop(), lease.release()]).finally(() => process.exit(0));
+  };
+  process.once("SIGTERM", handOver);
+  process.once("SIGINT", handOver);
+
   return {
     store: oneClickStore,
     service,

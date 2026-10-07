@@ -62,6 +62,15 @@ export class WalletConnectService {
     }
   }
 
+  /** Closes the connection to the relay, so the next copy of the server can take over without two clients fighting. */
+  async stop(): Promise<void> {
+    try {
+      await this.kit.core.relayer.transportClose();
+    } catch {
+      // Already closed.
+    }
+  }
+
   async disconnect(topic: string): Promise<void> {
     try {
       await this.kit.disconnectSession({ topic, reason: getSdkError("USER_DISCONNECTED") });

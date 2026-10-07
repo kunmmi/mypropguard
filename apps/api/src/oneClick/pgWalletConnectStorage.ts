@@ -9,12 +9,12 @@ export class PgWalletConnectStorage {
   constructor(private readonly pool: pg.Pool) {}
 
   async getKeys(): Promise<string[]> {
-    const { rows } = await this.pool.query<{ key: string }>("select key from walletconnect_kv");
+    const { rows } = await this.pool.query<{ key: string }>("select key from walletconnect_kv where key not like 'mypropguard:%'");
     return rows.map((row) => row.key);
   }
 
   async getEntries<T = unknown>(): Promise<[string, T][]> {
-    const { rows } = await this.pool.query<{ key: string; value: string }>("select key, value from walletconnect_kv");
+    const { rows } = await this.pool.query<{ key: string; value: string }>("select key, value from walletconnect_kv where key not like 'mypropguard:%'");
     return rows.map((row) => [row.key, safeJsonParse(row.value) as T]);
   }
 
