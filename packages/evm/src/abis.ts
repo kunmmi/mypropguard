@@ -210,3 +210,146 @@ export const pancakePairAbi = [
  * slot and would look like "no guard attached" even when one really is).
  */
 export const SAFE_GUARD_STORAGE_SLOT = "0x4a204f620c8c5ccdca3fd54d003badd85ba500436a431f0cbda4f558c93c34c8" as const;
+
+/** What the session-key flow needs from a Safe: the nonce, ownership, and execTransaction itself. */
+export const safeExecAbi = [
+  { type: "function", name: "nonce", stateMutability: "view", inputs: [], outputs: [{ name: "", type: "uint256" }] },
+  { type: "function", name: "getThreshold", stateMutability: "view", inputs: [], outputs: [{ name: "", type: "uint256" }] },
+  { type: "function", name: "getOwners", stateMutability: "view", inputs: [], outputs: [{ name: "", type: "address[]" }] },
+  {
+    type: "function",
+    name: "isOwner",
+    stateMutability: "view",
+    inputs: [{ name: "owner", type: "address" }],
+    outputs: [{ name: "", type: "bool" }],
+  },
+  {
+    type: "function",
+    name: "addOwnerWithThreshold",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "owner", type: "address" },
+      { name: "_threshold", type: "uint256" },
+    ],
+    outputs: [],
+  },
+  {
+    type: "function",
+    name: "removeOwner",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "prevOwner", type: "address" },
+      { name: "owner", type: "address" },
+      { name: "_threshold", type: "uint256" },
+    ],
+    outputs: [],
+  },
+  {
+    type: "function",
+    name: "execTransaction",
+    stateMutability: "payable",
+    inputs: [
+      { name: "to", type: "address" },
+      { name: "value", type: "uint256" },
+      { name: "data", type: "bytes" },
+      { name: "operation", type: "uint8" },
+      { name: "safeTxGas", type: "uint256" },
+      { name: "baseGas", type: "uint256" },
+      { name: "gasPrice", type: "uint256" },
+      { name: "gasToken", type: "address" },
+      { name: "refundReceiver", type: "address" },
+      { name: "signatures", type: "bytes" },
+    ],
+    outputs: [{ name: "success", type: "bool" }],
+  },
+] as const;
+
+export const multiSendAbi = [
+  {
+    type: "function",
+    name: "multiSend",
+    stateMutability: "payable",
+    inputs: [{ name: "transactions", type: "bytes" }],
+    outputs: [],
+  },
+] as const;
+
+/** SpotRiskGuard's session-key functions and views (see packages/evm-guard/src/SpotRiskGuard.sol). */
+export const spotGuardSessionAbi = [
+  {
+    type: "function",
+    name: "addSessionKey",
+    stateMutability: "nonpayable",
+    inputs: [{ name: "key", type: "address" }],
+    outputs: [],
+  },
+  {
+    type: "function",
+    name: "removeSessionKey",
+    stateMutability: "nonpayable",
+    inputs: [{ name: "key", type: "address" }],
+    outputs: [],
+  },
+  {
+    type: "function",
+    name: "isSessionKey",
+    stateMutability: "view",
+    inputs: [
+      { name: "account", type: "address" },
+      { name: "key", type: "address" },
+    ],
+    outputs: [{ name: "", type: "bool" }],
+  },
+] as const;
+
+/** The errors SpotRiskGuard can revert with, so a refused trade can be explained in words. */
+export const spotGuardErrorsAbi = [
+  { type: "error", name: "NotAdmin", inputs: [] },
+  { type: "error", name: "LimitsNotConfigured", inputs: [{ name: "account", type: "address" }] },
+  { type: "error", name: "AccountIsFrozen", inputs: [{ name: "account", type: "address" }] },
+  {
+    type: "error",
+    name: "TradeAmountExceeded",
+    inputs: [
+      { name: "token", type: "address" },
+      { name: "requested", type: "uint256" },
+      { name: "max", type: "uint256" },
+    ],
+  },
+  {
+    type: "error",
+    name: "TradeCountExceeded",
+    inputs: [
+      { name: "attempted", type: "uint256" },
+      { name: "max", type: "uint256" },
+    ],
+  },
+  { type: "error", name: "DelegateCallNotAllowed", inputs: [] },
+  {
+    type: "error",
+    name: "BlockedCall",
+    inputs: [
+      { name: "to", type: "address" },
+      { name: "selector", type: "bytes4" },
+    ],
+  },
+  {
+    type: "error",
+    name: "SessionKeyBlocked",
+    inputs: [
+      { name: "to", type: "address" },
+      { name: "selector", type: "bytes4" },
+    ],
+  },
+  {
+    type: "error",
+    name: "SpenderNotAllowed",
+    inputs: [
+      { name: "token", type: "address" },
+      { name: "spender", type: "address" },
+    ],
+  },
+  { type: "error", name: "ModulesNotAllowed", inputs: [] },
+  { type: "error", name: "NestedExecution", inputs: [] },
+  { type: "error", name: "MalformedMultiSend", inputs: [] },
+] as const;
