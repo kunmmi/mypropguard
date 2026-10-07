@@ -398,3 +398,41 @@ describe("runWatcherCycle - a manual change to the lock state during a check", (
     expect((await head()).enforcement?.lastCompliant?.positions.BTC?.toString()).toBe("0.5");
   });
 });
+
+describe("runWatcherCycle - the position-size rule closes the trade and locks nothing", () => {
+  it("closes the trade that went over the limit, records a TRIM and no LOCK, and allows the next trade", async () => {
+    const { venue, tick, enforcer, actions, head } = setup({ rules: [[RuleType.MAX_POSITION_SIZE, 20]] });
+    await tick(); // nothing held yet
+
+    venue.positions = [{ coin: "BTC", size: 0.0003, value: 25 }]; // over $20
+    const broke = await tick();
+    expect(broke.locked).toBe(false);
+    expect(broke.newLock).toBeUndefined();
+    expect(enforcer.closes).toEqual([{ coin: "BTC", isBuy: false, size: "0.0003" }]);
+    expect(actions().some((a) => a.kind === "LOCK")).toBe(false);
+    expect((await head()).enforcement?.lockedDay ?? null).toBeNull();
+
+    venue.positions = []; // the close filled
+    await tick();
+    venue.positions = [{ coin: "BTC", size: 0.00015, value: 12 }]; // a trade within the limit
+    await tick();
+    expect(enforcer.closes).toHaveLength(1); // nothing more was closed
+  });
+
+  it("lifts a position-size lock that an older version created", async () => {
+    const { venue, tick, store, head } = setup({ rules: [[RuleType.MAX_POSITION_SIZE, 20]] });
+    venue.positions = [{ coin: "BTC", size: 0.00013, value: 11 }];
+    await store.runExclusive("acct_hl", async (ctx) => {
+      const h = await ctx.getAccountRiskHead("acct_hl");
+      await ctx.updateAccountRiskHead({
+        ...h,
+        enforcement: { lockedDay: "2026-10-07", reason: "MAX_POSITION_SIZE", lockedAtMs: T0 - 60_000, ceilings: { BTC: D(0) }, lastCompliant: null },
+      });
+    });
+    const r = await tick();
+    expect(r.unlocked).toBe(true);
+    expect(r.locked).toBe(false);
+    expect((await head()).enforcement?.lockedDay ?? null).toBeNull();
+  });
+});
+

@@ -314,3 +314,88 @@ describe("findBreach with two active rules of one kind (a limit that was changed
     expect(findBreach([older, newer], snapshot, equity)?.rule).toBe(RuleType.MAX_POSITION_SIZE);
   });
 });
+
+describe("decideEnforcement - the position-size rule only trims, it never locks", () => {
+  const sizeRule = (limit: number) => buildRuleVersion(RuleType.MAX_POSITION_SIZE, limit, { id: `size_${limit}` });
+  const BTC = (size: number, value: number) => pos("BTC", size, value);
+
+  it("closes a new trade that breaks the limit in full, and does not lock the account", () => {
+    const d = decideEnforcement(input({ rules: [sizeRule(20)], state: compliantState({}), positions: [BTC(0.0003, 25)] }));
+
+    expect(d.newLock).toBeNull();
+    expect(d.state.lockedDay).toBeNull();
+    expect(d.actions).toEqual([expect.objectContaining({ kind: "TRIM", coin: "BTC", isBuy: false })]);
+    expect(d.actions[0]).toMatchObject({ size: D(0.0003) });
+  });
+
+  it("closes only the part that was added to a position held within the limit", () => {
+    const d = decideEnforcement(input({ rules: [sizeRule(20)], state: compliantState({ BTC: 0.0001 }), positions: [BTC(0.00035, 29)] }));
+
+    expect(d.state.lockedDay).toBeNull();
+    expect(d.actions).toHaveLength(1);
+    expect(d.actions[0]).toMatchObject({ kind: "TRIM", coin: "BTC", size: D(0.00025) }); // 0.00035 - 0.0001 held before
+  });
+
+  it("allows the next trade again once the account is back under the limit", () => {
+    const first = decideEnforcement(input({ rules: [sizeRule(20)], state: compliantState({}), positions: [BTC(0.0003, 25)] }));
+    // The trim worked: nothing is held any more. The saved baseline is what is allowed.
+    const afterTrim = decideEnforcement(input({ rules: [sizeRule(20)], state: first.state, positions: [], nowMs: NOW + POLL }));
+    expect(afterTrim.actions).toEqual([]);
+
+    const okTrade = decideEnforcement(input({ rules: [sizeRule(20)], state: afterTrim.state, positions: [BTC(0.00015, 12)], nowMs: NOW + 2 * POLL }));
+    expect(okTrade.actions).toEqual([]);
+    expect(okTrade.state.lockedDay).toBeNull();
+  });
+
+  it("trims again the next time the limit is broken, still without locking", () => {
+    let state = compliantState({});
+    for (let i = 1; i <= 3; i++) {
+      const d = decideEnforcement(input({ rules: [sizeRule(20)], state, positions: [BTC(0.0003, 25)], nowMs: NOW + i * POLL }));
+      expect(d.state.lockedDay).toBeNull();
+      expect(d.actions).toHaveLength(1);
+      // The close filled: the next check sees nothing held, then the trader tries again.
+      state = decideEnforcement(input({ rules: [sizeRule(20)], state: d.state, positions: [], nowMs: NOW + i * POLL + 1_000 })).state;
+    }
+  });
+
+  it("keeps trying while a close has not gone through", () => {
+    const first = decideEnforcement(input({ rules: [sizeRule(20)], state: compliantState({}), positions: [BTC(0.0003, 25)] }));
+    const second = decideEnforcement(input({ rules: [sizeRule(20)], state: first.state, positions: [BTC(0.0003, 25)], nowMs: NOW + POLL }));
+    expect(second.actions).toEqual([expect.objectContaining({ kind: "TRIM", coin: "BTC" })]);
+    expect(second.actions[0]).toMatchObject({ size: D(0.0003) });
+  });
+
+  it("leaves a position it already held over the limit alone on the first check after a gap, then trims growth", () => {
+    const stale = compliantState({ BTC: 0.0001 }, NOW - 10 * 60_000);
+    const gap = decideEnforcement(input({ rules: [sizeRule(20)], state: stale, positions: [BTC(0.0003, 25)] }));
+    expect(gap.actions).toEqual([]); // already held when the watcher came back: not touched
+
+    const grew = decideEnforcement(input({ rules: [sizeRule(20)], state: gap.state, positions: [BTC(0.0004, 33)], nowMs: NOW + POLL }));
+    expect(grew.actions).toHaveLength(1);
+    expect(grew.actions[0]).toMatchObject({ coin: "BTC", size: D(0.0001) }); // only the growth since the last check
+  });
+
+  it("lets the trader reduce a position that is over the limit without any action", () => {
+    const over = decideEnforcement(input({ rules: [sizeRule(20)], state: compliantState({ BTC: 0.0003 }), positions: [BTC(0.0003, 25)] }));
+    expect(over.actions).toEqual([]);
+    const reduced = decideEnforcement(input({ rules: [sizeRule(20)], state: over.state, positions: [BTC(0.0002, 17)], nowMs: NOW + POLL }));
+    expect(reduced.actions).toEqual([]);
+    expect(reduced.state.lockedDay).toBeNull();
+  });
+
+  it("still locks for the day when a locking rule is broken at the same time", () => {
+    const d = decideEnforcement(
+      input({ rules: [sizeRule(20), lossRule(100)], state: compliantState({}), positions: [BTC(0.0003, 25)], equity: { startOfDay: D(1000), current: D(850), peak: D(1000) } }),
+    );
+    expect(d.newLock?.rule).toBe(RuleType.MAX_DAILY_LOSS);
+    expect(d.state.lockedDay).toBe(TODAY);
+  });
+
+  it("lifts, at once, a lock that an earlier version of this rule created", () => {
+    const d = decideEnforcement(input({ rules: [sizeRule(20)], state: lockedState({ BTC: 0 }, "MAX_POSITION_SIZE"), positions: [BTC(0.00013, 11)] }));
+    expect(d.unlocked).toBe(true);
+    expect(d.state.lockedDay).toBeNull();
+    expect(d.actions).toEqual([]); // $11 is under the $20 limit
+  });
+});
+

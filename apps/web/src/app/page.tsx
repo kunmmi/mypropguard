@@ -1007,10 +1007,12 @@ function Dashboard({ session }: { session: Session }) {
         {status && !isSafeVenue(venue) && (
           <Panel title="Watcher">
             <p style={{ marginTop: 0, fontSize: 13, color: "var(--text-muted)" }}>
-              Watches your Hyperliquid account every few seconds, so you can keep trading on Hyperliquid itself. If a
-              rule is broken the account is locked until midnight UTC: positions you already hold are left alone, but
-              the trade that broke the rule, and every new trade after it, is closed straight away. You can still
-              reduce or close what you hold.
+              Watches your Hyperliquid account every few seconds, so you can keep trading on Hyperliquid itself. If you
+              go over your max position size, the trade that did it is closed straight away and nothing else changes:
+              you can trade again right after. If another rule is broken (daily loss, drawdown, leverage, total
+              exposure) the account is locked until midnight UTC: positions you already hold are left alone, but the
+              trade that broke the rule, and every new trade after it, is closed. You can still reduce or close what
+              you hold.
             </p>
             <div style={{ display: "flex", gap: "var(--space-2)", flexWrap: "wrap", marginBottom: "var(--space-3)" }}>
               {enforcement && (

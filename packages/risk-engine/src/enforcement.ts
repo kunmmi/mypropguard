@@ -74,6 +74,12 @@ const WATCHED_RULES_IN_ORDER = [
 ] as const;
 
 /** The active rule of this type. If several are active (older data), the most recently created one is the current limit. */
+/**
+ * Rules that only trim: breaking one closes the trade that broke it, and nothing more. The account is not locked,
+ * so the trader's next trade is allowed again (and trimmed again if it breaks the rule again).
+ */
+const TRIM_ONLY_RULES: ReadonlySet<RuleType> = new Set([RuleType.MAX_POSITION_SIZE]);
+
 function activeRule(rules: readonly RuleVersion[], type: RuleType): RuleVersion | undefined {
   return rules
     .filter((r) => r.ruleType === type && r.isActive)
@@ -85,8 +91,10 @@ export function findBreach(
   rules: readonly RuleVersion[],
   snapshot: WatchSnapshot,
   equity: WatchEquity,
+  include: (type: RuleType) => boolean = () => true,
 ): { rule: RuleType; detail: string } | null {
   for (const type of WATCHED_RULES_IN_ORDER) {
+    if (!include(type)) continue;
     const rule = activeRule(rules, type);
     if (!rule) continue;
     const limit = rule.param;
@@ -154,6 +162,38 @@ function wouldIncreaseExposure(order: WatchedOrder, position: Decimal): boolean 
 }
 
 /**
+ * A rule that only trims was broken: close what was just added, and lock nothing.
+ *
+ * "What was just added" is measured against the positions the account was allowed to have at the previous check
+ * (kept in `lastCompliant`, which here holds the allowed positions rather than strictly compliant ones). A new
+ * position is closed in full, a position that grew loses the growth, and a position that shrank lowers its own
+ * baseline. If there is no recent baseline (the watcher was off), what is held now counts as already held, so only
+ * growth after this check is trimmed.
+ */
+function trimOnly(
+  input: DecideEnforcementInput,
+  state: EnforcementState,
+  current: Record<string, Decimal>,
+  breach: { rule: RuleType; detail: string },
+  unlocked: boolean,
+): EnforcementDecision {
+  const fresh = state.lastCompliant && input.nowMs - state.lastCompliant.atMs <= input.staleAfterMs;
+  const baseline: Record<string, Decimal> = fresh ? state.lastCompliant!.positions : current;
+
+  const actions: EnforcementActionPlan[] = [];
+  const allowed: Record<string, Decimal> = {};
+  for (const coin of new Set([...Object.keys(current), ...Object.keys(baseline)])) {
+    const size = current[coin] ?? new Decimal(0);
+    const result = newExposure(size, baseline[coin] ?? new Decimal(0));
+    if (!result.ceiling.isZero()) allowed[coin] = result.ceiling;
+    if (result.excess.gt(0)) {
+      actions.push({ kind: "TRIM", coin, isBuy: size.isNegative(), size: result.excess, reason: `${breach.rule} broken (${breach.detail}): the trade that broke it is closed` });
+    }
+  }
+  return { state: { ...state, lastCompliant: { atMs: input.nowMs, positions: allowed } }, actions, newLock: null, unlocked };
+}
+
+/**
  * The watcher's whole decision, with no I/O so it can be tested exhaustively.
  *
  * The lock: when a watched rule is broken the account is locked for the rest of the UTC day. Positions open
@@ -168,14 +208,17 @@ export function decideEnforcement(input: DecideEnforcementInput): EnforcementDec
   let unlocked = false;
   let newLock: EnforcementDecision["newLock"] = null;
 
-  if (state.lockedDay && state.lockedDay !== input.today) {
+  // A lock ends at the next UTC day. A lock from a rule that only trims (set before it became trim-only) ends at once.
+  if (state.lockedDay && (state.lockedDay !== input.today || TRIM_ONLY_RULES.has(state.reason as RuleType))) {
     state = { ...state, lockedDay: null, reason: null, lockedAtMs: null, ceilings: {} };
     unlocked = true;
   }
 
   if (!state.lockedDay) {
-    const breach = findBreach(input.rules, input.snapshot, input.equity);
+    const breach = findBreach(input.rules, input.snapshot, input.equity, (type) => !TRIM_ONLY_RULES.has(type));
     if (!breach) {
+      const sizeBreach = findBreach(input.rules, input.snapshot, input.equity, (type) => TRIM_ONLY_RULES.has(type));
+      if (sizeBreach) return trimOnly(input, state, current, sizeBreach, unlocked);
       return {
         state: { ...state, lastCompliant: { atMs: input.nowMs, positions: current } },
         actions: [],

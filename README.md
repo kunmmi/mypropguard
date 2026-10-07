@@ -304,7 +304,11 @@ Hyperliquid accounts are not programmable, so a trader who clicks Buy on Hyperli
 before the order is placed. Instead the watcher (`packages/risk-ledger/src/watcher.ts`, decisions in
 `packages/risk-engine/src/enforcement.ts`) reads the trader's account every few seconds and reacts:
 
-- When a watched rule is broken (daily loss, drawdown, leverage, position size, exposure) the account is locked for
+- Max position size only trims: the trade that takes the account over the limit is closed (a new position in full, a
+  position that grew loses the growth) and nothing is locked, so the next trade is allowed again. A position held over
+  the limit before the watcher saw it is left alone, and only growth after that is trimmed. Any older position-size
+  lock lifts by itself.
+- When any other watched rule is broken (daily loss, drawdown, leverage, exposure) the account is locked for
   the rest of the UTC day. Positions open at that moment are left alone. The trade that broke the rule - found by
   comparing with the last compliant reading - and every new trade after it is cancelled or trimmed with a
   reduce-only IOC order. The trader may still reduce or close what they hold; a position that shrank cannot be
