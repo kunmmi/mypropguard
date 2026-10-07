@@ -51,7 +51,7 @@ describe("OneClickRequestHandler", () => {
     const { handler, trades } = setup({ execute: async () => { throw new SessionTradeRefused("GUARD_REFUSED", "Blocked by MyPropGuard: this buy is larger than the per-trade limit."); } });
     const reply = await handler.handle(TOPIC, "eip155:56", buy());
 
-    expect(reply).toEqual({ error: { code: -32000, message: "Blocked by MyPropGuard: this buy is larger than the per-trade limit." } });
+    expect(reply).toEqual({ error: { code: -32000, message: `Blocked by MyPropGuard: this buy is larger than the per-trade limit. [0x12345678 on ${ROUTER}]` } });
     expect(trades).toMatchObject([{ result: "REFUSED" }]);
   });
 
@@ -112,5 +112,13 @@ describe("OneClickRequestHandler", () => {
     expect(await handler.handle(TOPIC, "eip155:56", { method: "wallet_switchEthereumChain", params: [{ chainId: "0x38" }] })).toEqual({ result: null });
     expect(await handler.handle(TOPIC, "eip155:56", { method: "wallet_switchEthereumChain", params: [{ chainId: "0x1" }] })).toHaveProperty("error.code", 4902);
     expect(await handler.handle(TOPIC, "eip155:56", { method: "eth_getBalance" })).toHaveProperty("error.code", -32601);
+  });
+
+  it("names the refused call, and the spender of an approval, so a surprise refusal can be understood", async () => {
+    const { handler } = setup({ execute: async () => { throw new SessionTradeRefused("GUARD_REFUSED", "Blocked."); } });
+    const spender = "13f4ea83d0bd40e75c8222255bc855a974568dd4";
+    const data = `0x39509351000000000000000000000000${spender}${"f".repeat(64)}`;
+    const reply = (await handler.handle(TOPIC, "eip155:56", buy({ data, value: "0x0" }))) as { error: { message: string } };
+    expect(reply.error.message).toContain(`increaseAllowance (0x39509351) for spender 0x${spender} on ${ROUTER}`);
   });
 });

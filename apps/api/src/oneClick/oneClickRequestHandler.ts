@@ -26,6 +26,30 @@ export interface OneClickHandlerDeps {
   executors: Record<number, TradeExecutor>;
 }
 
+const KNOWN_SELECTORS: Record<string, string> = {
+  "0x095ea7b3": "approve",
+  "0x39509351": "increaseAllowance",
+  "0xa9059cbb": "transfer",
+  "0x23b872dd": "transferFrom",
+  "0xa22cb465": "setApprovalForAll",
+  "0x42842e0e": "safeTransferFrom",
+  "0xb88d4fde": "safeTransferFrom",
+  "0xd0e30db0": "deposit",
+  "0x2e1a7d4d": "withdraw",
+  "0x3593564c": "execute",
+};
+
+/** A short, safe description of a call for the trader and the log: what it is, and for an approval, to whom. */
+export function summarizeCall(to: string, data: string): string {
+  const selector = data.length >= 10 ? data.slice(0, 10).toLowerCase() : "no data";
+  const name = KNOWN_SELECTORS[selector];
+  let detail = name ? `${name} (${selector})` : selector;
+  if ((selector === "0x095ea7b3" || selector === "0x39509351") && data.length >= 74) {
+    detail += ` for spender 0x${data.slice(34, 74)}`;
+  }
+  return `${detail} on ${to}`;
+}
+
 export type RpcReply = { result: unknown } | { error: { code: number; message: string } };
 
 const UNSUPPORTED_SIGNING =
@@ -136,8 +160,10 @@ export class OneClickRequestHandler {
       return { result: hash };
     } catch (error) {
       if (error instanceof SessionTradeRefused) {
-        await audit("REFUSED", error.message, { to, value });
-        return fail(-32000, error.message);
+        // Say which call was refused, so an unexpected refusal can be understood from the dashboard alone.
+        const message = `${error.message} [${summarizeCall(to, dataField)}]`;
+        await audit("REFUSED", message, { to, value });
+        return fail(-32000, message);
       }
       const message = error instanceof Error ? error.message : String(error);
       await audit("ERROR", message, { to, value });
