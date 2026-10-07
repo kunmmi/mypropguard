@@ -73,8 +73,11 @@ const WATCHED_RULES_IN_ORDER = [
   RuleType.MAX_EXPOSURE,
 ] as const;
 
+/** The active rule of this type. If several are active (older data), the most recently created one is the current limit. */
 function activeRule(rules: readonly RuleVersion[], type: RuleType): RuleVersion | undefined {
-  return rules.find((r) => r.ruleType === type && r.isActive);
+  return rules
+    .filter((r) => r.ruleType === type && r.isActive)
+    .sort((a, b) => (b.createdAt?.getTime() ?? 0) - (a.createdAt?.getTime() ?? 0))[0];
 }
 
 /** The first watched rule that is broken right now, or null. Same comparisons the pre-trade risk engine uses. */

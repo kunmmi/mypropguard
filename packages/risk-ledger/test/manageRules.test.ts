@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { Decimal } from "decimal.js";
 import { RuleType } from "@mypropguard/domain";
 import { InMemoryRiskLedgerStore, buildAccountRiskHead, buildRuleVersion } from "@mypropguard/test-fixtures";
-import { addRule, deactivateRule, listRules } from "../src/manageRules.js";
+import { addRule, deactivateRule, listRules, supersedePreviousRules } from "../src/manageRules.js";
 
 describe("manageRules", () => {
   it("listRules returns only active rules", async () => {
@@ -61,5 +61,53 @@ describe("manageRules", () => {
 
     await expect(deactivateRule(store, "acct_rules_4", "does_not_exist")).resolves.not.toThrow();
     expect(await listRules(store, "acct_rules_4")).toHaveLength(1);
+  });
+});
+
+describe("supersedePreviousRules", () => {
+  async function setup() {
+    const store = new InMemoryRiskLedgerStore();
+    store.seedAccountRiskHead(buildAccountRiskHead({ accountId: "acct_supersede" }));
+    return store;
+  }
+
+  it("makes a changed limit replace the old one of the same kind, and leaves other kinds alone", async () => {
+    const store = await setup();
+    store.seedRules("acct_supersede", [
+      buildRuleVersion(RuleType.MAX_POSITION_SIZE, 10, { accountId: "acct_supersede" }),
+      buildRuleVersion(RuleType.MAX_DAILY_LOSS, 500, { accountId: "acct_supersede" }),
+    ]);
+    const changed = await addRule(store, "acct_supersede", RuleType.MAX_POSITION_SIZE, new Decimal(20));
+
+    expect(await supersedePreviousRules(store, "acct_supersede", changed)).toBe(1);
+
+    const active = await listRules(store, "acct_supersede");
+    expect(active.map((r) => [r.ruleType, r.param.toString()]).sort()).toEqual([
+      [RuleType.MAX_DAILY_LOSS, "500"],
+      [RuleType.MAX_POSITION_SIZE, "20"],
+    ]);
+  });
+
+  it("treats per-token rules separately: a new limit for one token does not replace another token's", async () => {
+    const store = await setup();
+    const bnb = "0x0000000000000000000000000000000000000000";
+    const cake = "0x0E09FaBB73Bd3Ade0a17ECC321fD13a19e81cE82";
+    store.seedRules("acct_supersede", [
+      buildRuleVersion(RuleType.MAX_POSITION_SIZE, 1, { accountId: "acct_supersede", tokenAddress: bnb }),
+      buildRuleVersion(RuleType.MAX_POSITION_SIZE, 5, { accountId: "acct_supersede", tokenAddress: cake }),
+    ]);
+    const changed = await addRule(store, "acct_supersede", RuleType.MAX_POSITION_SIZE, new Decimal(2), bnb.toUpperCase().replace("0X", "0x"));
+
+    await supersedePreviousRules(store, "acct_supersede", changed);
+
+    const active = await listRules(store, "acct_supersede");
+    expect(active.map((r) => r.param.toString()).sort()).toEqual(["2", "5"]);
+  });
+
+  it("does nothing when there is nothing older", async () => {
+    const store = await setup();
+    const only = await addRule(store, "acct_supersede", RuleType.MAX_LEVERAGE, new Decimal(3));
+    expect(await supersedePreviousRules(store, "acct_supersede", only)).toBe(0);
+    expect(await listRules(store, "acct_supersede")).toHaveLength(1);
   });
 });

@@ -295,3 +295,22 @@ describe("decideEnforcement - the UTC day", () => {
     expect(d.state.lockedDay).toBe(TODAY);
   });
 });
+
+describe("findBreach with two active rules of one kind (a limit that was changed without removing the old one)", () => {
+  const snapshot = { positions: [pos("BTC", 0.00013, 11)], openOrders: [], totalNotional: D(11) };
+  const equity = { startOfDay: D(100), current: D(100), peak: D(100) };
+
+  it("uses the most recently created rule, not whichever happens to come first", () => {
+    const older = buildRuleVersion(RuleType.MAX_POSITION_SIZE, 10, { createdAt: new Date("2026-10-07T09:00:00Z") });
+    const newer = buildRuleVersion(RuleType.MAX_POSITION_SIZE, 20, { createdAt: new Date("2026-10-07T09:30:00Z") });
+
+    expect(findBreach([older, newer], snapshot, equity)).toBeNull();
+    expect(findBreach([newer, older], snapshot, equity)).toBeNull();
+  });
+
+  it("still catches a breach of the newest limit", () => {
+    const older = buildRuleVersion(RuleType.MAX_POSITION_SIZE, 20, { createdAt: new Date("2026-10-07T09:00:00Z") });
+    const newer = buildRuleVersion(RuleType.MAX_POSITION_SIZE, 10, { createdAt: new Date("2026-10-07T09:30:00Z") });
+    expect(findBreach([older, newer], snapshot, equity)?.rule).toBe(RuleType.MAX_POSITION_SIZE);
+  });
+});

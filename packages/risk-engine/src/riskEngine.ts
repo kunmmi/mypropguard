@@ -36,8 +36,11 @@ const REASON_CODE_BY_RULE: Record<RuleType, string> = {
   [RuleType.COOLDOWN]: ReasonCode.COOLDOWN_ACTIVE,
 };
 
+/** The active rule of this type. If several are active (older data), the most recently created one is the current limit. */
 function findRule(rules: readonly RuleVersion[], ruleType: RuleType): RuleVersion | undefined {
-  return rules.find((rule) => rule.ruleType === ruleType && rule.isActive);
+  return rules
+    .filter((rule) => rule.ruleType === ruleType && rule.isActive)
+    .sort((a, b) => (b.createdAt?.getTime() ?? 0) - (a.createdAt?.getTime() ?? 0))[0];
 }
 
 function decision(

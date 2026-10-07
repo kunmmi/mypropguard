@@ -17,6 +17,23 @@ export async function addRule(
   return store.runExclusive(accountId, (ctx) => ctx.insertRule(accountId, { ruleType, param, tokenAddress }));
 }
 
+/**
+ * Makes `kept` the only active rule of its kind: deactivates every other active rule with the same type (and, for
+ * per-token rules, the same token). Changing a limit means adding a new rule, and the old one must stop applying;
+ * left active it would keep being enforced next to the new one, which looks like the change did not take.
+ * The deactivated rows stay in the table as history. Returns how many rules were replaced.
+ */
+export async function supersedePreviousRules(store: RiskLedgerStore, accountId: string, kept: RuleVersion): Promise<number> {
+  const token = (value: string | null | undefined) => (value ? value.toLowerCase() : null);
+  return store.runExclusive(accountId, async (ctx) => {
+    const older = (await ctx.getActiveRules(accountId)).filter(
+      (rule) => rule.id !== kept.id && rule.ruleType === kept.ruleType && token(rule.tokenAddress) === token(kept.tokenAddress),
+    );
+    for (const rule of older) await ctx.deactivateRule(rule.id);
+    return older.length;
+  });
+}
+
 /** Deactivates a rule so it no longer applies to future risk decisions. */
 export async function deactivateRule(store: RiskLedgerStore, accountId: string, ruleId: string): Promise<void> {
   await store.runExclusive(accountId, (ctx) => ctx.deactivateRule(ruleId));

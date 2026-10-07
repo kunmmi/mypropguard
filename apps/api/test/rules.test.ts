@@ -340,3 +340,40 @@ describe("POST /v1/accounts/:accountId/rules - MAX_DAILY_LOSS freeze enforcement
     expect(response.statusCode).toBe(201);
   });
 });
+
+describe("POST /v1/accounts/:accountId/rules - changing a limit", () => {
+  it("replaces the older rule of the same kind, so only the new limit is active", async () => {
+    const store = new InMemoryRiskLedgerStore();
+    const app = buildApp({ store });
+    await createAccountWithRule(app, "acct_rules_change");
+    for (const param of ["10", "20"]) {
+      const response = await app.inject({
+        method: "POST",
+        url: "/v1/accounts/acct_rules_change/rules",
+        payload: { ruleType: RuleType.MAX_POSITION_SIZE, param },
+      });
+      expect(response.statusCode).toBe(201);
+    }
+
+    const rules = (await app.inject({ method: "GET", url: "/v1/accounts/acct_rules_change/rules" })).json().rules;
+    expect(rules.filter((r: { ruleType: string }) => r.ruleType === RuleType.MAX_POSITION_SIZE).map((r: { param: string }) => r.param)).toEqual(["20"]);
+    expect(rules.some((r: { ruleType: string }) => r.ruleType === RuleType.MAX_DAILY_LOSS)).toBe(true);
+  });
+
+  it("keeps the previous limit when the on-chain push for the new one fails", async () => {
+    const store = new InMemoryRiskLedgerStore();
+    const calls: EvmRuleSyncInput[] = [];
+    const evmSafeProvisioners = { 56: { provisionSafe: async () => ({ safeAddress: "0xSAFE_BSC", chainId: 56 }) } };
+    const app = buildApp({ store, evmSafeProvisioners, evmGuardSyncers: { 56: fakeEvmGuardSyncer(calls) } });
+    await createEvmSafeAccount(app, "acct_rules_change_evm");
+    const token = "0x0000000000000000000000000000000000000000";
+    await app.inject({ method: "POST", url: "/v1/accounts/acct_rules_change_evm/rules", payload: { ruleType: RuleType.MAX_POSITION_SIZE, param: "1", tokenAddress: token } });
+
+    const failing = buildApp({ store, evmSafeProvisioners, evmGuardSyncers: { 56: fakeEvmGuardSyncer([], true) } });
+    const response = await failing.inject({ method: "POST", url: "/v1/accounts/acct_rules_change_evm/rules", payload: { ruleType: RuleType.MAX_POSITION_SIZE, param: "2", tokenAddress: token } });
+    expect(response.statusCode).toBe(500);
+
+    const rules = (await failing.inject({ method: "GET", url: "/v1/accounts/acct_rules_change_evm/rules" })).json().rules;
+    expect(rules.filter((r: { ruleType: string }) => r.ruleType === RuleType.MAX_POSITION_SIZE).map((r: { param: string }) => r.param)).toEqual(["1"]);
+  });
+});
