@@ -184,6 +184,24 @@ if (process.env.ENABLE_REAL_SIGNER === "true") {
 // admin wallet/RPC config - that Guard's setTokenLimit/setMaxTradesPerDay are independently
 // settable per rule, unlike GMX's combined setLimits, which needs its own, separate design before
 // a single rule change could safely push to it without clobbering the other limit.
+/**
+ * Reads a private key from the environment. Pasted values often carry spaces, quotes or a missing "0x", which are
+ * harmless and fixed here. Anything else that is not 64 hex characters is reported by variable name and length only,
+ * never by value, so a wrong paste (the wallet address instead of the key, a cut-off key) is easy to spot in the log.
+ */
+function envPrivateKey(name: string, value: string | undefined): `0x${string}` | undefined {
+  const cleaned = value?.trim().replace(/^["']|["']$/g, "").trim();
+  if (!cleaned) return undefined;
+  const hex = cleaned.replace(/^0x/i, "");
+  if (!/^[0-9a-fA-F]{64}$/.test(hex)) {
+    const looksLikeAddress = /^0x[0-9a-fA-F]{40}$/i.test(cleaned);
+    throw new Error(
+      `${name} is not a valid private key (expected 64 hex characters, optionally starting with 0x; got ${cleaned.length} characters${looksLikeAddress ? ", which is the length of a wallet ADDRESS - the private key is the longer secret" : ""}).`,
+    );
+  }
+  return `0x${hex}`;
+}
+
 function envAddress(value: string | undefined): Address | undefined {
   const trimmed = value?.trim();
   return trimmed ? getAddress(trimmed.toLowerCase()) : undefined;
@@ -226,7 +244,7 @@ function configureEvmChainProvisioning(
   // normalize addresses (a lowercase address is always valid) so a cosmetic slip cannot take the
   // server down.
   const rpcUrl = process.env[`EVM_${envPrefix}_RPC_URL`]?.trim();
-  const adminPrivateKey = process.env[`EVM_${envPrefix}_ADMIN_PRIVATE_KEY`]?.trim();
+  const adminPrivateKey = envPrivateKey(`EVM_${envPrefix}_ADMIN_PRIVATE_KEY`, process.env[`EVM_${envPrefix}_ADMIN_PRIVATE_KEY`]);
   const safeProxyFactory = envAddress(process.env[`EVM_${envPrefix}_SAFE_PROXY_FACTORY`]);
   const safeSingleton = envAddress(process.env[`EVM_${envPrefix}_SAFE_SINGLETON`]);
   const safeGuardSetup = envAddress(process.env[`EVM_${envPrefix}_SAFE_GUARD_SETUP`]);
@@ -238,7 +256,7 @@ function configureEvmChainProvisioning(
     );
   }
 
-  const adminAccount = privateKeyToAccount(adminPrivateKey as `0x${string}`);
+  const adminAccount = privateKeyToAccount(adminPrivateKey);
   const transport = http(rpcUrl);
   const publicClient = createPublicClient({ chain, transport });
   const walletClient = createWalletClient({ chain, transport, account: adminAccount });
@@ -371,8 +389,8 @@ async function setUpOneClick(): Promise<OneClickDeps | undefined> {
   const { publicClient, adminAccount, guardAddress, rpcUrl } = bscConfig.clients;
   // The wallet that pays gas for one-click trades. It holds no power over anyone's funds. Defaults to the Guard's
   // admin wallet; set EVM_BSC_RELAYER_PRIVATE_KEY to use a separate one.
-  const relayerKey = process.env.EVM_BSC_RELAYER_PRIVATE_KEY?.trim();
-  const gasAccount = relayerKey ? privateKeyToAccount(relayerKey as `0x${string}`) : adminAccount;
+  const relayerKey = envPrivateKey("EVM_BSC_RELAYER_PRIVATE_KEY", process.env.EVM_BSC_RELAYER_PRIVATE_KEY);
+  const gasAccount = relayerKey ? privateKeyToAccount(relayerKey) : adminAccount;
   const gasWalletClient: WalletClient = createWalletClient({ chain: bsc, transport: http(rpcUrl), account: gasAccount });
   const executor = new SafeSessionExecutor(publicClient, gasWalletClient, gasAccount, bsc, privy);
 
