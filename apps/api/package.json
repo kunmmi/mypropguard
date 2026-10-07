@@ -18,15 +18,21 @@
     "@mypropguard/execution": "workspace:*",
     "@mypropguard/hyperliquid": "workspace:*",
     "@mypropguard/risk-ledger": "workspace:*",
+    "@reown/walletkit": "^1.6.0",
     "@supabase/supabase-js": "^2.117.2",
+    "@walletconnect/core": "^2.25.0",
+    "@walletconnect/safe-json": "^1.0.2",
+    "@walletconnect/utils": "^2.25.0",
     "decimal.js": "^10.4.3",
     "fastify": "^5.2.0",
+    "pg": "^8.23.1",
     "tsx": "^4.19.2",
     "viem": "^2.56.5",
     "zod": "^3.24.1"
   },
   "devDependencies": {
     "@mypropguard/test-fixtures": "workspace:*",
+    "@types/pg": "^8.23.1",
     "typescript": "^5.7.0",
     "vitest": "^2.1.8"
   }

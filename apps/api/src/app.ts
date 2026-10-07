@@ -22,6 +22,7 @@ import { registerAccountRoutes } from "./routes/accounts.js";
 import { registerOrderRoutes } from "./routes/orders.js";
 import { registerProtectionRoutes } from "./routes/protection.js";
 import { registerEnforcementRoutes } from "./routes/enforcement.js";
+import { registerOneClickRoutes, type OneClickDeps } from "./routes/oneClick.js";
 import { registerReconciliationRoutes } from "./routes/reconciliation.js";
 import { registerExecutionRoutes } from "./routes/execution.js";
 import { registerRuleRoutes } from "./routes/rules.js";
@@ -87,6 +88,8 @@ export interface AppDeps {
   watcherMode?: "log" | "enforce";
   /** Finds the tokens a Safe holds (Moralis), keyed by chain id. Optional; see evmStateReaders. */
   evmTokenDiscoveries?: Record<number, EvmTokenDiscovery>;
+  /** One-click trading (session key + WalletConnect). Absent when it is not configured: the routes then do not exist. */
+  oneClick?: OneClickDeps;
   /**
    * When configured, every route requires a valid Supabase bearer token and
    * populates request.userId - route handlers then use it to derive
@@ -219,6 +222,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   registerExecutionRoutes(app, deps);
   registerRuleRoutes(app, deps);
   registerEnforcementRoutes(app, deps);
+  registerOneClickRoutes(app, deps);
 
   // Route handlers already return typed errors (400/409/501) for expected
   // cases. Anything reaching here is unexpected (e.g. a database driver

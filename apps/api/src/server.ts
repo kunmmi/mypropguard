@@ -32,7 +32,7 @@ import {
   PrivySignerGateway,
 } from "@mypropguard/hyperliquid";
 import { FakeSignerGateway, PlaceholderActionHasher } from "@mypropguard/execution";
-import { createPublicClient, createWalletClient, http, type Address, type Chain, getAddress } from "viem";
+import { createPublicClient, createWalletClient, http, type Address, type Chain, type PublicClient, type WalletClient, getAddress } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { arbitrum, bsc, mainnet } from "viem/chains";
 import {
@@ -45,7 +45,13 @@ import {
   MoralisTokenDiscovery,
   SafeTxServiceTokenDiscovery,
   SafeStateReader,
+  SafeSessionExecutor,
 } from "@mypropguard/evm";
+import { OneClickStore } from "./oneClick/oneClickStore.js";
+import { OneClickRequestHandler } from "./oneClick/oneClickRequestHandler.js";
+import { PgWalletConnectStorage } from "./oneClick/pgWalletConnectStorage.js";
+import { WalletConnectService } from "./oneClick/walletConnectService.js";
+import type { OneClickDeps } from "./routes/oneClick.js";
 
 // PancakeSwap's own canonical BSC mainnet addresses - public, not secrets, so hardcoded rather
 // than made configurable (one less thing to misconfigure). See PancakeSwapEquityReader's NatSpec
@@ -210,6 +216,8 @@ function configureEvmChainProvisioning(
   equityReader?: EvmSafeEquityReader;
   stateReader?: EvmSafeStateReader;
   tokenDiscovery?: EvmTokenDiscovery;
+  /** What one-click trading reuses: the chain's clients, the gas-paying admin wallet and the Guard. */
+  clients: { publicClient: PublicClient; walletClient: WalletClient; adminAccount: ReturnType<typeof privateKeyToAccount>; guardAddress: Address; rpcUrl: string };
 } | undefined {
   if (process.env[`ENABLE_EVM_${envPrefix}_PROVISIONING`] !== "true") return undefined;
 
@@ -287,7 +295,14 @@ function configureEvmChainProvisioning(
 
   // eslint-disable-next-line no-console
   console.log(`EVM Safe provisioning enabled for ${label}. New accounts on that chain get a real provisioned Safe.`);
-  return { provisioner, guardSyncer, equityReader, stateReader, tokenDiscovery };
+  return {
+    provisioner,
+    guardSyncer,
+    equityReader,
+    stateReader,
+    tokenDiscovery,
+    clients: { publicClient: publicClient as any, walletClient: walletClient as any, adminAccount, guardAddress: guardAddress as Address, rpcUrl },
+  };
 }
 
 const evmSafeProvisioners: Record<number, EvmSafeProvisioner> = {};
@@ -339,6 +354,60 @@ if (watcherEnabled) {
   }
 }
 
+// One-click trading (see apps/api/src/oneClick, packages/evm's SafeSessionExecutor, SpotRiskGuard session keys). The
+// server stays connected to exchanges as a WalletConnect "wallet" and signs each trade with the account's session key,
+// a Privy wallet the Guard lets trade and nothing else. Off by default.
+let oneClick: OneClickDeps | undefined;
+if (process.env.ENABLE_ONE_CLICK === "true") {
+  const projectId = process.env.WALLETCONNECT_PROJECT_ID?.trim();
+  const { PRIVY_APP_ID, PRIVY_APP_SECRET } = process.env;
+  if (!projectId || !PRIVY_APP_ID || !PRIVY_APP_SECRET) {
+    throw new Error("ENABLE_ONE_CLICK=true requires WALLETCONNECT_PROJECT_ID (free, from cloud.reown.com), PRIVY_APP_ID and PRIVY_APP_SECRET.");
+  }
+  if (!bscConfig) throw new Error("ENABLE_ONE_CLICK=true requires ENABLE_EVM_BSC_PROVISIONING=true (it trades on the BSC Safes).");
+
+  const privy = new PrivyClient({ appId: PRIVY_APP_ID, appSecret: PRIVY_APP_SECRET });
+  const { publicClient, adminAccount, guardAddress, rpcUrl } = bscConfig.clients;
+  // The wallet that pays gas for one-click trades. It holds no power over anyone's funds. Defaults to the Guard's
+  // admin wallet; set EVM_BSC_RELAYER_PRIVATE_KEY to use a separate one.
+  const relayerKey = process.env.EVM_BSC_RELAYER_PRIVATE_KEY?.trim();
+  const gasAccount = relayerKey ? privateKeyToAccount(relayerKey as `0x${string}`) : adminAccount;
+  const gasWalletClient: WalletClient = createWalletClient({ chain: bsc, transport: http(rpcUrl), account: gasAccount });
+  const executor = new SafeSessionExecutor(publicClient, gasWalletClient, gasAccount, bsc, privy);
+
+  const oneClickStore = new OneClickStore(pool);
+  const findAccount = (accountId: string) => store.findAccountById(accountId);
+  const handler = new OneClickRequestHandler({ store: oneClickStore, findAccount, executors: { [bsc.id]: executor } });
+  const publicUrl = process.env.PUBLIC_WEB_URL?.trim() || "https://mypropguard.com";
+  const service = await WalletConnectService.start({
+    projectId,
+    storage: new PgWalletConnectStorage(pool),
+    store: oneClickStore,
+    handler,
+    findAccount,
+    metadata: { name: "MyPropGuard", description: "Trade with your protected account, with your risk rules enforced.", url: publicUrl, icons: [`${publicUrl}/favicon.ico`] },
+    log: (message) => console.log(`[one-click] ${message}`),
+  });
+  oneClick = {
+    store: oneClickStore,
+    service,
+    createSessionWallet: async () => {
+      const wallet = await privy.createEthereumWallet();
+      return { id: wallet.id, address: wallet.address };
+    },
+    chains: {
+      [bsc.id]: {
+        publicClient,
+        guardAddress,
+        // Safe's canonical MultiSendCallOnly v1.4.1 on BNB Chain.
+        multiSendCallOnly: envAddress(process.env.EVM_BSC_MULTISEND_CALL_ONLY) ?? ("0x9641d764fc13c8B624c04430C7356C1C7C8102e2" as Address),
+        gasWalletAddress: gasAccount.address,
+      },
+    },
+  };
+  console.log(`One-click trading on (BSC). Gas is paid by ${gasAccount.address}.`);
+}
+
 const app = buildApp({
   store,
   watcherMode: watcherEnabled ? watcherMode : undefined,
@@ -358,6 +427,7 @@ const app = buildApp({
   evmEquityReaders,
   evmStateReaders,
   evmTokenDiscoveries,
+  oneClick,
 });
 
 // Max-daily-loss freezing is equity-based, not just realized P&L from trades - an account can
