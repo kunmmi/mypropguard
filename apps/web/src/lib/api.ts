@@ -134,6 +134,23 @@ export interface SubmitOrderResult {
   venueOrderId: string | null;
 }
 
+export interface OneClickTransaction {
+  to: string;
+  data: string;
+  value: string;
+}
+
+export interface OneClickStatus {
+  available: boolean;
+  /** "off" until enabled once; "revoked" after it was switched off. */
+  status: "off" | "pending" | "enabled" | "revoked";
+  sessionKeyAddress: string | null;
+  guardIsCurrent: boolean;
+  gasWalletLow: boolean;
+  links: Array<{ topic: string; name: string | null; url: string | null; linkedAt: string; expiresAt: string | null }>;
+  trades: Array<{ at: string; site: string | null; to: string | null; valueWei: string | null; txHash: string | null; result: "SENT" | "REFUSED" | "ERROR"; message: string | null }>;
+}
+
 export const api = {
   createAccount: (input: CreateAccountInput) =>
     request<{ accountId: string; protectionOn: boolean; agentWalletAddress: string | null; evmSafeAddress?: string | null }>(
@@ -204,6 +221,35 @@ export const api = {
     // no input, but still needs a real (even empty) JSON body to parse.
     request<{ ruleId: string; isActive: false }>(
       `/v1/accounts/${encodeURIComponent(accountId)}/rules/${encodeURIComponent(ruleId)}/deactivate`,
+      { method: "POST", body: "{}" },
+    ),
+
+  getOneClick: (accountId: string) => request<OneClickStatus>(`/v1/accounts/${encodeURIComponent(accountId)}/one-click`),
+
+  prepareOneClick: (accountId: string) =>
+    request<{ sessionKeyAddress: string; ownerAddress: string; chainId: number; transaction: OneClickTransaction }>(
+      `/v1/accounts/${encodeURIComponent(accountId)}/one-click/prepare`,
+      { method: "POST", body: "{}" },
+    ),
+
+  confirmOneClick: (accountId: string) =>
+    request<{ status: string }>(`/v1/accounts/${encodeURIComponent(accountId)}/one-click/confirm`, { method: "POST", body: "{}" }),
+
+  pairOneClick: (accountId: string, uri: string) =>
+    request<{ ok: boolean; message: string }>(`/v1/accounts/${encodeURIComponent(accountId)}/one-click/pair`, {
+      method: "POST",
+      body: JSON.stringify({ uri }),
+    }),
+
+  disconnectOneClick: (accountId: string, topic: string) =>
+    request<{ ok: boolean }>(`/v1/accounts/${encodeURIComponent(accountId)}/one-click/disconnect`, {
+      method: "POST",
+      body: JSON.stringify({ topic }),
+    }),
+
+  disableOneClick: (accountId: string) =>
+    request<{ status: string; chainId?: number; ownerAddress?: string; transaction: OneClickTransaction | null }>(
+      `/v1/accounts/${encodeURIComponent(accountId)}/one-click/disable`,
       { method: "POST", body: "{}" },
     ),
 };

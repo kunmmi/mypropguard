@@ -8,6 +8,7 @@ import { Input } from "@/design-system/components/forms/Input";
 import { Select } from "@/design-system/components/forms/Select";
 import { Panel } from "@/design-system/Panel";
 import { StatusBadge } from "@/design-system/StatusBadge";
+import { OneClickPanel } from "./OneClickPanel";
 import { supabase } from "@/lib/supabaseClient";
 import { VENUES, getVenue, isSafeVenue, type VenueConfig } from "@/lib/venues";
 import {
@@ -993,6 +994,10 @@ function Dashboard({ session }: { session: Session }) {
               </div>
             )}
           </Panel>
+        )}
+
+        {status && selectedAccount?.evmSafeAddress && isSafeVenue(venue) && (
+          <OneClickPanel accountId={accountId} nativeSymbol={venue.nativeSymbol} exchangeName={venue.exchangeName} />
         )}
 
         {status && !isSafeVenue(venue) && (
