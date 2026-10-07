@@ -129,15 +129,23 @@ export class WalletConnectService {
 
   private async onRequest(event: any): Promise<void> {
     const { id, topic, params } = event;
+    const method: string = params?.request?.method ?? "?";
+    const startedAt = Date.now();
+    this.log(`request ${method} (id ${id}) from link ${String(topic).slice(0, 8)}`);
     let reply;
     try {
       reply = await this.options.handler.handle(topic, params.chainId, params.request);
     } catch (error) {
       reply = { error: { code: -32000, message: error instanceof Error ? error.message : String(error) } };
     }
-    await this.kit.respondSessionRequest({ topic, response: { id, jsonrpc: "2.0", ...reply } as any }).catch((error: unknown) => {
-      this.log(`Could not answer WalletConnect request ${id}: ${error instanceof Error ? error.message : error}`);
-    });
+    const outcome = "error" in reply ? `error ${reply.error.code}` : "ok";
+    const decidedMs = Date.now() - startedAt;
+    try {
+      await this.kit.respondSessionRequest({ topic, response: { id, jsonrpc: "2.0", ...reply } as any });
+      this.log(`answered ${method} (id ${id}) ${outcome}: decided in ${decidedMs} ms, delivered in ${Date.now() - startedAt} ms`);
+    } catch (error) {
+      this.log(`COULD NOT DELIVER the answer to ${method} (id ${id}, ${outcome}) after ${Date.now() - startedAt} ms: ${error instanceof Error ? error.message : error}`);
+    }
   }
 
   /** Forgets links the exchange or the relay already ended, so the dashboard never lists a dead link. */
