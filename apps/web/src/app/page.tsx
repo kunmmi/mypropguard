@@ -40,7 +40,7 @@ const GUIDE_STEPS = [
   },
   {
     title: "4. Trade within your rules",
-    body: "On-chain: fund the Safe, connect it to a supported exchange through WalletConnect from app.safe.global, and sign trades with your wallet. A trade that breaks a rule, or uses a route the Guard does not support yet, is rejected on-chain. Hyperliquid: activate protection and check orders against the rules before submitting.",
+    body: "On-chain: fund the Safe, press Enable one-click trading once, and link the exchange by pasting its WalletConnect code. Then trade on the exchange as usual with no popup. A trade that breaks a rule is rejected on-chain. Hyperliquid: keep trading on Hyperliquid itself; the watcher locks the account and closes new trades once a rule is broken.",
   },
 ];
 
@@ -739,14 +739,18 @@ function Dashboard({ session }: { session: Session }) {
                       Send some {venue.nativeSymbol ?? "native token"} to the Safe address above. Start with a small
                       amount.
                     </li>
-                    <li>Open app.safe.global on {venue.chainName}, add your Safe, and sign in with your owner wallet.</li>
                     <li>
-                      On {venue.exchangeName}&apos;s site choose WalletConnect, copy the link, and paste it into the
-                      WalletConnect option in the Safe app.
+                      Press <strong>Enable one-click trading</strong> in the panel below. You confirm once in your
+                      wallet, and it adds a trading-only key to your Safe.
                     </li>
                     <li>
-                      Trade as usual, then sign and execute each transaction in the Safe app with your owner wallet.
-                      Keep a little {venue.nativeSymbol ?? "native token"} in your owner wallet for gas.
+                      On {venue.exchangeName}&apos;s site choose WalletConnect, copy the code it shows, and paste it
+                      into the <strong>Link</strong> box in that panel.
+                    </li>
+                    <li>
+                      Trade as usual: no popup, and no need to keep this page open. A trade that breaks a rule is
+                      refused, and selling is always allowed. Sending money out of the Safe still needs your own
+                      wallet.
                     </li>
                   </ol>
                 </div>
