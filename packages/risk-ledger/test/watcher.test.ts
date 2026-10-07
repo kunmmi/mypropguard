@@ -40,9 +40,12 @@ class FakeVenue implements VenueStateReader {
   nowMs = T0;
   failState: Error | null = null;
   stateReads = 0;
+  /** Runs in the middle of a check, after the saved state was read and before the result is saved. */
+  beforeStateRead: (() => Promise<void>) | null = null;
 
   async getClearinghouseState(): Promise<ClearinghouseState> {
     this.stateReads++;
+    await this.beforeStateRead?.();
     if (this.failState) throw this.failState;
     return {
       accountValue: D(this.accountValue),
@@ -354,5 +357,44 @@ describe("watchAllHyperliquidAccounts", () => {
     expect(sweep.errors.map((e) => e.accountId)).toEqual(["acct_hl"]);
     expect(sweep.results.map((r) => r.accountId)).toEqual(["acct_hl_2"]);
     expect([...new Set(calls)].sort()).toEqual(["0xOTHER", "0xTRADER"]); // the EVM and address-less accounts were never read
+  });
+});
+
+describe("runWatcherCycle - a manual change to the lock state during a check", () => {
+  it("is not undone: a lock cleared mid-check stays cleared, and nothing is acted on", async () => {
+    const { venue, tick, head, enforcer, store } = setup();
+    venue.positions = [{ coin: "BTC", size: 0.5, value: 30_000 }];
+    await tick(); // baseline
+    venue.accountValue = 850; // lost 150, limit 100
+    await tick(); // locked
+    expect((await head()).enforcement?.lockedDay).toBe("2026-10-07");
+
+    // Someone clears the lock (the way an operator would, in the database) while a check is running.
+    venue.accountValue = 1000; // and the loss is gone, so nothing should lock it again
+    venue.positions = [{ coin: "BTC", size: 0.5, value: 30_000 }, { coin: "ETH", size: 1, value: 3_000 }]; // a new position this stale check would close
+    venue.beforeStateRead = async () => {
+      venue.beforeStateRead = null;
+      await store.runExclusive("acct_hl", async (ctx) => {
+        const h = await ctx.getAccountRiskHead("acct_hl");
+        await ctx.updateAccountRiskHead({ ...h, enforcement: null });
+      });
+    };
+    const interrupted = await tick();
+
+    expect(interrupted.skipped).toContain("changed while this check was running");
+    expect(enforcer.closes).toEqual([]); // the stale decision to close ETH was dropped
+    expect((await head()).enforcement ?? null).toBeNull(); // not written back
+
+    const next = await tick(); // the next check starts from the cleared state
+    expect(next.locked).toBe(false);
+    expect(enforcer.closes).toEqual([]);
+  });
+
+  it("still saves normally when nothing else touched the state", async () => {
+    const { venue, tick, head } = setup();
+    venue.positions = [{ coin: "BTC", size: 0.5, value: 30_000 }];
+    const r = await tick();
+    expect(r.skipped).toBeUndefined();
+    expect((await head()).enforcement?.lastCompliant?.positions.BTC?.toString()).toBe("0.5");
   });
 });

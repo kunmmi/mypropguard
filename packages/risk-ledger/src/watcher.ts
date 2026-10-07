@@ -141,6 +141,9 @@ export async function runWatcherCycle(deps: WatcherDeps, accountId: string): Pro
   const flow = head.venueFlowState;
   if (!flow || flow.day !== today || nowMs - flow.cursorMs >= reconcileEveryMs) await reconcile();
 
+  // The lock state as this check read it. It is saved back only if nobody changed it meanwhile (see below).
+  let stateRead = head.enforcement ?? null;
+
   const state = await deps.venueReader.getClearinghouseState(address);
   const positions = state.positions
     .filter((p) => !p.size.isZero())
@@ -165,6 +168,7 @@ export async function runWatcherCycle(deps: WatcherDeps, accountId: string): Pro
 
   if (decision.newLock && EQUITY_RULE_TYPES.has(decision.newLock.rule) && !reconciled) {
     await reconcile();
+    stateRead = head.enforcement ?? null;
     decision = decide();
   }
 
@@ -173,10 +177,18 @@ export async function runWatcherCycle(deps: WatcherDeps, accountId: string): Pro
     decision = decide();
   }
 
-  await deps.store.runExclusive(accountId, async (ctx) => {
+  // A check takes a few seconds, and the lock state can change in that time (a manual reset, or another copy of the
+  // server). Saving what this check worked out would silently undo that change, so if the saved state is no longer
+  // what was read, drop this check and look again from the current state on the next one. Nothing is acted on either.
+  const sameState = (a: EnforcementState | null | undefined, b: EnforcementState | null | undefined) =>
+    JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+  const savedAsRead = await deps.store.runExclusive(accountId, async (ctx) => {
     const fresh = await ctx.getAccountRiskHead(accountId);
+    if (!sameState(fresh.enforcement, stateRead)) return false;
     await ctx.updateAccountRiskHead({ ...fresh, enforcement: decision.state });
+    return true;
   });
+  if (!savedAsRead) return result({ skipped: "the lock state changed while this check was running; checking again next cycle" });
 
   const record = (kind: "LOCK" | "UNLOCK" | "CANCEL" | "TRIM" | "WARNING", coin: string | null, detail: Record<string, unknown>, resultKind: "WOULD_DO" | "DONE" | "FAILED" | "INFO", error?: string) =>
     deps.store.recordEnforcementAction({ accountId, mode: deps.mode, kind, coin, detail, result: resultKind, error: error ?? null });
