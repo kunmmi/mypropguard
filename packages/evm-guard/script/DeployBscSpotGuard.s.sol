@@ -27,6 +27,9 @@ contract DeployBscSpotGuard is Script {
     address constant V3_SWAP_ROUTER = 0x1b81D678ffb9C0263b24A97847620C99d213eB14;
     address constant SMART_ROUTER = 0x13f4EA83D0bd40E75C8222255bc855a974568Dd4;
     address constant UNIVERSAL_ROUTER = 0xd9C500DfF816a1Da21A48A732d3498Bf09dc9AEB;
+    // PancakeSwap's Aggregator router (an upgradeable proxy owned by the same account as the Smart Router). The site
+    // routes some swaps through it and asks for a token approval to it first.
+    address constant AGGREGATOR_ROUTER = 0x2f68417A18dA681589F4eA64B9Cc9839209acfF7;
 
     function run() external {
         address adminAddress = vm.envAddress("ADMIN_ADDRESS");
@@ -43,12 +46,13 @@ contract DeployBscSpotGuard is Script {
         base[6] = 0x8d0D000Ee44948FC98c9B98A4FA4921476f08B0d; // USD1
         base[7] = 0x40af3827F39D0EAcBF4A168f8D4ee67c121D11c9; // TUSD
 
-        address[] memory spenders = new address[](5);
+        address[] memory spenders = new address[](6);
         spenders[0] = V2_ROUTER;
         spenders[1] = V3_SWAP_ROUTER;
         spenders[2] = SMART_ROUTER;
         spenders[3] = UNIVERSAL_ROUTER;
         spenders[4] = PERMIT2;
+        spenders[5] = AGGREGATOR_ROUTER;
 
         vm.startBroadcast();
         SpotRiskGuard guard = new SpotRiskGuard(adminAddress, WBNB, MULTISEND_CALL_ONLY, PERMIT2, base, spenders);
