@@ -424,4 +424,8 @@ holds. Findings worth remembering:
   link survive a restart? (Test: restart the server, then trade without re-linking.)
 - Render's free plan sleeps after ~15 minutes without web traffic, which would drop the WalletConnect connection: use the
   Starter plan or an uptime pinger on /healthz before relying on one-click with the dashboard closed.
+- Cause found for links breaking after a restart: Render runs the old and the new copy of the server side by side during a
+  deploy, and two copies sharing one WalletConnect identity and one set of saved state overwrite each other. Fixed with a
+  Postgres lease (apps/api/src/oneClick/walletConnectLease.ts): the new copy waits until the old one lets go, and the old one
+  hands over on SIGTERM. Verify after any deploy that the logs show "waiting for it to let go" then "now owns".
 
