@@ -357,14 +357,15 @@ if (watcherEnabled) {
 // One-click trading (see apps/api/src/oneClick, packages/evm's SafeSessionExecutor, SpotRiskGuard session keys). The
 // server stays connected to exchanges as a WalletConnect "wallet" and signs each trade with the account's session key,
 // a Privy wallet the Guard lets trade and nothing else. Off by default.
-let oneClick: OneClickDeps | undefined;
-if (process.env.ENABLE_ONE_CLICK === "true") {
+// A problem here (a missing or wrong WalletConnect id, the relay being unreachable) must not take the whole API down:
+// it would stop the Hyperliquid watcher and every other route too. So it is reported clearly and one-click stays off.
+async function setUpOneClick(): Promise<OneClickDeps | undefined> {
   const projectId = process.env.WALLETCONNECT_PROJECT_ID?.trim();
   const { PRIVY_APP_ID, PRIVY_APP_SECRET } = process.env;
   if (!projectId || !PRIVY_APP_ID || !PRIVY_APP_SECRET) {
-    throw new Error("ENABLE_ONE_CLICK=true requires WALLETCONNECT_PROJECT_ID (free, from cloud.reown.com), PRIVY_APP_ID and PRIVY_APP_SECRET.");
+    throw new Error("it needs WALLETCONNECT_PROJECT_ID (free, from cloud.reown.com), PRIVY_APP_ID and PRIVY_APP_SECRET");
   }
-  if (!bscConfig) throw new Error("ENABLE_ONE_CLICK=true requires ENABLE_EVM_BSC_PROVISIONING=true (it trades on the BSC Safes).");
+  if (!bscConfig) throw new Error("it needs ENABLE_EVM_BSC_PROVISIONING=true (it trades on the BSC Safes)");
 
   const privy = new PrivyClient({ appId: PRIVY_APP_ID, appSecret: PRIVY_APP_SECRET });
   const { publicClient, adminAccount, guardAddress, rpcUrl } = bscConfig.clients;
@@ -379,7 +380,7 @@ if (process.env.ENABLE_ONE_CLICK === "true") {
   const findAccount = (accountId: string) => store.findAccountById(accountId);
   const handler = new OneClickRequestHandler({ store: oneClickStore, findAccount, executors: { [bsc.id]: executor } });
   const publicUrl = process.env.PUBLIC_WEB_URL?.trim() || "https://mypropguard.com";
-  const service = await WalletConnectService.start({
+  const started = WalletConnectService.start({
     projectId,
     storage: new PgWalletConnectStorage(pool),
     store: oneClickStore,
@@ -388,7 +389,13 @@ if (process.env.ENABLE_ONE_CLICK === "true") {
     metadata: { name: "MyPropGuard", description: "Trade with your protected account, with your risk rules enforced.", url: publicUrl, icons: [`${publicUrl}/favicon.ico`] },
     log: (message) => console.log(`[one-click] ${message}`),
   });
-  oneClick = {
+  // Do not let a slow relay hold the whole server's startup hostage.
+  const service = await Promise.race([
+    started,
+    new Promise<never>((_, reject) => setTimeout(() => reject(new Error("the WalletConnect relay did not answer within 30 seconds")), 30_000)),
+  ]);
+  console.log(`One-click trading on (BSC). Gas is paid by ${gasAccount.address}.`);
+  return {
     store: oneClickStore,
     service,
     createSessionWallet: async () => {
@@ -405,7 +412,15 @@ if (process.env.ENABLE_ONE_CLICK === "true") {
       },
     },
   };
-  console.log(`One-click trading on (BSC). Gas is paid by ${gasAccount.address}.`);
+}
+
+let oneClick: OneClickDeps | undefined;
+if (process.env.ENABLE_ONE_CLICK === "true") {
+  try {
+    oneClick = await setUpOneClick();
+  } catch (error) {
+    console.error(`[one-click] NOT started, the rest of the server is running without it: ${error instanceof Error ? error.message : error}`);
+  }
 }
 
 const app = buildApp({
