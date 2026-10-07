@@ -411,3 +411,17 @@ Still to build: deploy the new Guard and re-point the Safe (setGuard needs the 2
 cooldown), the in-browser wallet that holds the session key and answers PancakeSwap's WalletConnect
 requests (Safe nonce, signature, execTransaction), and the dashboard's one-time "enable one-click
 trading" step (addSessionKey + addOwnerWithThreshold in one batch).
+
+### One-click trading: live results on BNB Chain (2026-10-07)
+
+Verified with real money on a Safe using the session-key Guard: a buy under the cap goes through with no popup, a buy
+over the cap is refused ("Blocked by MyPropGuard") with no gas spent, selling is always allowed, and the daily buy count
+holds. Findings worth remembering:
+- PancakeSwap now also routes through its Aggregator router (0x2f68417A18dA681589F4eA64B9Cc9839209acfF7); it had to be
+  allowlisted with `setAllowedSpender` (done on the live Guard, and added to the deploy script).
+- An old WalletConnect link that was created before a server restart stopped working on PancakeSwap (it timed out with
+  "Request expired") even though the server logged the reply as delivered. A fresh link worked. Open question: does a
+  link survive a restart? (Test: restart the server, then trade without re-linking.)
+- Render's free plan sleeps after ~15 minutes without web traffic, which would drop the WalletConnect connection: use the
+  Starter plan or an uptime pinger on /healthz before relying on one-click with the dashboard closed.
+
