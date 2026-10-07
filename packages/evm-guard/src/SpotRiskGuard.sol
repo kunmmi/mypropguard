@@ -4,6 +4,12 @@ pragma solidity ^0.8.20;
 import {BaseGuard} from "safe-smart-account/contracts/examples/guards/BaseGuard.sol";
 import {Enum} from "safe-smart-account/contracts/interfaces/Enum.sol";
 
+interface ISafeView {
+    function nonce() external view returns (uint256);
+    function getThreshold() external view returns (uint256);
+    function domainSeparator() external view returns (bytes32);
+}
+
 /// @title SpotRiskGuard
 /// @notice A Safe Guard that enforces MyPropGuard's risk rules on a trader's Safe by measuring what a
 /// transaction DOES to the Safe's balances, instead of decoding which exchange or router it calls.
@@ -38,10 +44,23 @@ import {Enum} from "safe-smart-account/contracts/interfaces/Enum.sol";
 /// Plain native sends and ERC-20 transfers (withdrawals - the Safe stays non-custodial), wrapping and
 /// unwrapping the native coin, and revoking approvals.
 ///
+/// ## Session keys (trading with no prompt per trade)
+/// A trader's Safe may have session keys: Safe owners that the Guard knows about (addSessionKey,
+/// called by a real owner). A key like that can sign trades without a wallet popup, so it must be
+/// harmless if stolen. For every transaction the Guard reads who signed it (the same way the Safe does).
+/// If any required signer is a session key, the transaction may ONLY trade: it can never send BNB or
+/// tokens out, call the Safe itself (owner, threshold, Guard or module changes), call this Guard,
+/// transfer a non-base token or NFT, or approve anything to a spender that is not allowlisted. Buys are
+/// still held to the per-buy cap, the daily buy count and the freeze. The trader's own key keeps every
+/// normal power, so withdrawals and key management still take the trader's own signature. Accounts
+/// with no session keys skip the check entirely and pay no extra gas.
+///
 /// ## Known limits (documented, not hidden)
 /// - Amount limits are per base asset in that asset's units, not dollars.
 /// - Rotating one non-base token into another inside a single transaction, with no base asset
-///   spent, is not detected as a buy.
+///   spent, is not detected as a buy. For the same reason a stolen session key could still send a
+///   NON-BASE token out through a swap that pays a stranger; base assets (BNB, WBNB, stablecoins)
+///   stay bounded by the buy limits.
 /// - The max-daily-loss freeze is still attested by MyPropGuard's backend (admin key): a daily loss
 ///   cannot be derived from one transaction. The admin can only freeze for the current UTC day and
 ///   can never unfreeze, extend a freeze, or move funds.
@@ -89,8 +108,32 @@ contract SpotRiskGuard is BaseGuard {
     /// refuse to serve. Bookkeeping only: it never blocks anything.
     mapping(address => mapping(address => uint256)) public withdrawnTotal;
 
+    /// @notice Keys an account has marked as session keys: owners of the Safe that sign trades on the
+    /// trader's behalf without a prompt. A transaction signed by one of them is judged by the strict
+    /// "trade only" rules below; one signed by any other owner keeps the normal rules.
+    mapping(address => mapping(address => bool)) public isSessionKey;
+    /// @notice How many session keys an account has. An account with none skips the signer check
+    /// altogether, so ordinary accounts pay no extra gas for this feature.
+    mapping(address => uint256) public sessionKeyCount;
+
     mapping(address => bool) private _snapshotActive;
     mapping(address => mapping(uint256 => uint256)) private _preBalance;
+
+    /// @dev Flags passed down the call policy instead of stored, so a trade pays no extra storage gas.
+    uint8 private constant IN_BATCH = 1;
+    uint8 private constant SESSION = 2;
+
+    /// @dev keccak256("SafeTx(address to,uint256 value,bytes data,uint8 operation,uint256 safeTxGas,uint256 baseGas,uint256 gasPrice,address gasToken,address refundReceiver,uint256 nonce)")
+    bytes32 private constant SAFE_TX_TYPEHASH = 0xbb8310d486368db6bd6f849402fdd73ad53d316b5a4b2644ad6efe0f941286d8;
+
+    bytes4 private constant ADD_SESSION_KEY =bytes4(keccak256("addSessionKey(address)"));
+    bytes4 private constant REMOVE_SESSION_KEY = bytes4(keccak256("removeSessionKey(address)"));
+    bytes4 private constant ERC20_TRANSFER_FROM = bytes4(keccak256("transferFrom(address,address,uint256)"));
+    bytes4 private constant NFT_SAFE_TRANSFER_FROM = bytes4(keccak256("safeTransferFrom(address,address,uint256)"));
+    bytes4 private constant NFT_SAFE_TRANSFER_FROM_DATA =
+        bytes4(keccak256("safeTransferFrom(address,address,uint256,bytes)"));
+    bytes4 private constant SET_APPROVAL_FOR_ALL = bytes4(keccak256("setApprovalForAll(address,bool)"));
+    bytes4 private constant INCREASE_ALLOWANCE = bytes4(keccak256("increaseAllowance(address,uint256)"));
 
     bytes4 private constant SET_GUARD = bytes4(keccak256("setGuard(address)"));
     bytes4 private constant ADD_OWNER = bytes4(keccak256("addOwnerWithThreshold(address,uint256)"));
@@ -115,8 +158,11 @@ contract SpotRiskGuard is BaseGuard {
     event TrackedAssetAdded(address indexed token);
     event RemovalRequested(address indexed account, uint256 unlockTime);
     event RemovalCancelled(address indexed account);
+    event SessionKeyAdded(address indexed account, address indexed key);
+    event SessionKeyRemoved(address indexed account, address indexed key);
 
     error NotAdmin();
+    error SessionKeyBlocked(address to, bytes4 selector);
     error LimitsNotConfigured(address account);
     error AccountIsFrozen(address account);
     error TradeAmountExceeded(address token, uint256 requested, uint256 max);
@@ -228,6 +274,26 @@ contract SpotRiskGuard is BaseGuard {
         emit RemovalCancelled(msg.sender);
     }
 
+    /// @notice A Safe calls this (through its own transaction, signed by a real owner) to mark `key` as a
+    /// session key. The key must also be added to the Safe as an owner. A session key can never call this
+    /// itself: every call to the Guard is blocked for it.
+    function addSessionKey(address key) external {
+        if (!isSessionKey[msg.sender][key]) {
+            isSessionKey[msg.sender][key] = true;
+            sessionKeyCount[msg.sender]++;
+        }
+        emit SessionKeyAdded(msg.sender, key);
+    }
+
+    /// @notice Takes the session mark off `key` at once. Removing the key as a Safe owner is a separate step.
+    function removeSessionKey(address key) external {
+        if (isSessionKey[msg.sender][key]) {
+            delete isSessionKey[msg.sender][key];
+            sessionKeyCount[msg.sender]--;
+        }
+        emit SessionKeyRemoved(msg.sender, key);
+    }
+
     // ---- Safe Guard hooks --------------------------------------------------------------
 
     function checkTransaction(
@@ -235,23 +301,44 @@ contract SpotRiskGuard is BaseGuard {
         uint256 value,
         bytes memory data,
         Enum.Operation operation,
-        uint256,
-        uint256,
-        uint256,
-        address,
-        address payable,
-        bytes memory,
+        uint256 safeTxGas,
+        uint256 baseGas,
+        uint256 gasPrice,
+        address gasToken,
+        address payable refundReceiver,
+        bytes memory signatures,
         address
     ) external override {
         address account = msg.sender;
         if (_snapshotActive[account]) revert NestedExecution();
 
+        uint8 flags;
+        if (sessionKeyCount[account] != 0) {
+            // The Safe has already bumped its nonce by the time it calls the Guard, so this transaction's was nonce - 1.
+            bytes32 safeTxHash = keccak256(
+                abi.encode(
+                    SAFE_TX_TYPEHASH,
+                    to,
+                    value,
+                    keccak256(data),
+                    operation,
+                    safeTxGas,
+                    baseGas,
+                    gasPrice,
+                    gasToken,
+                    refundReceiver,
+                    ISafeView(account).nonce() - 1
+                )
+            );
+            if (_signedBySessionKey(account, safeTxHash, signatures)) flags = SESSION;
+        }
+
         bool exempt;
         if (operation == Enum.Operation.DelegateCall) {
             if (multiSendCallOnly == address(0) || to != multiSendCallOnly) revert DelegateCallNotAllowed();
-            exempt = _policyMultiSend(account, data);
+            exempt = _policyMultiSend(account, data, flags);
         } else {
-            exempt = _policyCall(account, to, value, data, false);
+            exempt = _policyCall(account, to, value, data, flags);
         }
         if (exempt) return;
 
@@ -324,14 +411,21 @@ contract SpotRiskGuard is BaseGuard {
     /// @dev Returns true if the call can never spend base assets in a trade (a withdrawal, a wrap,
     /// a revoke, a Safe management call), so no balance snapshot is needed. Returns false for
     /// anything else, whose effect is judged by the outcome check. Reverts for forbidden calls.
-    function _policyCall(address account, address to, uint256 value, bytes memory data, bool inBatch)
+    function _policyCall(address account, address to, uint256 value, bytes memory data, uint8 flags)
         private
         returns (bool)
     {
         bytes4 sel = data.length >= 4 ? _selector(data) : bytes4(0);
+        bool session = flags & SESSION != 0;
+
+        // A session key may only trade: it can never call the Guard, manage the Safe, or send money out.
+        if (session && (to == address(this) || to == account)) revert SessionKeyBlocked(to, sel);
 
         if (to == address(this)) {
-            if (value == 0 && (sel == REQUEST_REMOVAL || sel == CANCEL_REMOVAL)) return true;
+            if (
+                value == 0
+                    && (sel == REQUEST_REMOVAL || sel == CANCEL_REMOVAL || sel == ADD_SESSION_KEY || sel == REMOVE_SESSION_KEY)
+            ) return true;
             revert BlockedCall(to, sel);
         }
 
@@ -339,7 +433,7 @@ contract SpotRiskGuard is BaseGuard {
             if (data.length == 0) return true;
             if (sel == SET_GUARD) {
                 // Detaching the Guard inside a batch would leave the batch's balance check un-run.
-                if (inBatch) revert BlockedCall(to, sel);
+                if (flags & IN_BATCH != 0) revert BlockedCall(to, sel);
                 _checkRemoval(account);
                 return true;
             }
@@ -352,12 +446,14 @@ contract SpotRiskGuard is BaseGuard {
 
         // A plain native-coin send: a withdrawal.
         if (data.length == 0) {
+            if (session) revert SessionKeyBlocked(to, sel);
             withdrawnTotal[account][address(0)] += value;
             return true;
         }
 
         if (isTrackedToken[to]) {
             if (value == 0 && sel == ERC20_TRANSFER) {
+                if (session) revert SessionKeyBlocked(to, sel);
                 _recordTransferOut(account, to, data);
                 return true;
             }
@@ -381,10 +477,59 @@ contract SpotRiskGuard is BaseGuard {
             revert BlockedCall(to, sel);
         }
 
+        if (session) _sessionPolicyForOtherToken(to, data, sel);
+
         // A transfer of any other token is still judged by the outcome check (it spends no base asset,
         // so it passes), but is counted as a withdrawal for the backend's profit and loss maths.
         if (value == 0 && sel == ERC20_TRANSFER && data.length == 68) _recordTransferOut(account, to, data);
 
+        return false;
+    }
+
+    /// @dev What a session key may not do to a token that is not a base asset: send it anywhere, hand
+    /// out an allowance to anyone but an allowlisted router, or hand out blanket NFT access.
+    function _sessionPolicyForOtherToken(address token, bytes memory data, bytes4 sel) private view {
+        if (
+            sel == ERC20_TRANSFER || sel == ERC20_TRANSFER_FROM || sel == NFT_SAFE_TRANSFER_FROM
+                || sel == NFT_SAFE_TRANSFER_FROM_DATA || sel == SET_APPROVAL_FOR_ALL || sel == INCREASE_ALLOWANCE
+        ) revert SessionKeyBlocked(token, sel);
+        if (sel == ERC20_APPROVE) {
+            if (data.length < 68) revert SessionKeyBlocked(token, sel);
+            (address spender, uint256 amount) = abi.decode(_stripSelector(data), (address, uint256));
+            if (amount != 0 && !allowedSpender[spender]) revert SessionKeyBlocked(token, sel);
+        }
+    }
+
+    /// @dev Finds out whether any of the signatures that satisfy the Safe's threshold belongs to a session
+    /// key, reading them exactly the way the Safe does (checkSignatures).
+    function _signedBySessionKey(address account, bytes32 safeTxHash, bytes memory signatures)
+        private
+        view
+        returns (bool)
+    {
+        bytes32 txHash =
+            keccak256(abi.encodePacked(bytes1(0x19), bytes1(0x01), ISafeView(account).domainSeparator(), safeTxHash));
+        uint256 threshold = ISafeView(account).getThreshold();
+        for (uint256 i = 0; i < threshold; i++) {
+            uint8 v;
+            bytes32 r;
+            bytes32 s;
+            assembly {
+                let pos := add(signatures, mul(0x41, i))
+                r := mload(add(pos, 0x20))
+                s := mload(add(pos, 0x40))
+                v := and(mload(add(pos, 0x41)), 0xff)
+            }
+            address signer;
+            if (v == 0 || v == 1) {
+                signer = address(uint160(uint256(r))); // a contract signature, or a pre-approved hash
+            } else if (v > 30) {
+                signer = ecrecover(keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", txHash)), v - 4, r, s);
+            } else {
+                signer = ecrecover(txHash, v, r, s);
+            }
+            if (signer != address(0) && isSessionKey[account][signer]) return true;
+        }
         return false;
     }
 
@@ -396,10 +541,11 @@ contract SpotRiskGuard is BaseGuard {
 
     /// @dev Walks a MultiSendCallOnly batch (packed: operation(1) | to(20) | value(32) |
     /// dataLength(32) | data) and applies the call policy to every inner call.
-    function _policyMultiSend(address account, bytes memory data) private returns (bool) {
+    function _policyMultiSend(address account, bytes memory data, uint8 flags) private returns (bool) {
         if (data.length < 4 || _selector(data) != MULTI_SEND) revert DelegateCallNotAllowed();
         bytes memory packed = abi.decode(_stripSelector(data), (bytes));
 
+        flags |= IN_BATCH;
         uint256 len = packed.length;
         uint256 i = 0;
         bool allExempt = true;
@@ -419,14 +565,17 @@ contract SpotRiskGuard is BaseGuard {
             if (op != 0) revert DelegateCallNotAllowed();
             if (dataLength > len || i + 85 + dataLength > len) revert MalformedMultiSend();
 
-            bytes memory inner = new bytes(dataLength);
-            for (uint256 j = 0; j < dataLength; j++) {
-                inner[j] = packed[i + 85 + j];
-            }
-            if (!_policyCall(account, to, value, inner, true)) allExempt = false;
+            if (!_policyCall(account, to, value, _slice(packed, i + 85, dataLength), flags)) allExempt = false;
             i += 85 + dataLength;
         }
         return allExempt;
+    }
+
+    function _slice(bytes memory source, uint256 start, uint256 length) private pure returns (bytes memory out) {
+        out = new bytes(length);
+        for (uint256 j = 0; j < length; j++) {
+            out[j] = source[start + j];
+        }
     }
 
     function _checkRemoval(address account) private {

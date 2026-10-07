@@ -396,3 +396,18 @@ the Safe indexer needs - the likely cause of the long "indexing" delays seen ear
 real-Safe end-to-end tests now run against SafeL2. Existing standard-singleton Safes cannot be migrated
 through the app because the migration is a delegatecall, which the Guard blocks by design; their funds
 can still be moved with a direct approveHash + execTransaction call.
+
+## Session keys (no popup per trade) - Guard side done
+
+`SpotRiskGuard` now knows session keys: Safe owners marked with `addSessionKey` that may only trade.
+The Guard recomputes the Safe transaction hash and reads the signers the way the Safe's own
+`checkSignatures` does (ECDSA, eth_sign, pre-approved hash, contract signature); if a session key signed,
+the transaction may not send funds out, touch the Safe or Guard, move non-base tokens/NFTs, or approve
+a non-allowlisted spender. Caps, buy count and freeze still apply. The trader's own key is unchanged.
+Accounts without session keys skip all of it. 18 tests on a real Safe v1.4.1
+(`test/SpotRiskGuardSessionKey.t.sol`).
+
+Still to build: deploy the new Guard and re-point the Safe (setGuard needs the 24-hour removal
+cooldown), the in-browser wallet that holds the session key and answers PancakeSwap's WalletConnect
+requests (Safe nonce, signature, execTransaction), and the dashboard's one-time "enable one-click
+trading" step (addSessionKey + addOwnerWithThreshold in one batch).
