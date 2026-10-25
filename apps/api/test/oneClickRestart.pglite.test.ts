@@ -245,4 +245,25 @@ describe("a deploy and a hard kill, end to end", () => {
     expect(await newStorage.getItem("wc@2:core:0.3//keychain")).toEqual({ k: "v" });
     await newCopy.release();
   });
+
+  it("a copy whose lease was taken over stands down on the real SQL", async () => {
+    const c = clock();
+    const sleepers: Array<() => void> = [];
+    let stood = 0;
+    const oldCopy = new WalletConnectLease(new PgLeaseStore(pool), { ...options(c, [], sleepers), onLost: () => void stood++ });
+    await oldCopy.acquire();
+
+    // The old copy goes quiet for longer than the ttl (a stalled process), so the database lets another copy in.
+    c.advance(31_000);
+    const newCopy = new WalletConnectLease(new PgLeaseStore(pool), options(c, [], sleepers));
+    await newCopy.acquire();
+    expect(newCopy.isHeld()).toBe(true);
+
+    // The old copy wakes up, tries to renew, and is told no: it must stand down rather than carry on.
+    await oldCopy.renew();
+    expect(oldCopy.isHeld()).toBe(false);
+    expect(stood).toBe(1);
+    expect(newCopy.isHeld()).toBe(true);
+    await newCopy.release();
+  });
 });

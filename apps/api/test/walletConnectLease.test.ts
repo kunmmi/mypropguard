@@ -139,3 +139,104 @@ describe("handOver — closing order on shutdown", () => {
     expect(calls).toEqual(["release lease"]);
   });
 });
+
+describe("WalletConnectLease — standing down", () => {
+  /** A store whose answers the test controls, with a call log. */
+  function scripted() {
+    const calls: string[] = [];
+    let mode: "ours" | "taken" | "down" = "ours";
+    const store: LeaseStore = {
+      async tryAcquire(owner) {
+        calls.push(`tryAcquire:${owner.slice(0, 4)}`);
+        if (mode === "down") throw new Error("connection refused");
+        return mode === "ours";
+      },
+      async release() {},
+    };
+    return { store, calls, set: (m: typeof mode) => (mode = m) };
+  }
+  const opts = (c: ReturnType<typeof clock>, onLost: () => void, log: string[] = []) => ({
+    ttlMs: 30_000,
+    pollMs: 1_000_000, // no background timer ticks; the test drives renew() itself
+    now: c.now,
+    sleep: c.sleep,
+    log: (m: string) => log.push(m),
+    onLost,
+  });
+
+  it("stands down when another copy has taken the lease: onLost fires once, and it stops renewing", async () => {
+    const c = clock();
+    const s = scripted();
+    let lost = 0;
+    const lease = new WalletConnectLease(s.store, opts(c, () => void lost++));
+    await lease.acquire();
+    s.set("taken");
+    await lease.renew();
+    expect(lost).toBe(1);
+    expect(lease.isHeld()).toBe(false);
+    const before = s.calls.length;
+    await lease.renew(); // a copy that stood down must not fight for the lease again
+    await lease.renew();
+    expect(s.calls.length).toBe(before);
+    expect(lost).toBe(1);
+  });
+
+  it("rides out a short database outage: still held, and nothing is shut down", async () => {
+    const c = clock();
+    const s = scripted();
+    let lost = 0;
+    const lease = new WalletConnectLease(s.store, opts(c, () => void lost++));
+    await lease.acquire();
+    s.set("down");
+    c.advance(10_000);
+    await lease.renew();
+    c.advance(10_000);
+    await lease.renew(); // 20s of silence, ttl is 30s: nobody else can have the lease yet
+    expect(lease.isHeld()).toBe(true);
+    expect(lost).toBe(0);
+  });
+
+  it("stands down once the database has been silent for a whole time-to-live", async () => {
+    const c = clock();
+    const s = scripted();
+    const log: string[] = [];
+    let lost = 0;
+    const lease = new WalletConnectLease(s.store, opts(c, () => void lost++, log));
+    await lease.acquire();
+    s.set("down");
+    c.advance(30_000);
+    await lease.renew();
+    expect(lease.isHeld()).toBe(false);
+    expect(lost).toBe(1);
+    expect(log.some((m) => m.includes("another copy may own it now"))).toBe(true);
+  });
+
+  it("a successful renewal restarts the silence clock, so a flaky database does not add up", async () => {
+    const c = clock();
+    const s = scripted();
+    let lost = 0;
+    const lease = new WalletConnectLease(s.store, opts(c, () => void lost++));
+    await lease.acquire();
+    for (let round = 0; round < 4; round++) {
+      s.set("down");
+      c.advance(20_000);
+      await lease.renew(); // 20s down...
+      s.set("ours");
+      c.advance(5_000);
+      await lease.renew(); // ...then confirmed again: the clock restarts
+    }
+    expect(lease.isHeld()).toBe(true);
+    expect(lost).toBe(0);
+  });
+
+  it("a failing onLost is logged and does not throw out of the timer", async () => {
+    const c = clock();
+    const s = scripted();
+    const log: string[] = [];
+    const lease = new WalletConnectLease(s.store, opts(c, () => { throw new Error("stop failed"); }, log));
+    await lease.acquire();
+    s.set("taken");
+    await expect(lease.renew()).resolves.toBeUndefined();
+    expect(log.some((m) => m.includes("standing down failed: stop failed"))).toBe(true);
+  });
+});

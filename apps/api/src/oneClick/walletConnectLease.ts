@@ -48,6 +48,12 @@ export interface LeaseOptions {
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
   log?: (message: string) => void;
+  /**
+   * Called once if this copy stops holding the lease after it had it: another copy took it, or the database could not
+   * be reached for a whole time-to-live (after which this copy can no longer show that it still owns the connection).
+   * The caller must stop using WalletConnect. The lease is not reclaimed afterwards: a copy that stood down stays down.
+   */
+  onLost?: () => void | Promise<void>;
 }
 
 /**
@@ -65,8 +71,11 @@ export class WalletConnectLease {
   private readonly now: () => number;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly log: (message: string) => void;
+  private readonly onLost: (() => void | Promise<void>) | undefined;
   private timer: NodeJS.Timeout | undefined;
   private held = false;
+  /** When the lease was last confirmed as ours. Only a successful acquire or renewal moves it. */
+  private lastConfirmedAt = 0;
 
   constructor(
     private readonly store: LeaseStore,
@@ -77,6 +86,7 @@ export class WalletConnectLease {
     this.now = options.now ?? Date.now;
     this.sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
     this.log = options.log ?? (() => undefined);
+    this.onLost = options.onLost;
   }
 
   /** Resolves once this copy holds the lease, and keeps renewing it in the background from then on. */
@@ -91,19 +101,47 @@ export class WalletConnectLease {
       await this.sleep(this.pollMs);
     }
     this.held = true;
+    this.lastConfirmedAt = this.now();
     this.timer = setInterval(() => void this.renew(), this.pollMs * 3);
     this.timer.unref?.();
     this.log("this copy of the server now owns the WalletConnect connection");
   }
 
-  private async renew(): Promise<void> {
+  /**
+   * Renews the lease. Runs on a timer once the lease is held; public so a test can drive it without waiting.
+   *
+   * Two ways to lose the lease, and both mean this copy must stop using WalletConnect:
+   *  - another copy now owns it (the database says so);
+   *  - the database has not confirmed it for a whole time-to-live. By then another copy is allowed to take it, and this
+   *    copy cannot tell whether it has. Carrying on would risk two copies on one identity, so it stands down.
+   */
+  async renew(): Promise<void> {
+    if (!this.held) return;
     try {
-      if (!(await this.store.tryAcquire(this.owner, this.now(), this.ttlMs))) {
-        this.log("LOST the WalletConnect lease to another copy of the server");
-        this.held = false;
+      if (await this.store.tryAcquire(this.owner, this.now(), this.ttlMs)) {
+        this.lastConfirmedAt = this.now();
+        return;
       }
+      await this.lose("LOST the WalletConnect lease to another copy of the server");
     } catch (error) {
+      const silentMs = this.now() - this.lastConfirmedAt;
       this.log(`could not renew the WalletConnect lease: ${error instanceof Error ? error.message : error}`);
+      if (silentMs >= this.ttlMs) {
+        await this.lose(`could not confirm the WalletConnect lease for ${Math.round(silentMs / 1000)}s, so another copy may own it now`);
+      }
+    }
+  }
+
+  private async lose(reason: string): Promise<void> {
+    if (!this.held) return;
+    this.held = false;
+    if (this.timer) clearInterval(this.timer);
+    this.timer = undefined;
+    this.log(`${reason}; this copy is standing down from WalletConnect`);
+    try {
+      await this.onLost?.();
+    } catch (error) {
+      this.log(`standing down failed: ${error instanceof Error ? error.message : error}`);
     }
   }
 

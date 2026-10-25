@@ -403,8 +403,17 @@ async function setUpOneClick(): Promise<OneClickDeps | undefined> {
   // side during a deploy, so the new one waits for the old one to let go. This runs in the background: the server
   // itself must come up at once so the host sees it as healthy and stops the old copy.
   const log = (message: string) => console.log(`[one-click] ${message}`);
-  const lease = new WalletConnectLease(new PgLeaseStore(pool), { log });
   let running: WalletConnectService | undefined;
+  // Set when this copy no longer owns the WalletConnect connection. From then on one-click is off on THIS copy: it must
+  // not answer requests or accept new links while another copy owns the identity.
+  let standingDown = false;
+  const lease = new WalletConnectLease(new PgLeaseStore(pool), {
+    log,
+    onLost: async () => {
+      standingDown = true;
+      await running?.stop();
+    },
+  });
   const ready = (async () => {
     try {
       try {
@@ -427,6 +436,12 @@ async function setUpOneClick(): Promise<OneClickDeps | undefined> {
         starting,
         new Promise<never>((_, reject) => setTimeout(() => reject(new Error("the WalletConnect relay did not answer within 30 seconds")), 30_000)),
       ]);
+      if (standingDown) {
+        // The lease was lost while the service was still starting: close what just came up.
+        await running.stop();
+        running = undefined;
+        return;
+      }
       console.log(`One-click trading on (BSC). Gas is paid by ${gasAccount.address}.`);
     } catch (error) {
       console.error(`[one-click] NOT started, the rest of the server is running without it: ${error instanceof Error ? error.message : error}`);
@@ -434,6 +449,7 @@ async function setUpOneClick(): Promise<OneClickDeps | undefined> {
   })();
   const whenRunning = async (): Promise<WalletConnectService> => {
     await Promise.race([ready, new Promise((resolve) => setTimeout(resolve, 25_000))]);
+    if (standingDown) throw new Error("One-click trading moved to another copy of the server. Try again in a minute.");
     if (!running) throw new Error("One-click trading is still starting up. Try again in a minute.");
     return running;
   };
