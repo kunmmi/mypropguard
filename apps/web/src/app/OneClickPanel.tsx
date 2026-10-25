@@ -1,10 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/design-system/components/core/Button";
 import { Panel } from "@/design-system/Panel";
 import { StatusBadge } from "@/design-system/StatusBadge";
 import { api, type OneClickStatus, type OneClickTransaction } from "@/lib/api";
+import { decodeQrFromImage } from "@/lib/qrFromImage";
+import { readWalletConnectInput } from "@/lib/walletConnectUri";
 
 type Eip1193 = { request(args: { method: string; params?: unknown[] }): Promise<unknown> };
 
@@ -40,6 +42,11 @@ export function OneClickPanel({ accountId, nativeSymbol, exchangeName }: { accou
   const [note, setNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [uri, setUri] = useState("");
+  const [qrNote, setQrNote] = useState<string | null>(null);
+  const [reading, setReading] = useState(false);
+  const fileInput = useRef<HTMLInputElement>(null);
+  // What the box holds, understood: the bare code if it is one, otherwise what is wrong with it.
+  const typed = uri.trim() ? readWalletConnectInput(uri) : null;
 
   const refresh = useCallback(async () => {
     try {
@@ -90,9 +97,38 @@ export function OneClickPanel({ accountId, nativeSymbol, exchangeName }: { accou
       throw new Error("The transaction did not confirm in time. Check your wallet, then press Enable again.");
     });
 
+  /** Reads a QR out of a screenshot, so a connect screen with no "copy" button can still be linked. */
+  async function readQrImage(image: Blob) {
+    setReading(true);
+    setQrNote(null);
+    setError(null);
+    try {
+      const text = await decodeQrFromImage(image);
+      if (!text) {
+        setQrNote("No QR code found in that picture. Make sure the whole code is in the shot and sharp, then try again.");
+        return;
+      }
+      setUri(text);
+      setQrNote(readWalletConnectInput(text).ok ? "Code read from the picture. Press Link now: these codes expire within a few minutes." : null);
+    } catch (e) {
+      setQrNote(e instanceof Error ? e.message : "Could not read that picture.");
+    } finally {
+      setReading(false);
+    }
+  }
+
+  const imageFrom = (items: DataTransferItemList | undefined): File | null => {
+    for (const item of Array.from(items ?? [])) {
+      if (item.kind === "file" && item.type.startsWith("image/")) return item.getAsFile();
+    }
+    return null;
+  };
+
   const link = () =>
     run("Linking…", async () => {
-      const result = await api.pairOneClick(accountId, uri);
+      const code = typed?.ok ? typed.uri : uri;
+      const result = await api.pairOneClick(accountId, code);
+      setQrNote(null);
       setUri("");
       setNote(result.message);
       await new Promise((resolve) => setTimeout(resolve, 6000));
@@ -159,18 +195,55 @@ export function OneClickPanel({ accountId, nativeSymbol, exchangeName }: { accou
             <ol style={{ margin: "0 0 var(--space-2)", paddingLeft: 18, fontSize: 13, color: "var(--text-muted)", display: "grid", gap: 2 }}>
               <li>On {exchangeName ?? "the exchange"}, press Connect wallet and choose WalletConnect.</li>
               <li>Copy the code it shows (it starts with wc:) and paste it here.</li>
+              <li>No copy button, only a QR? Take a screenshot of the QR and paste the picture here (Ctrl+V), drop it on this box, or upload it.</li>
             </ol>
-            <div style={{ display: "flex", gap: "var(--space-2)" }}>
+            <div
+              onPaste={(e) => {
+                const image = imageFrom(e.clipboardData?.items);
+                if (image) {
+                  e.preventDefault();
+                  void readQrImage(image);
+                }
+              }}
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={(e) => {
+                const file = Array.from(e.dataTransfer?.files ?? []).find((x) => x.type.startsWith("image/"));
+                if (file) {
+                  e.preventDefault();
+                  void readQrImage(file);
+                }
+              }}
+              style={{ display: "flex", gap: "var(--space-2)", flexWrap: "wrap" }}
+            >
               <input
                 value={uri}
-                onChange={(e) => setUri(e.target.value)}
-                placeholder="wc:…"
+                onChange={(e) => {
+                  setUri(e.target.value);
+                  setQrNote(null);
+                }}
+                placeholder="wc:…  (or paste a screenshot of the QR)"
                 style={{ flex: 1, padding: "var(--space-2)", borderRadius: "var(--radius-md)", border: "1px solid var(--border-default)", fontFamily: "var(--font-accent)", fontSize: 12 }}
               />
-              <Button onClick={() => void link()} disabled={busy || !uri.trim().startsWith("wc:")}>
+              <Button variant="subtle" onClick={() => fileInput.current?.click()} disabled={busy || reading}>
+                {reading ? "Reading…" : "Upload QR picture"}
+              </Button>
+              <input
+                ref={fileInput}
+                type="file"
+                accept="image/*"
+                hidden
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  e.target.value = "";
+                  if (file) void readQrImage(file);
+                }}
+              />
+              <Button onClick={() => void link()} disabled={busy || reading || !typed?.ok}>
                 Link
               </Button>
             </div>
+            {qrNote && <p style={{ margin: "var(--space-2) 0 0", fontSize: 12, color: "var(--text-muted)" }}>{qrNote}</p>}
+            {typed && !typed.ok && <p style={{ margin: "var(--space-2) 0 0", fontSize: 12, color: "var(--text-muted)" }}>{typed.problem}</p>}
           </div>
 
           {state.links.length > 0 && (
