@@ -51,7 +51,7 @@ import { OneClickStore } from "./oneClick/oneClickStore.js";
 import { OneClickRequestHandler } from "./oneClick/oneClickRequestHandler.js";
 import { PgWalletConnectStorage } from "./oneClick/pgWalletConnectStorage.js";
 import { WalletConnectService } from "./oneClick/walletConnectService.js";
-import { PgLeaseStore, WalletConnectLease } from "./oneClick/walletConnectLease.js";
+import { PgLeaseStore, WalletConnectLease, handOver } from "./oneClick/walletConnectLease.js";
 import type { OneClickDeps } from "./routes/oneClick.js";
 
 // PancakeSwap's own canonical BSC mainnet addresses - public, not secrets, so hardcoded rather
@@ -442,12 +442,12 @@ async function setUpOneClick(): Promise<OneClickDeps | undefined> {
     disconnect: async (topic) => (await whenRunning()).disconnect(topic),
     disconnectAccount: async (accountId) => (await whenRunning()).disconnectAccount(accountId),
   };
-  // Told to stop (a deploy): let go of the connection and the lease at once so the new copy does not wait.
-  const handOver = () => {
-    void Promise.allSettled([running?.stop(), lease.release()]).finally(() => process.exit(0));
+  // Told to stop (a deploy): close the connection, then let go of the lease, so the new copy neither waits nor overlaps.
+  const onStop = () => {
+    void handOver(() => running?.stop(), lease).finally(() => process.exit(0));
   };
-  process.once("SIGTERM", handOver);
-  process.once("SIGINT", handOver);
+  process.once("SIGTERM", onStop);
+  process.once("SIGINT", onStop);
 
   return {
     store: oneClickStore,

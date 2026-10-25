@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { WalletConnectLease, type LeaseStore } from "../src/oneClick/walletConnectLease.js";
+import { WalletConnectLease, handOver, type LeaseStore } from "../src/oneClick/walletConnectLease.js";
 
 /** The same rule as the SQL: the row can be taken by its owner, or by anyone once it has run out. */
 function memoryStore() {
@@ -107,5 +107,35 @@ describe("WalletConnectLease", () => {
     expect(b.isHeld()).toBe(true);
     expect(a.isHeld()).toBe(false);
     await b.release();
+  });
+});
+
+describe("handOver — closing order on shutdown", () => {
+  const recorder = () => {
+    const calls: string[] = [];
+    return { calls, lease: { release: async () => void calls.push("release lease") } };
+  };
+
+  it("closes the WalletConnect connection BEFORE it lets go of the lease", async () => {
+    const { calls, lease } = recorder();
+    await handOver(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20)); // closing takes a moment
+      calls.push("close connection");
+    }, lease);
+    expect(calls).toEqual(["close connection", "release lease"]);
+  });
+
+  it("still releases the lease when closing the connection fails", async () => {
+    const { calls, lease } = recorder();
+    await handOver(async () => {
+      throw new Error("relay unreachable");
+    }, lease);
+    expect(calls).toEqual(["release lease"]);
+  });
+
+  it("still releases the lease when the service never finished starting (nothing to close)", async () => {
+    const { calls, lease } = recorder();
+    await handOver(() => undefined, lease);
+    expect(calls).toEqual(["release lease"]);
   });
 });

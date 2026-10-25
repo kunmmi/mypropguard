@@ -123,3 +123,27 @@ export class WalletConnectLease {
     }
   }
 }
+
+/**
+ * What a server does when told to stop: close the WalletConnect connection FIRST, and only then let go of the lease.
+ *
+ * The order is the point. The lease is what keeps two copies from sharing one WalletConnect identity, and the new
+ * copy takes it on its very next check. If the lease were released while this copy's relay connection was still
+ * open, the new copy could connect while this one still held the relay: two clients on one identity, the exact
+ * situation the lease exists to prevent. Releasing last means the new copy can never overlap with an open connection.
+ *
+ * The lease is released even if closing the connection fails, so a hiccup there can never leave the next copy
+ * waiting out the whole time-to-live.
+ */
+export async function handOver(
+  closeConnection: () => Promise<void> | undefined,
+  lease: Pick<WalletConnectLease, "release">,
+): Promise<void> {
+  try {
+    await closeConnection();
+  } catch {
+    // Already closed, or the relay is unreachable: either way there is nothing more to close.
+  } finally {
+    await lease.release();
+  }
+}
