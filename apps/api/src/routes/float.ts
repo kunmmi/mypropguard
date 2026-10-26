@@ -1,9 +1,10 @@
 import type { FastifyInstance } from "fastify";
-import { erc20Abi, formatEther, getAddress, parseEther, type Address, type PublicClient } from "viem";
-import { defaultLimitsForFloat, type FloatWalletSigner } from "@mypropguard/evm";
+import { erc20Abi, formatEther, getAddress, type Address, type PublicClient } from "viem";
+import type { FloatWalletSigner } from "@mypropguard/evm";
 import { assertAccountOwnership, type AppDeps } from "../app.js";
 import type { FloatStore } from "../float/floatStore.js";
 import { sweepFloat } from "../float/sweep.js";
+import { loadWalletAccountRules } from "../float/accountRules.js";
 import type { WalletConnectService } from "../oneClick/walletConnectService.js";
 
 /** The trading ("float") wallet, as the routes need it (see apps/api/src/float). */
@@ -21,19 +22,6 @@ export interface FloatDeps {
 
 const bad = (message: string) => ({ error: "INVALID_INPUT", message });
 
-/** "0.25" -> wei. Undefined when absent; throws on anything that is not a positive amount. */
-function bnb(value: unknown, label: string, allowZero = false): bigint | undefined {
-  if (value === undefined || value === null || value === "") return undefined;
-  if (typeof value !== "string" && typeof value !== "number") throw new Error(`${label} must be an amount.`);
-  let wei: bigint;
-  try {
-    wei = parseEther(String(value));
-  } catch {
-    throw new Error(`${label} must be an amount like 0.25.`);
-  }
-  if (wei < 0n || (wei === 0n && !allowZero)) throw new Error(`${label} must be more than 0.`);
-  return wei;
-}
 
 function whole(value: unknown, label: string, min: number, max: number): number | undefined {
   if (value === undefined || value === null || value === "") return undefined;
@@ -70,13 +58,12 @@ export function registerFloatRoutes(app: FastifyInstance, deps: AppDeps): void {
     address: w.address,
     status: w.status,
     chainId: w.chainId,
-    floatWei: w.floatWei.toString(),
     limits: {
-      maxBuyWei: w.limits.maxBuyWei.toString(),
-      maxBuysPerDay: w.limits.maxBuysPerDay,
-      dailySpendWei: w.limits.dailySpendWei.toString(),
-      cooldownSec: w.limits.cooldownSec,
-      frozen: w.limits.frozen,
+      maxBuyPct: w.maxBuyPct,
+      dailySpendPct: w.dailySpendPct,
+      maxBuysPerDay: w.maxBuysPerDay,
+      cooldownSec: w.cooldownSec,
+      frozen: w.frozen,
     },
   });
 
@@ -108,17 +95,19 @@ export function registerFloatRoutes(app: FastifyInstance, deps: AppDeps): void {
     const wallet = await float.store.get(accountId);
     if (!wallet) return reply.send({ available: true, exists: false, nativeSymbol: float.nativeSymbol, chainId: float.chainId });
 
-    const [balance, held, trades, sessions] = await Promise.all([
+    const [balance, held, trades, sessions, accountRules] = await Promise.all([
       float.publicClient.getBalance({ address: wallet.address }),
       holdings(accountId, wallet.address),
       float.store.listTrades(accountId, float.maxTradesShown ?? 15),
       deps.oneClick ? deps.oneClick.store.listSessions(accountId) : Promise.resolve([]),
+      loadWalletAccountRules(deps.store, accountId).catch(() => ({})),
     ]);
     return reply.send({
       available: true,
       exists: true,
       nativeSymbol: float.nativeSymbol,
       ...view(wallet),
+      accountRules,
       balanceWei: balance.toString(),
       holdings: held,
       returnsTo: loaded.safe,
@@ -147,17 +136,8 @@ export function registerFloatRoutes(app: FastifyInstance, deps: AppDeps): void {
     if (!(await load(accountId, reply))) return;
     if (await float.store.get(accountId)) return reply.status(409).send({ error: "EXISTS", message: "You already have a wallet." });
 
-    const body = (request.body ?? {}) as Record<string, unknown>;
-    let floatWei: bigint | undefined;
-    try {
-      floatWei = bnb(body.float, "The float");
-    } catch (error) {
-      return reply.status(400).send(bad((error as Error).message));
-    }
-    if (!floatWei) return reply.status(400).send(bad("Choose how much to trade with."));
-
     const wallet = await float.createWallet();
-    await float.store.create({ accountId, walletId: wallet.id, address: wallet.address, chainId: float.chainId, floatWei, limits: defaultLimitsForFloat(floatWei) });
+    await float.store.create({ accountId, walletId: wallet.id, address: wallet.address, chainId: float.chainId });
     const created = await float.store.get(accountId);
     return reply.send({ ok: true, ...(created ? view(created) : {}) });
   });
@@ -172,15 +152,13 @@ export function registerFloatRoutes(app: FastifyInstance, deps: AppDeps): void {
 
     const body = (request.body ?? {}) as Record<string, unknown>;
     try {
-      const floatWei = bnb(body.float, "The float");
-      const maxBuyWei = bnb(body.maxBuy, "The biggest single buy");
-      const dailySpendWei = bnb(body.dailySpend, "The daily spend");
+      const maxBuyPct = whole(body.maxBuyPct, "The biggest single buy", 1, 100);
+      const dailySpendPct = whole(body.dailySpendPct, "The most spent per day", 1, 100);
       const maxBuysPerDay = whole(body.maxBuysPerDay, "Buys per day", 1, 1000);
       const cooldownSec = whole(body.cooldownSec, "The pause between buys", 0, 86_400);
       await float.store.updateSettings(accountId, {
-        ...(floatWei !== undefined && { floatWei }),
-        ...(maxBuyWei !== undefined && { maxBuyWei }),
-        ...(dailySpendWei !== undefined && { dailySpendWei }),
+        ...(maxBuyPct !== undefined && { maxBuyPct }),
+        ...(dailySpendPct !== undefined && { dailySpendPct }),
         ...(maxBuysPerDay !== undefined && { maxBuysPerDay }),
         ...(cooldownSec !== undefined && { cooldownSec }),
       });

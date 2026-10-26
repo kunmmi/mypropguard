@@ -164,4 +164,26 @@ describe("FloatExecutor", () => {
     expect(err.message).toBe("db down");
     expect(sent).toHaveLength(1);
   });
+
+  it("percentage limits follow what is in the wallet", async () => {
+    const percent = { ...wallet, limits: { maxBuysPerDay: 9, cooldownSec: 0, frozen: false }, percentOfBalance: { maxBuyPct: 25, dailySpendPct: 50 } };
+    // 1 BNB in the wallet: a buy may be up to 0.25.
+    const { executor } = rig({ balance: parseEther("1") });
+    expect((await executor.execute(percent, buy("0.25"), usageLog().io)).hash).toBeDefined();
+    await expect(executor.execute(percent, buy("0.26"), usageLog().io)).rejects.toMatchObject({ code: "MAX_BUY" });
+    // The same wallet after the owner withdrew most of it: the limit shrinks with it.
+    const small = rig({ balance: parseEther("0.2") });
+    await expect(small.executor.execute(percent, buy("0.1"), usageLog().io)).rejects.toMatchObject({ code: "MAX_BUY" });
+    expect((await small.executor.execute(percent, buy("0.05"), usageLog().io)).hash).toBeDefined();
+  });
+
+  it("the daily share is of the day's starting balance, so spending does not shrink it", async () => {
+    const percent = { ...wallet, limits: { maxBuysPerDay: 9, cooldownSec: 0, frozen: false }, percentOfBalance: { maxBuyPct: 50, dailySpendPct: 50 } };
+    const u = usageLog();
+    u.log.push({ at: Date.now() - 3_600_000, spend: parseEther("0.4") }); // 0.4 already spent today
+    // 0.6 BNB left + 0.4 spent = 1 BNB at the start of the day: half of it is 0.5, so 0.1 more is allowed.
+    const { executor } = rig({ balance: parseEther("0.6") });
+    await expect(executor.execute(percent, buy("0.15"), u.io)).rejects.toMatchObject({ code: "DAILY_SPEND" });
+    expect((await executor.execute(percent, buy("0.1"), u.io)).hash).toBeDefined();
+  });
 });

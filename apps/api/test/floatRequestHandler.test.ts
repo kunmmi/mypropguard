@@ -22,7 +22,7 @@ const session = (over: Partial<LinkedSession> = {}): LinkedSession => ({
   ...over,
 });
 
-function rig(over: { wallet?: Partial<FloatWalletRow> | null; balance?: bigint; estimate?: bigint | Error; now?: () => number } = {}) {
+function rig(over: { wallet?: Partial<FloatWalletRow> | null; balance?: bigint; estimate?: bigint | Error; now?: () => number; accountRules?: () => Promise<{ maxTradesPerDay?: number; cooldownSec?: number }> } = {}) {
   const trades: FloatTradeRecord[] = [];
   const signed: string[] = [];
   const sent: Array<{ to: Address; value: bigint }> = [];
@@ -35,9 +35,12 @@ function rig(over: { wallet?: Partial<FloatWalletRow> | null; balance?: bigint; 
           address: FLOAT,
           chainId: 56,
           status: "active",
-          floatWei: parseEther("1"),
           createdAt: new Date(),
-          limits: { maxBuyWei: parseEther("0.25"), maxBuysPerDay: 3, dailySpendWei: parseEther("0.5"), cooldownSec: 0, frozen: false },
+          maxBuyPct: 25,
+          dailySpendPct: 50,
+          maxBuysPerDay: 3,
+          cooldownSec: 0,
+          frozen: false,
           ...over.wallet,
         };
   const store = {
@@ -45,7 +48,7 @@ function rig(over: { wallet?: Partial<FloatWalletRow> | null; balance?: bigint; 
     // The day's counters, derived from what was recorded: exactly how the real store does it.
     usageToday: async () => {
       const buys = trades.filter((t) => t.kind === "buy" && t.result === "SENT");
-      return { buysToday: buys.length, spentTodayWei: buys.reduce((s, t) => s + (t.valueWei ?? 0n), 0n), lastBuyAtSec: null };
+      return { buysToday: buys.length, spentTodayWei: buys.reduce((s, t) => s + (t.valueWei ?? 0n), 0n), lastBuyAtSec: buys.length ? Math.floor((over.now ?? Date.now)() / 1000) : null };
     },
     recordTrade: async (t: FloatTradeRecord) => void trades.push(t),
   };
@@ -69,7 +72,7 @@ function rig(over: { wallet?: Partial<FloatWalletRow> | null; balance?: bigint; 
   };
   const executor = new FloatExecutor({ publicClient: publicClient as never, signer });
   const logs: string[] = [];
-  const handler = new FloatRequestHandler({ store, executor, signer, now: over.now, log: (m) => logs.push(m) });
+  const handler = new FloatRequestHandler({ store, executor, signer, now: over.now, accountRules: over.accountRules, log: (m) => logs.push(m) });
   return { handler, trades, signed, sent, logs };
 }
 
@@ -189,14 +192,14 @@ describe("trading (eth_sendTransaction)", () => {
   });
 
   it("buys fired together cannot both pass the daily limit", async () => {
-    const { handler, sent } = rig({ wallet: { limits: { maxBuyWei: parseEther("0.3"), maxBuysPerDay: 9, dailySpendWei: parseEther("0.5"), cooldownSec: 0, frozen: false } } });
+    const { handler, sent } = rig({ wallet: { maxBuyPct: 30, maxBuysPerDay: 9, dailySpendPct: 40 } });
     const results = await Promise.all([send(handler, buyTx("0.3")), send(handler, buyTx("0.3"))]);
     expect(results.filter((r: any) => r.result).length).toBe(1);
     expect(sent).toHaveLength(1);
   });
 
   it("a frozen wallet still sells, and its buys are refused", async () => {
-    const { handler, sent } = rig({ wallet: { limits: { maxBuyWei: parseEther("1"), maxBuysPerDay: 9, dailySpendWei: parseEther("1"), cooldownSec: 0, frozen: true } }, balance: 0n });
+    const { handler, sent } = rig({ wallet: { maxBuyPct: 100, maxBuysPerDay: 9, dailySpendPct: 100, frozen: true }, balance: 0n });
     const sell = { from: FLOAT, to: V2, value: "0x0", data: encodeFunctionData({ abi: TOKEN_MANAGER_V2_ABI, functionName: "sellToken", args: [MEME, 5n] }) };
     expect((await send(handler, sell) as any).result).toBeDefined();
     expect(err(await send(handler, buyTx("0.05"))).message).toMatch(/frozen/);
@@ -235,6 +238,35 @@ describe("trading (eth_sendTransaction)", () => {
     const r = await send(handler, buyTx("0.1"));
     expect(err(r).message).toBe("MyPropGuard could not send this trade: nonce too low");
     expect(trades.at(-1)).toMatchObject({ result: "ERROR" });
+  });
+});
+
+describe("the account's own rules also apply", () => {
+  it("a trade-frequency rule tighter than the wallet's own limit wins", async () => {
+    const { handler, sent } = rig({ accountRules: async () => ({ maxTradesPerDay: 1 }) });
+    expect((await send(handler, buyTx("0.05")) as any).result).toBeDefined();
+    expect(err(await send(handler, buyTx("0.05"))).message).toMatch(/all 1 buys/);
+    expect(sent).toHaveLength(1);
+  });
+
+  it("a looser account rule does not loosen the wallet's own limit", async () => {
+    const { handler } = rig({ accountRules: async () => ({ maxTradesPerDay: 100 }) });
+    for (let i = 0; i < 3; i++) await send(handler, buyTx("0.05"));
+    expect(err(await send(handler, buyTx("0.05"))).message).toMatch(/all 3 buys/);
+  });
+
+  it("an account cooldown rule spaces out buys", async () => {
+    const { handler } = rig({ accountRules: async () => ({ cooldownSec: 60 }) });
+    expect((await send(handler, buyTx("0.05")) as any).result).toBeDefined();
+    expect(err(await send(handler, buyTx("0.05"))).message).toMatch(/wait/i);
+  });
+
+  it("if the rules cannot be read, buying pauses but selling still works", async () => {
+    const { handler, sent } = rig({ accountRules: async () => { throw new Error("db down"); } });
+    expect(err(await send(handler, buyTx("0.05"))).message).toMatch(/frozen|paused/i);
+    const sell = { from: FLOAT, to: V2, value: "0x0", data: encodeFunctionData({ abi: TOKEN_MANAGER_V2_ABI, functionName: "sellToken", args: [MEME, 5n] }) };
+    expect((await send(handler, sell) as any).result).toBeDefined();
+    expect(sent).toHaveLength(1);
   });
 });
 

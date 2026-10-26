@@ -58,6 +58,7 @@ import type { OneClickDeps } from "./routes/oneClick.js";
 import type { FloatDeps } from "./routes/float.js";
 import { FloatStore } from "./float/floatStore.js";
 import { FloatRequestHandler } from "./float/floatRequestHandler.js";
+import { loadWalletAccountRules } from "./float/accountRules.js";
 
 // PancakeSwap's own canonical BSC mainnet addresses - public, not secrets, so hardcoded rather
 // than made configurable (one less thing to misconfigure). See PancakeSwapEquityReader's NatSpec
@@ -415,6 +416,7 @@ async function setUpOneClick(): Promise<OneClickDeps | undefined> {
         store: floatStore,
         executor: new FloatExecutor({ publicClient, signer: floatSigner }),
         signer: floatSigner,
+        accountRules: (accountId) => loadWalletAccountRules(store, accountId),
         log: (message) => console.log(`[float] ${message}`),
       })
     : undefined;

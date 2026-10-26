@@ -16,8 +16,6 @@ function bnb(wei: string | bigint | undefined): string {
   return frac ? `${whole}.${frac}` : `${whole}`;
 }
 
-const PRESETS = ["0.1", "0.25", "0.5", "1"];
-
 const input: React.CSSProperties = {
   width: 110,
   padding: "var(--space-2)",
@@ -46,8 +44,7 @@ export function FloatPanel({ accountId, siteName }: { accountId: string; siteNam
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [floatInput, setFloatInput] = useState("0.25");
-  const [form, setForm] = useState({ float: "", maxBuy: "", dailySpend: "", maxBuysPerDay: "", cooldownSec: "" });
+  const [form, setForm] = useState({ maxBuyPct: "", dailySpendPct: "", maxBuysPerDay: "", cooldownSec: "" });
   const [editing, setEditing] = useState(false);
   const [copied, setCopied] = useState(false);
   const site = siteName ?? "four.meme";
@@ -73,9 +70,8 @@ export function FloatPanel({ accountId, siteName }: { accountId: string; siteNam
   useEffect(() => {
     if (!state?.exists || editing || !state.limits) return;
     setForm({
-      float: bnb(state.floatWei),
-      maxBuy: bnb(state.limits.maxBuyWei),
-      dailySpend: bnb(state.limits.dailySpendWei),
+      maxBuyPct: String(state.limits.maxBuyPct),
+      dailySpendPct: String(state.limits.dailySpendPct),
       maxBuysPerDay: String(state.limits.maxBuysPerDay),
       cooldownSec: String(state.limits.cooldownSec),
     });
@@ -111,25 +107,17 @@ export function FloatPanel({ accountId, siteName }: { accountId: string; siteNam
     return (
       <Panel title="Your MyPropGuard wallet">
         <p style={{ marginTop: 0, fontSize: 13, color: "var(--text-muted)" }}>
-          This is the wallet you trade with on {site}. Put in as much as you want to trade with, connect {site} once, and
+          This is the wallet you trade with on {site}. Deposit what you want to trade with, connect {site} once, and
           trade there as normal. MyPropGuard checks every trade against your limits first, and you can withdraw everything
           whenever you like.
         </p>
-        <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>How much do you want to trade with?</div>
-        <div style={{ display: "flex", gap: "var(--space-2)", flexWrap: "wrap", alignItems: "center" }}>
-          {PRESETS.map((p) => (
-            <Button key={p} variant={floatInput === p ? "primary" : "subtle"} size="sm" onClick={() => setFloatInput(p)} disabled={busy}>
-              {p} {symbol}
-            </Button>
-          ))}
-          <input value={floatInput} onChange={(e) => setFloatInput(e.target.value)} style={input} aria-label={`Float in ${symbol}`} />
-          <span style={{ fontSize: 12, color: "var(--text-muted)" }}>{symbol}</span>
-          <Button disabled={busy || !floatInput.trim()} onClick={() => void run("Creating…", async () => void (await api.createFloat(accountId, floatInput.trim())))}>
-            Create my wallet
-          </Button>
-        </div>
-        <p style={{ fontSize: 12, color: "var(--text-muted)" }}>You can change this amount and your limits later. Nothing moves until you deposit {symbol} yourself.</p>
-        {note && <p style={{ fontSize: 13, marginBottom: 0 }}>{note}</p>}
+        <Button disabled={busy} onClick={() => void run("Creating…", async () => void (await api.createFloat(accountId)))}>
+          Create my wallet
+        </Button>
+        <p style={{ fontSize: 12, color: "var(--text-muted)" }}>
+          Nothing moves until you deposit {symbol} yourself. Money in this wallet is protected by MyPropGuard's rules on every trade.
+        </p>
+                {note && <p style={{ fontSize: 13, marginBottom: 0 }}>{note}</p>}
         {error && <p style={{ fontSize: 13, color: "var(--danger, #b42318)", marginBottom: 0 }}>{error}</p>}
       </Panel>
     );
@@ -138,8 +126,6 @@ export function FloatPanel({ accountId, siteName }: { accountId: string; siteNam
   const on = state.status === "active";
   const limits = state.limits!;
   const balance = BigInt(state.balanceWei ?? "0");
-  const floatWei = BigInt(state.floatWei ?? "0");
-  const short = balance < floatWei;
 
   return (
     <Panel title="Your MyPropGuard wallet">
@@ -167,8 +153,8 @@ export function FloatPanel({ accountId, siteName }: { accountId: string; siteNam
             </Button>
           </div>
           <p style={{ fontSize: 13, margin: "var(--space-2) 0 0", color: "var(--text-muted)" }}>
-            Balance: <strong>{bnb(balance)} {symbol}</strong>. Your trading amount is {bnb(floatWei)} {symbol}.
-            {short && ` To trade the full amount, deposit ${bnb(floatWei - balance)} ${symbol} to this address (BNB Chain).`}
+            Balance: <strong>{bnb(balance)} {symbol}</strong>.{" "}
+            {balance === 0n ? `Deposit ${symbol} to this address (BNB Chain) to start trading.` : "Everything you trade with stays here while you trade."}
           </p>
         </div>
 
@@ -185,13 +171,12 @@ export function FloatPanel({ accountId, siteName }: { accountId: string; siteNam
         )}
 
         <div>
-          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>Your amount and limits</div>
+          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>Your limits</div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: "var(--space-2)", fontSize: 12 }}>
             {(
               [
-                ["float", `Trading amount (${symbol})`],
-                ["maxBuy", `Biggest single buy (${symbol})`],
-                ["dailySpend", `Most spent per day (${symbol})`],
+                ["maxBuyPct", "Biggest single buy (% of wallet)"],
+                ["dailySpendPct", "Most spent per day (% of wallet)"],
                 ["maxBuysPerDay", "Buys per day"],
                 ["cooldownSec", "Pause between buys (seconds)"],
               ] as const
@@ -215,9 +200,8 @@ export function FloatPanel({ accountId, siteName }: { accountId: string; siteNam
               onClick={() =>
                 void run("Saving…", async () => {
                   await api.updateFloat(accountId, {
-                    float: form.float,
-                    maxBuy: form.maxBuy,
-                    dailySpend: form.dailySpend,
+                    maxBuyPct: Number(form.maxBuyPct),
+                    dailySpendPct: Number(form.dailySpendPct),
                     maxBuysPerDay: Number(form.maxBuysPerDay),
                     cooldownSec: Number(form.cooldownSec),
                   });
@@ -232,6 +216,13 @@ export function FloatPanel({ accountId, siteName }: { accountId: string; siteNam
               {limits.frozen ? "Resume buying" : "Pause buying"}
             </Button>
           </div>
+          {(state.accountRules?.maxTradesPerDay !== undefined || state.accountRules?.cooldownSec !== undefined) && (
+            <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "var(--space-2) 0 0" }}>
+              Your MyPropGuard account rules also apply here
+              {state.accountRules?.maxTradesPerDay !== undefined ? `: at most ${state.accountRules.maxTradesPerDay} trades a day` : ""}
+              {state.accountRules?.cooldownSec !== undefined ? `${state.accountRules?.maxTradesPerDay !== undefined ? ", and" : ":"} ${state.accountRules.cooldownSec}s between trades` : ""}. The stricter one wins.
+            </p>
+          )}
           <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "var(--space-2) 0 0" }}>
             Selling is never blocked. A buy is refused once you reach a limit, or if it would leave too little {symbol} to pay the fee to sell.
           </p>

@@ -1,7 +1,7 @@
--- The trading ("float") wallet. For sites that log in with a signature (four.meme) a Safe cannot be used, so the owner
--- funds a SEPARATE wallet with an amount they choose, and the server judges every trade the site proposes before
--- anything is signed (packages/evm floatPolicy). The float is the ceiling on what this wallet can lose; the owner's
--- main funds stay in their Safe and are never reachable from here.
+-- The MyPropGuard wallet. For sites that log in with a signature (four.meme) a Safe cannot be used, so the trader
+-- keeps their trading money in a wallet MyPropGuard holds, and the server judges every trade the site proposes before
+-- anything is signed (packages/evm floatPolicy). Limits are shares of what the wallet holds, so they follow deposits
+-- and withdrawals. Money can only leave it back to the owner's own account.
 
 -- One trading wallet per protected account. The key lives at Privy; only its id and public address are kept here.
 create table if not exists evm_float_wallets (
@@ -11,11 +11,11 @@ create table if not exists evm_float_wallets (
   chain_id integer not null,
   -- 'off' = the owner switched it off: the server stops signing at once and the links are dropped.
   status text not null default 'active' check (status in ('active', 'off')),
-  -- The float the owner chose, in wei of BNB. A target, not a lock: it is what the limits below are sized from.
-  float_wei numeric(78, 0) not null check (float_wei >= 0),
-  max_buy_wei numeric(78, 0) not null check (max_buy_wei >= 0),
-  max_buys_per_day integer not null check (max_buys_per_day >= 0),
-  daily_spend_wei numeric(78, 0) not null check (daily_spend_wei >= 0),
+  -- One buy may use at most this share of the BNB in the wallet.
+  max_buy_pct integer not null default 25 check (max_buy_pct between 1 and 100),
+  max_buys_per_day integer not null default 10 check (max_buys_per_day >= 0),
+  -- A day's buys may use at most this share of the BNB the wallet started the day with.
+  daily_spend_pct integer not null default 50 check (daily_spend_pct between 1 and 100),
   cooldown_sec integer not null default 0 check (cooldown_sec >= 0),
   -- When true no buy is allowed (selling still is).
   frozen boolean not null default false,

@@ -1,6 +1,6 @@
 import type pg from "pg";
 import type { Address } from "viem";
-import type { FloatLimits } from "@mypropguard/evm";
+import { DEFAULT_DAILY_SPEND_PCT, DEFAULT_MAX_BUYS_PER_DAY, DEFAULT_MAX_BUY_PCT } from "@mypropguard/evm";
 
 export type FloatStatus = "active" | "off";
 
@@ -10,9 +10,13 @@ export interface FloatWalletRow {
   address: Address;
   chainId: number;
   status: FloatStatus;
-  /** The float the owner chose (wei of BNB). */
-  floatWei: bigint;
-  limits: FloatLimits;
+  /** One buy may use at most this share (percent) of the BNB in the wallet. */
+  maxBuyPct: number;
+  /** A day's buys may use at most this share (percent) of the BNB the wallet started the day with. */
+  dailySpendPct: number;
+  maxBuysPerDay: number;
+  cooldownSec: number;
+  frozen: boolean;
   createdAt: Date;
 }
 
@@ -67,50 +71,43 @@ export class FloatStore {
     walletId: string;
     address: string;
     chainId: number;
-    floatWei: bigint;
-    limits: Omit<FloatLimits, "frozen">;
+    maxBuyPct?: number;
+    dailySpendPct?: number;
+    maxBuysPerDay?: number;
+    cooldownSec?: number;
   }): Promise<void> {
     await this.pool.query(
       `insert into evm_float_wallets
-         (account_id, wallet_id, wallet_address, chain_id, float_wei, max_buy_wei, max_buys_per_day, daily_spend_wei, cooldown_sec)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         (account_id, wallet_id, wallet_address, chain_id, max_buy_pct, daily_spend_pct, max_buys_per_day, cooldown_sec)
+       values ($1, $2, $3, $4, $5, $6, $7, $8)
        on conflict (account_id) do nothing`,
       [
         input.accountId,
         input.walletId,
         input.address,
         input.chainId,
-        input.floatWei.toString(),
-        input.limits.maxBuyWei.toString(),
-        input.limits.maxBuysPerDay,
-        input.limits.dailySpendWei.toString(),
-        input.limits.cooldownSec,
+        input.maxBuyPct ?? DEFAULT_MAX_BUY_PCT,
+        input.dailySpendPct ?? DEFAULT_DAILY_SPEND_PCT,
+        input.maxBuysPerDay ?? DEFAULT_MAX_BUYS_PER_DAY,
+        input.cooldownSec ?? 0,
       ],
     );
   }
 
-  /** Changes the owner's float and limits. Only the fields given change. */
+  /** Changes the owner's limits. Only the fields given change. */
   async updateSettings(
     accountId: string,
-    patch: Partial<{ floatWei: bigint } & Omit<FloatLimits, "frozen">>,
+    patch: Partial<{ maxBuyPct: number; dailySpendPct: number; maxBuysPerDay: number; cooldownSec: number }>,
   ): Promise<void> {
     await this.pool.query(
       `update evm_float_wallets set
-         float_wei = coalesce($2::numeric, float_wei),
-         max_buy_wei = coalesce($3::numeric, max_buy_wei),
+         max_buy_pct = coalesce($2::integer, max_buy_pct),
+         daily_spend_pct = coalesce($3::integer, daily_spend_pct),
          max_buys_per_day = coalesce($4::integer, max_buys_per_day),
-         daily_spend_wei = coalesce($5::numeric, daily_spend_wei),
-         cooldown_sec = coalesce($6::integer, cooldown_sec),
+         cooldown_sec = coalesce($5::integer, cooldown_sec),
          updated_at = now()
        where account_id = $1`,
-      [
-        accountId,
-        patch.floatWei?.toString() ?? null,
-        patch.maxBuyWei?.toString() ?? null,
-        patch.maxBuysPerDay ?? null,
-        patch.dailySpendWei?.toString() ?? null,
-        patch.cooldownSec ?? null,
-      ],
+      [accountId, patch.maxBuyPct ?? null, patch.dailySpendPct ?? null, patch.maxBuysPerDay ?? null, patch.cooldownSec ?? null],
     );
   }
 
@@ -187,21 +184,17 @@ export class FloatStore {
   }
 
   private toWallet(r: any): FloatWalletRow {
-    const big = (v: unknown) => BigInt(String(v).split(".")[0]!);
     return {
       accountId: r.account_id,
       walletId: r.wallet_id,
       address: r.wallet_address,
       chainId: r.chain_id,
       status: r.status,
-      floatWei: big(r.float_wei),
-      limits: {
-        maxBuyWei: big(r.max_buy_wei),
-        maxBuysPerDay: r.max_buys_per_day,
-        dailySpendWei: big(r.daily_spend_wei),
-        cooldownSec: r.cooldown_sec,
-        frozen: r.frozen,
-      },
+      maxBuyPct: r.max_buy_pct,
+      dailySpendPct: r.daily_spend_pct,
+      maxBuysPerDay: r.max_buys_per_day,
+      cooldownSec: r.cooldown_sec,
+      frozen: r.frozen,
       createdAt: r.created_at,
     };
   }

@@ -35,64 +35,54 @@ beforeEach(async () => {
   await db.exec("insert into protected_accounts (account_id) values ('acct_1'), ('acct_2');");
 });
 
-const limits = { maxBuyWei: WEI(0.25), maxBuysPerDay: 5, dailySpendWei: WEI(0.5), cooldownSec: 20 };
-const create = (accountId = "acct_1", floatWei = WEI(1)) =>
-  store.create({ accountId, walletId: `privy-${accountId}`, address: "0x1111111111111111111111111111111111111111", chainId: 56, floatWei, limits });
+const create = (accountId = "acct_1") =>
+  store.create({ accountId, walletId: `privy-${accountId}`, address: "0x1111111111111111111111111111111111111111", chainId: 56, maxBuyPct: 20, dailySpendPct: 40, maxBuysPerDay: 5, cooldownSec: 20 });
 
 describe("the trading wallet record", () => {
-  it("stores and reads back every field, with wei as exact bigints", async () => {
+  it("stores and reads back every field", async () => {
     await create();
     const w = (await store.get("acct_1"))!;
-    expect(w).toMatchObject({ accountId: "acct_1", walletId: "privy-acct_1", chainId: 56, status: "active", floatWei: WEI(1) });
-    expect(w.limits).toEqual({ ...limits, frozen: false });
+    expect(w).toMatchObject({ accountId: "acct_1", walletId: "privy-acct_1", chainId: 56, status: "active", maxBuyPct: 20, dailySpendPct: 40, maxBuysPerDay: 5, cooldownSec: 20, frozen: false });
     expect(w.address).toBe("0x1111111111111111111111111111111111111111");
   });
 
-  it("keeps huge amounts exact (no float rounding in wei)", async () => {
-    const big = 123_456_789_012_345_678_901n;
-    await store.create({ accountId: "acct_1", walletId: "w", address: "0x1", chainId: 56, floatWei: big, limits: { ...limits, maxBuyWei: big } });
-    const w = (await store.get("acct_1"))!;
-    expect(w.floatWei).toBe(big);
-    expect(w.limits.maxBuyWei).toBe(big);
+  it("starts from sensible defaults when none are given", async () => {
+    await store.create({ accountId: "acct_2", walletId: "w", address: "0x2", chainId: 56 });
+    expect(await store.get("acct_2")).toMatchObject({ maxBuyPct: 25, dailySpendPct: 50, maxBuysPerDay: 10, cooldownSec: 0, frozen: false });
   });
 
-  it("returns undefined for an account with no trading wallet", async () => {
+  it("returns undefined for an account with no wallet", async () => {
     expect(await store.get("acct_2")).toBeUndefined();
   });
 
   it("creating twice does not overwrite the first (one wallet per account)", async () => {
     await create();
-    await store.create({ accountId: "acct_1", walletId: "SECOND", address: "0x2", chainId: 56, floatWei: 1n, limits });
+    await store.create({ accountId: "acct_1", walletId: "SECOND", address: "0x2", chainId: 56 });
     expect((await store.get("acct_1"))!.walletId).toBe("privy-acct_1");
   });
 
   it("changes only the settings that are given", async () => {
     await create();
-    await store.updateSettings("acct_1", { maxBuyWei: WEI(0.1) });
-    const w = (await store.get("acct_1"))!;
-    expect(w.limits.maxBuyWei).toBe(WEI(0.1));
-    expect(w.limits.maxBuysPerDay).toBe(5);
-    expect(w.limits.dailySpendWei).toBe(WEI(0.5));
-    expect(w.floatWei).toBe(WEI(1));
-    await store.updateSettings("acct_1", { floatWei: WEI(2), maxBuysPerDay: 9, cooldownSec: 0 });
-    const w2 = (await store.get("acct_1"))!;
-    expect(w2).toMatchObject({ floatWei: WEI(2) });
-    expect(w2.limits).toMatchObject({ maxBuysPerDay: 9, cooldownSec: 0, maxBuyWei: WEI(0.1) });
+    await store.updateSettings("acct_1", { maxBuyPct: 10 });
+    expect(await store.get("acct_1")).toMatchObject({ maxBuyPct: 10, dailySpendPct: 40, maxBuysPerDay: 5, cooldownSec: 20 });
+    await store.updateSettings("acct_1", { maxBuysPerDay: 9, cooldownSec: 0 });
+    expect(await store.get("acct_1")).toMatchObject({ maxBuyPct: 10, maxBuysPerDay: 9, cooldownSec: 0 });
   });
 
   it("freezes, unfreezes, and switches off", async () => {
     await create();
     await store.setFrozen("acct_1", true);
-    expect((await store.get("acct_1"))!.limits.frozen).toBe(true);
+    expect((await store.get("acct_1"))!.frozen).toBe(true);
     await store.setFrozen("acct_1", false);
-    expect((await store.get("acct_1"))!.limits.frozen).toBe(false);
+    expect((await store.get("acct_1"))!.frozen).toBe(false);
     await store.setStatus("acct_1", "off");
     expect((await store.get("acct_1"))!.status).toBe("off");
   });
 
-  it("refuses nonsense at the database: negative limits and unknown status", async () => {
+  it("refuses nonsense at the database: shares outside 1-100% and unknown status", async () => {
     await create();
-    await expect(db.exec("update evm_float_wallets set max_buy_wei = -1")).rejects.toThrow();
+    await expect(db.exec("update evm_float_wallets set max_buy_pct = 0")).rejects.toThrow();
+    await expect(db.exec("update evm_float_wallets set daily_spend_pct = 101")).rejects.toThrow();
     await expect(db.exec("update evm_float_wallets set status = 'maybe'")).rejects.toThrow();
   });
 });
@@ -130,7 +120,7 @@ describe("the day's usage, from the trade log", () => {
   });
 
   it("does not mix accounts", async () => {
-    await db.exec("insert into evm_float_wallets (account_id, wallet_id, wallet_address, chain_id, float_wei, max_buy_wei, max_buys_per_day, daily_spend_wei) values ('acct_2','w2','0x2',56,1,1,1,1)");
+    await db.exec("insert into evm_float_wallets (account_id, wallet_id, wallet_address, chain_id) values ('acct_2','w2','0x2',56)");
     await trade();
     await trade({ accountId: "acct_2", valueWei: WEI(5) });
     expect((await store.usageToday("acct_1", Date.now())).spentTodayWei).toBe(WEI(0.1));

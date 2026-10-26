@@ -152,9 +152,9 @@ export interface OneClickStatus {
 }
 
 export interface FloatLimitsView {
-  maxBuyWei: string;
+  maxBuyPct: number;
+  dailySpendPct: number;
   maxBuysPerDay: number;
-  dailySpendWei: string;
   cooldownSec: number;
   frozen: boolean;
 }
@@ -166,8 +166,9 @@ export interface FloatStatus {
   chainId: number;
   address?: string;
   status?: "active" | "off";
-  floatWei?: string;
   limits?: FloatLimitsView;
+  /** The account's own MyPropGuard rules that also apply to this wallet's buys. */
+  accountRules?: { maxTradesPerDay?: number; cooldownSec?: number };
   balanceWei?: string;
   holdings?: Array<{ token: string; symbol: string; decimals: number; balance: string }>;
   returnsTo?: string;
@@ -187,9 +188,8 @@ export interface FloatStatus {
 }
 
 export interface FloatSettingsInput {
-  float?: string;
-  maxBuy?: string;
-  dailySpend?: string;
+  maxBuyPct?: number;
+  dailySpendPct?: number;
   maxBuysPerDay?: number;
   cooldownSec?: number;
 }
@@ -296,8 +296,8 @@ export const api = {
       { method: "POST", body: "{}" },
     ),
   getFloat: (accountId: string) => request<FloatStatus>(`/v1/accounts/${encodeURIComponent(accountId)}/float`),
-  createFloat: (accountId: string, float: string) =>
-    request<{ ok: boolean; address: string }>(`/v1/accounts/${encodeURIComponent(accountId)}/float/create`, { method: "POST", body: JSON.stringify({ float }) }),
+  createFloat: (accountId: string) =>
+    request<{ ok: boolean; address: string }>(`/v1/accounts/${encodeURIComponent(accountId)}/float/create`, { method: "POST", body: "{}" }),
   updateFloat: (accountId: string, input: FloatSettingsInput) =>
     request<{ ok: boolean }>(`/v1/accounts/${encodeURIComponent(accountId)}/float/settings`, { method: "POST", body: JSON.stringify(input) }),
   freezeFloat: (accountId: string, frozen: boolean) =>

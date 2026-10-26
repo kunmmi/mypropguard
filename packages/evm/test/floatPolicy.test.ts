@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { encodeFunctionData, parseEther, type Address, type Hex } from "viem";
 import { FOUR_MEME_BSC, HELPER3_ABI, TOKEN_MANAGER_V1_ABI, TOKEN_MANAGER_V2_ABI } from "../src/fourMeme.js";
-import { checkFloatTransaction, defaultLimitsForFloat, type FloatLimits, type FloatPolicyConfig, type FloatState } from "../src/floatPolicy.js";
+import { checkFloatTransaction, type FloatLimits, type FloatPolicyConfig, type FloatState } from "../src/floatPolicy.js";
 
 const FLOAT = "0x1111111111111111111111111111111111111111" as Address;
 const STRANGER = "0x9999999999999999999999999999999999999999" as Address;
@@ -223,23 +223,5 @@ describe("everything else is refused", () => {
   it("a venue list can be supplied (so other platforms can be added without touching the rules)", () => {
     const venues = new Map([[STRANGER.toLowerCase(), { name: "test venue", abi: TOKEN_MANAGER_V2_ABI as never }]]);
     expect(checkFloatTransaction({ to: STRANGER, value: parseEther("0.1"), data: buyAmap() }, limits(), state(), { ...config, venues })).toMatchObject({ ok: true, kind: "buy" });
-  });
-});
-
-describe("defaultLimitsForFloat", () => {
-  it("scales every limit to the float the owner chose", () => {
-    const l = defaultLimitsForFloat(parseEther("1"));
-    expect(l.maxBuyWei).toBe(parseEther("0.25"));
-    expect(l.dailySpendWei).toBe(parseEther("0.5"));
-    expect(l.maxBuysPerDay).toBe(10);
-  });
-
-  it("never allows one buy bigger than the float itself", () => {
-    for (const floatBnb of ["0.01", "0.05", "0.5", "5", "50"]) {
-      const wei = parseEther(floatBnb);
-      const l = defaultLimitsForFloat(wei);
-      expect(l.maxBuyWei).toBeLessThan(wei);
-      expect(l.dailySpendWei).toBeLessThanOrEqual(wei);
-    }
   });
 });

@@ -209,12 +209,7 @@ export function checkFloatTransaction(tx: FloatTx, limits: FloatLimits, state: F
   return { ok: true, kind: "buy", spendWei: spend, token, summary: `buy ${bnb(spend)} on ${venue.name}` };
 }
 
-/** The limits a new wallet starts with, derived from the float the owner chose. All of them can be changed. */
-export function defaultLimitsForFloat(floatWei: bigint): Omit<FloatLimits, "frozen"> {
-  return {
-    maxBuyWei: floatWei / 4n, // no single buy may spend more than a quarter of the float
-    maxBuysPerDay: 10,
-    dailySpendWei: floatWei / 2n, // half the float per day at most
-    cooldownSec: 0,
-  };
-}
+/** What a new wallet starts with: a share of the wallet per buy and per day, a number of buys a day. All changeable. */
+export const DEFAULT_MAX_BUY_PCT = 25;
+export const DEFAULT_DAILY_SPEND_PCT = 50;
+export const DEFAULT_MAX_BUYS_PER_DAY = 10;

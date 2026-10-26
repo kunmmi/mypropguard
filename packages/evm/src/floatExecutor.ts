@@ -22,7 +22,16 @@ export interface FloatWalletRecord {
   accountId: string;
   walletId: string;
   address: Address;
-  limits: FloatLimits;
+  /**
+   * The amount limits may be given directly in wei, or as percentages of the wallet (`percentOfBalance`), which win.
+   */
+  limits: Omit<FloatLimits, "maxBuyWei" | "dailySpendWei"> & { maxBuyWei?: bigint; dailySpendWei?: bigint };
+  /**
+   * Amount limits as a share of what the wallet holds, so they follow the owner's deposits and withdrawals:
+   * a buy may use at most `maxBuyPct`% of the BNB in the wallet, and a day's buys at most `dailySpendPct`% of the BNB
+   * it started the day with (what is in it now plus what today's buys already spent).
+   */
+  percentOfBalance?: { maxBuyPct: number; dailySpendPct: number };
 }
 
 /** What the day looks like so far, read from the trade log by the caller (so it survives a restart). */
@@ -100,9 +109,15 @@ export class FloatExecutor {
     return this.withLock(wallet.address.toLowerCase(), async () => {
       const t0 = this.now();
       const [usage, balanceWei] = await Promise.all([io.loadUsage(), this.deps.publicClient.getBalance({ address: wallet.address })]);
+      const share = wallet.percentOfBalance;
+      const limits: FloatLimits = {
+        ...wallet.limits,
+        maxBuyWei: share ? (balanceWei * BigInt(share.maxBuyPct)) / 100n : (wallet.limits.maxBuyWei ?? 0n),
+        dailySpendWei: share ? ((balanceWei + usage.spentTodayWei) * BigInt(share.dailySpendPct)) / 100n : (wallet.limits.dailySpendWei ?? 0n),
+      };
       const decision = checkFloatTransaction(
         tx,
-        wallet.limits,
+        limits,
         { ...usage, balanceWei, nowSec: Math.floor(this.now() / 1000) },
         { gasReserveWei: DEFAULT_GAS_RESERVE_WEI, ...this.deps.policy, floatAddress: wallet.address },
       );

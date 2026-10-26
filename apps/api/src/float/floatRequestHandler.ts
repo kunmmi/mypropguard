@@ -8,6 +8,11 @@ export interface FloatHandlerDeps {
   store: Pick<FloatStore, "get" | "usageToday" | "recordTrade">;
   executor: Pick<FloatExecutor, "execute">;
   signer: Pick<FloatWalletSigner, "personalSign">;
+  /**
+   * The account's own MyPropGuard rules that also bind this wallet (the trade-frequency and cooldown rules). The
+   * tighter of these and the wallet's own limits applies. If they cannot be read, buying is paused (selling is not).
+   */
+  accountRules?(accountId: string): Promise<{ maxTradesPerDay?: number; cooldownSec?: number }>;
   now?: () => number;
   /** Per-step timing, printed so slow steps are visible in the host's logs. */
   log?: (message: string) => void;
@@ -148,10 +153,29 @@ export class FloatRequestHandler {
       return fail(-32602, "The transaction value is not valid.");
     }
 
+    let frozen = wallet.frozen;
+    let maxBuysPerDay = wallet.maxBuysPerDay;
+    let cooldownSec = wallet.cooldownSec;
+    if (this.deps.accountRules) {
+      try {
+        const rules = await this.deps.accountRules(wallet.accountId);
+        if (rules.maxTradesPerDay !== undefined) maxBuysPerDay = Math.min(maxBuysPerDay, rules.maxTradesPerDay);
+        if (rules.cooldownSec !== undefined) cooldownSec = Math.max(cooldownSec, rules.cooldownSec);
+      } catch {
+        frozen = true;
+      }
+    }
+
     const requestedAt = this.now();
     try {
       const out = await this.deps.executor.execute(
-        { accountId: wallet.accountId, walletId: wallet.walletId, address: getAddress(wallet.address), limits: wallet.limits },
+        {
+          accountId: wallet.accountId,
+          walletId: wallet.walletId,
+          address: getAddress(wallet.address),
+          limits: { maxBuysPerDay, cooldownSec, frozen },
+          percentOfBalance: { maxBuyPct: wallet.maxBuyPct, dailySpendPct: wallet.dailySpendPct },
+        },
         { to, value, data: data as Hex },
         {
           loadUsage: () => this.deps.store.usageToday(wallet.accountId, this.now()),
