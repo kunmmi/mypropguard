@@ -46,6 +46,8 @@ import {
   SafeTxServiceTokenDiscovery,
   SafeStateReader,
   SafeSessionExecutor,
+  FloatExecutor,
+  type FloatWalletSigner,
 } from "@mypropguard/evm";
 import { OneClickStore } from "./oneClick/oneClickStore.js";
 import { OneClickRequestHandler } from "./oneClick/oneClickRequestHandler.js";
@@ -53,6 +55,9 @@ import { PgWalletConnectStorage } from "./oneClick/pgWalletConnectStorage.js";
 import { WalletConnectService } from "./oneClick/walletConnectService.js";
 import { PgLeaseStore, WalletConnectLease, handOver } from "./oneClick/walletConnectLease.js";
 import type { OneClickDeps } from "./routes/oneClick.js";
+import type { FloatDeps } from "./routes/float.js";
+import { FloatStore } from "./float/floatStore.js";
+import { FloatRequestHandler } from "./float/floatRequestHandler.js";
 
 // PancakeSwap's own canonical BSC mainnet addresses - public, not secrets, so hardcoded rather
 // than made configurable (one less thing to misconfigure). See PancakeSwapEquityReader's NatSpec
@@ -397,7 +402,23 @@ async function setUpOneClick(): Promise<OneClickDeps | undefined> {
 
   const oneClickStore = new OneClickStore(pool);
   const findAccount = (accountId: string) => store.findAccountById(accountId);
-  const handler = new OneClickRequestHandler({ store: oneClickStore, findAccount, executors: { [bsc.id]: executor } });
+  // The trading wallet: a plain wallet sites like four.meme can log in to, judged by MyPropGuard's rules before every
+  // signature. Off unless ENABLE_FLOAT_WALLET=true.
+  const floatEnabled = process.env.ENABLE_FLOAT_WALLET === "true";
+  const floatStore = new FloatStore(pool);
+  const floatSigner: FloatWalletSigner = {
+    sendTransaction: (walletId, tx) => privy.sendTransaction(walletId, `eip155:${bsc.id}`, tx),
+    personalSign: (walletId, message) => privy.personalSign(walletId, message),
+  };
+  const floatHandler = floatEnabled
+    ? new FloatRequestHandler({
+        store: floatStore,
+        executor: new FloatExecutor({ publicClient, signer: floatSigner }),
+        signer: floatSigner,
+        log: (message) => console.log(`[float] ${message}`),
+      })
+    : undefined;
+  const handler = new OneClickRequestHandler({ store: oneClickStore, findAccount, executors: { [bsc.id]: executor }, float: floatHandler });
   const publicUrl = process.env.PUBLIC_WEB_URL?.trim() || "https://mypropguard.com";
   // Only one copy of the server may own the WalletConnect connection. The host runs the old and the new copy side by
   // side during a deploy, so the new one waits for the old one to let go. This runs in the background: the server
@@ -428,6 +449,12 @@ async function setUpOneClick(): Promise<OneClickDeps | undefined> {
         store: oneClickStore,
         handler,
         findAccount,
+        findFloat: floatEnabled
+          ? async (accountId) => {
+              const wallet = await floatStore.get(accountId);
+              return wallet && { address: wallet.address, chainId: wallet.chainId, active: wallet.status === "active" };
+            }
+          : undefined,
         metadata: { name: "MyPropGuard", description: "Trade with your protected account, with your risk rules enforced.", url: publicUrl, icons: [`${publicUrl}/favicon.ico`] },
         log,
       });
@@ -465,6 +492,21 @@ async function setUpOneClick(): Promise<OneClickDeps | undefined> {
   process.once("SIGTERM", onStop);
   process.once("SIGINT", onStop);
 
+  floatDeps = floatEnabled
+    ? {
+        store: floatStore,
+        service,
+        createWallet: async () => {
+          const wallet = await privy.createEthereumWallet();
+          return { id: wallet.id, address: wallet.address };
+        },
+        signer: floatSigner,
+        publicClient,
+        chainId: bsc.id,
+        nativeSymbol: "BNB",
+      }
+    : undefined;
+
   return {
     store: oneClickStore,
     service,
@@ -484,6 +526,7 @@ async function setUpOneClick(): Promise<OneClickDeps | undefined> {
   };
 }
 
+let floatDeps: FloatDeps | undefined;
 let oneClick: OneClickDeps | undefined;
 if (process.env.ENABLE_ONE_CLICK === "true") {
   try {
@@ -513,6 +556,7 @@ const app = buildApp({
   evmStateReaders,
   evmTokenDiscoveries,
   oneClick,
+  float: floatDeps,
 });
 
 // Max-daily-loss freezing is equity-based, not just realized P&L from trades - an account can
