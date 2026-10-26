@@ -54,6 +54,7 @@ import { OneClickStore } from "./oneClick/oneClickStore.js";
 import { OneClickRequestHandler } from "./oneClick/oneClickRequestHandler.js";
 import { PgWalletConnectStorage } from "./oneClick/pgWalletConnectStorage.js";
 import { WalletConnectService } from "./oneClick/walletConnectService.js";
+import { forwardingService } from "./oneClick/forwardingService.js";
 import { PgLeaseStore, WalletConnectLease, handOver } from "./oneClick/walletConnectLease.js";
 import type { OneClickDeps } from "./routes/oneClick.js";
 import type { FloatDeps } from "./routes/float.js";
@@ -499,11 +500,7 @@ async function setUpOneClick(): Promise<OneClickDeps | undefined> {
     if (!running) throw new Error("One-click trading is still starting up. Try again in a minute.");
     return running;
   };
-  const service: OneClickDeps["service"] = {
-    pair: async (accountId, uri) => (await whenRunning()).pair(accountId, uri),
-    disconnect: async (topic) => (await whenRunning()).disconnect(topic),
-    disconnectAccount: async (accountId) => (await whenRunning()).disconnectAccount(accountId),
-  };
+  const service: OneClickDeps["service"] = forwardingService(whenRunning);
   // Told to stop (a deploy): close the connection, then let go of the lease, so the new copy neither waits nor overlaps.
   const onStop = () => {
     void handOver(() => running?.stop(), lease).finally(() => process.exit(0));
