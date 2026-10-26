@@ -29,7 +29,7 @@ export function WalletConnectLinkBox({ siteName, busy, onLink }: { siteName: str
         return;
       }
       setUri(text);
-      setQrNote(readWalletConnectInput(text).ok ? "Code read from the picture. Press Link now: these codes expire within a few minutes." : null);
+      setQrNote(readWalletConnectInput(text).ok ? "Code read from the picture. Press Connect now: these codes expire within a few minutes." : null);
     } catch (e) {
       setQrNote(e instanceof Error ? e.message : "Could not read that picture.");
     } finally {
@@ -57,7 +57,7 @@ export function WalletConnectLinkBox({ siteName, busy, onLink }: { siteName: str
 
   return (
     <div>
-      <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>Link {siteName}</div>
+      <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>Connect {siteName}</div>
       <ol style={{ margin: "0 0 var(--space-2)", paddingLeft: 18, fontSize: 13, color: "var(--text-muted)", display: "grid", gap: 2 }}>
         <li>On {siteName}, press Connect wallet and choose WalletConnect.</li>
         <li>Copy the code it shows (it starts with wc:) and paste it here.</li>
@@ -105,7 +105,7 @@ export function WalletConnectLinkBox({ siteName, busy, onLink }: { siteName: str
           }}
         />
         <Button onClick={() => void link()} disabled={busy || reading || !typed?.ok}>
-          Link
+          Connect
         </Button>
       </div>
       {qrNote && <p style={{ margin: "var(--space-2) 0 0", fontSize: 12, color: "var(--text-muted)" }}>{qrNote}</p>}

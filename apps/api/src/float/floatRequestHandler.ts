@@ -33,7 +33,7 @@ export class FloatRequestHandler {
   async handle(session: LinkedSession, caipChainId: string, request: { method: string; params?: unknown }): Promise<RpcReply> {
     const wallet = await this.deps.store.get(session.accountId);
     if (!wallet || wallet.status !== "active") {
-      return fail(4100, "This MyPropGuard trading wallet is switched off. Switch it on in MyPropGuard, then link the site again.");
+      return fail(4100, "Your MyPropGuard wallet is switched off. Switch it on in MyPropGuard, then connect the site again.");
     }
     const chainId = wallet.chainId;
     const audit = (r: {

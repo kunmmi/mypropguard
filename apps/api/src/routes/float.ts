@@ -60,7 +60,7 @@ export function registerFloatRoutes(app: FastifyInstance, deps: AppDeps): void {
       return undefined;
     }
     if (!account.evmSafeAddress || !account.evmChainId || account.evmChainId !== float.chainId) {
-      void reply.status(400).send({ error: "NOT_SUPPORTED", message: "A trading wallet needs a protected Safe on a supported chain: that is where its funds are returned to." });
+      void reply.status(400).send({ error: "NOT_SUPPORTED", message: "Your MyPropGuard wallet needs a protected account on a supported chain first." });
       return undefined;
     }
     return { account, safe: getAddress(account.evmSafeAddress) };
@@ -145,7 +145,7 @@ export function registerFloatRoutes(app: FastifyInstance, deps: AppDeps): void {
     const { accountId } = request.params as { accountId: string };
     if (!(await assertAccountOwnership(deps, request, reply, accountId))) return;
     if (!(await load(accountId, reply))) return;
-    if (await float.store.get(accountId)) return reply.status(409).send({ error: "EXISTS", message: "This account already has a trading wallet." });
+    if (await float.store.get(accountId)) return reply.status(409).send({ error: "EXISTS", message: "You already have a wallet." });
 
     const body = (request.body ?? {}) as Record<string, unknown>;
     let floatWei: bigint | undefined;
@@ -154,7 +154,7 @@ export function registerFloatRoutes(app: FastifyInstance, deps: AppDeps): void {
     } catch (error) {
       return reply.status(400).send(bad((error as Error).message));
     }
-    if (!floatWei) return reply.status(400).send(bad("Choose how much to trade with (the float)."));
+    if (!floatWei) return reply.status(400).send(bad("Choose how much to trade with."));
 
     const wallet = await float.createWallet();
     await float.store.create({ accountId, walletId: wallet.id, address: wallet.address, chainId: float.chainId, floatWei, limits: defaultLimitsForFloat(floatWei) });
@@ -168,7 +168,7 @@ export function registerFloatRoutes(app: FastifyInstance, deps: AppDeps): void {
     if (!(await assertAccountOwnership(deps, request, reply, accountId))) return;
     if (!(await load(accountId, reply))) return;
     const wallet = await float.store.get(accountId);
-    if (!wallet) return reply.status(404).send({ error: "NOT_FOUND", message: "Create the trading wallet first." });
+    if (!wallet) return reply.status(404).send({ error: "NOT_FOUND", message: "Create your wallet first." });
 
     const body = (request.body ?? {}) as Record<string, unknown>;
     try {
@@ -195,7 +195,7 @@ export function registerFloatRoutes(app: FastifyInstance, deps: AppDeps): void {
   app.post("/v1/accounts/:accountId/float/freeze", async (request, reply) => {
     const { accountId } = request.params as { accountId: string };
     if (!(await assertAccountOwnership(deps, request, reply, accountId))) return;
-    if (!(await float.store.get(accountId))) return reply.status(404).send({ error: "NOT_FOUND", message: "Create the trading wallet first." });
+    if (!(await float.store.get(accountId))) return reply.status(404).send({ error: "NOT_FOUND", message: "Create your wallet first." });
     const frozen = (request.body as { frozen?: unknown } | undefined)?.frozen !== false;
     await float.store.setFrozen(accountId, frozen);
     return reply.send({ ok: true, frozen });
@@ -205,7 +205,7 @@ export function registerFloatRoutes(app: FastifyInstance, deps: AppDeps): void {
     const { accountId } = request.params as { accountId: string };
     if (!(await assertAccountOwnership(deps, request, reply, accountId))) return;
     const wallet = await float.store.get(accountId);
-    if (!wallet || wallet.status !== "active") return reply.status(409).send({ error: "NOT_ENABLED", message: "Create and switch on the trading wallet first." });
+    if (!wallet || wallet.status !== "active") return reply.status(409).send({ error: "NOT_ENABLED", message: "Create and switch on your wallet first." });
     const uri = (request.body as { uri?: unknown } | undefined)?.uri;
     if (typeof uri !== "string" || uri.length > 2000) return reply.status(400).send(bad("Paste the WalletConnect code from the site."));
     try {
@@ -264,7 +264,7 @@ export function registerFloatRoutes(app: FastifyInstance, deps: AppDeps): void {
     if (!(await assertAccountOwnership(deps, request, reply, accountId))) return;
     const loaded = await load(accountId, reply);
     if (!loaded) return;
-    if (!(await float.store.get(accountId))) return reply.status(404).send({ error: "NOT_FOUND", message: "Create the trading wallet first." });
+    if (!(await float.store.get(accountId))) return reply.status(404).send({ error: "NOT_FOUND", message: "Create your wallet first." });
     return reply.send({ ok: true, returnedTo: loaded.safe, items: await sweep(accountId, loaded.safe) });
   });
 
@@ -283,7 +283,7 @@ export function registerFloatRoutes(app: FastifyInstance, deps: AppDeps): void {
   app.post("/v1/accounts/:accountId/float/on", async (request, reply) => {
     const { accountId } = request.params as { accountId: string };
     if (!(await assertAccountOwnership(deps, request, reply, accountId))) return;
-    if (!(await float.store.get(accountId))) return reply.status(404).send({ error: "NOT_FOUND", message: "Create the trading wallet first." });
+    if (!(await float.store.get(accountId))) return reply.status(404).send({ error: "NOT_FOUND", message: "Create your wallet first." });
     await float.store.setStatus(accountId, "active");
     return reply.send({ ok: true });
   });

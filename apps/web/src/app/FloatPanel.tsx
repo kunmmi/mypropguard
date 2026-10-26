@@ -98,10 +98,10 @@ export function FloatPanel({ accountId, siteName }: { accountId: string; siteNam
   }
 
   const describeSweep = (items: Array<{ asset: string; amount: string; error: string | null }>) => {
-    if (items.length === 0) return "Nothing to return: the wallet was empty.";
+    if (items.length === 0) return "Nothing to withdraw: the wallet was empty.";
     const failed = items.filter((i) => i.error);
     const sent = items.filter((i) => !i.error);
-    return `Returned ${sent.length} item${sent.length === 1 ? "" : "s"} to your Safe.${failed.length ? ` ${failed.length} could not be returned: ${failed[0]!.error}` : ""}`;
+    return `Withdrew ${sent.length} item${sent.length === 1 ? "" : "s"} back to your MyPropGuard account.${failed.length ? ` ${failed.length} could not be withdrawn: ${failed[0]!.error}` : ""}`;
   };
 
   if (!state?.available) return error ? <Panel title="Trading wallet"><p style={{ color: "var(--text-muted)", fontSize: 13 }}>{error}</p></Panel> : null;
@@ -109,12 +109,11 @@ export function FloatPanel({ accountId, siteName }: { accountId: string; siteNam
 
   if (!state.exists) {
     return (
-      <Panel title={`Trade on ${site} with protection`}>
+      <Panel title="Your MyPropGuard wallet">
         <p style={{ marginTop: 0, fontSize: 13, color: "var(--text-muted)" }}>
-          {site} needs a normal wallet to log in with, which your Safe cannot be. So MyPropGuard keeps a separate trading
-          wallet for it, and you decide how much goes in: your <strong>float</strong>. Every trade {site} sends is checked
-          against your rules before it is signed, and you can pull everything back to your Safe whenever you like. Only
-          the float is ever exposed. The rest of your money stays in the Safe.
+          This is the wallet you trade with on {site}. Put in as much as you want to trade with, connect {site} once, and
+          trade there as normal. MyPropGuard checks every trade against your limits first, and you can withdraw everything
+          whenever you like.
         </p>
         <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>How much do you want to trade with?</div>
         <div style={{ display: "flex", gap: "var(--space-2)", flexWrap: "wrap", alignItems: "center" }}>
@@ -126,10 +125,10 @@ export function FloatPanel({ accountId, siteName }: { accountId: string; siteNam
           <input value={floatInput} onChange={(e) => setFloatInput(e.target.value)} style={input} aria-label={`Float in ${symbol}`} />
           <span style={{ fontSize: 12, color: "var(--text-muted)" }}>{symbol}</span>
           <Button disabled={busy || !floatInput.trim()} onClick={() => void run("Creating…", async () => void (await api.createFloat(accountId, floatInput.trim())))}>
-            Create trading wallet
+            Create my wallet
           </Button>
         </div>
-        <p style={{ fontSize: 12, color: "var(--text-muted)" }}>You can change the float and every limit later. Nothing moves until you send {symbol} to the wallet yourself.</p>
+        <p style={{ fontSize: 12, color: "var(--text-muted)" }}>You can change this amount and your limits later. Nothing moves until you deposit {symbol} yourself.</p>
         {note && <p style={{ fontSize: 13, marginBottom: 0 }}>{note}</p>}
         {error && <p style={{ fontSize: 13, color: "var(--danger, #b42318)", marginBottom: 0 }}>{error}</p>}
       </Panel>
@@ -143,15 +142,15 @@ export function FloatPanel({ accountId, siteName }: { accountId: string; siteNam
   const short = balance < floatWei;
 
   return (
-    <Panel title={`Trade on ${site} with protection`}>
+    <Panel title="Your MyPropGuard wallet">
       <div style={{ display: "flex", gap: "var(--space-2)", flexWrap: "wrap", marginBottom: "var(--space-3)" }}>
-        <StatusBadge tone={on ? "success" : "neutral"}>{on ? "Trading wallet is on" : "Switched off"}</StatusBadge>
-        {on && limits.frozen && <StatusBadge tone="danger">Buying is frozen: selling still works</StatusBadge>}
+        <StatusBadge tone={on ? "success" : "neutral"}>{on ? "Wallet is on" : "Paused"}</StatusBadge>
+        {on && limits.frozen && <StatusBadge tone="danger">Buying is paused: selling still works</StatusBadge>}
       </div>
 
       <div style={{ display: "grid", gap: "var(--space-3)" }}>
         <div>
-          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>Your trading wallet</div>
+          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>Your wallet</div>
           <div style={{ display: "flex", gap: "var(--space-2)", alignItems: "center", flexWrap: "wrap" }}>
             <code style={{ fontSize: 12, wordBreak: "break-all" }}>{state.address}</code>
             <Button
@@ -168,14 +167,14 @@ export function FloatPanel({ accountId, siteName }: { accountId: string; siteNam
             </Button>
           </div>
           <p style={{ fontSize: 13, margin: "var(--space-2) 0 0", color: "var(--text-muted)" }}>
-            Holds <strong>{bnb(balance)} {symbol}</strong> of the {bnb(floatWei)} {symbol} float you chose.
-            {short && ` To trade with the full float, send ${bnb(floatWei - balance)} ${symbol} to this address from your own wallet (on BNB Chain).`}
+            Balance: <strong>{bnb(balance)} {symbol}</strong>. Your trading amount is {bnb(floatWei)} {symbol}.
+            {short && ` To trade the full amount, deposit ${bnb(floatWei - balance)} ${symbol} to this address (BNB Chain).`}
           </p>
         </div>
 
         {state.holdings && state.holdings.length > 0 && (
           <div style={{ display: "grid", gap: "var(--space-2)" }}>
-            <div style={{ fontSize: 13, fontWeight: 600 }}>Tokens it holds</div>
+            <div style={{ fontSize: 13, fontWeight: 600 }}>Tokens in your wallet</div>
             {state.holdings.map((h) => (
               <div key={h.token} style={row}>
                 <strong>{h.symbol}</strong>
@@ -186,11 +185,11 @@ export function FloatPanel({ accountId, siteName }: { accountId: string; siteNam
         )}
 
         <div>
-          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>Your float and rules</div>
+          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>Your amount and limits</div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: "var(--space-2)", fontSize: 12 }}>
             {(
               [
-                ["float", `Float (${symbol})`],
+                ["float", `Trading amount (${symbol})`],
                 ["maxBuy", `Biggest single buy (${symbol})`],
                 ["dailySpend", `Most spent per day (${symbol})`],
                 ["maxBuysPerDay", "Buys per day"],
@@ -229,13 +228,12 @@ export function FloatPanel({ accountId, siteName }: { accountId: string; siteNam
             >
               Save changes
             </Button>
-            <Button variant="subtle" disabled={busy} onClick={() => void run(limits.frozen ? "Unfreezing…" : "Freezing…", () => api.freezeFloat(accountId, !limits.frozen).then(() => undefined))}>
-              {limits.frozen ? "Allow buying again" : "Freeze buying"}
+            <Button variant="subtle" disabled={busy} onClick={() => void run(limits.frozen ? "Resuming…" : "Pausing…", () => api.freezeFloat(accountId, !limits.frozen).then(() => undefined))}>
+              {limits.frozen ? "Resume buying" : "Pause buying"}
             </Button>
           </div>
           <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "var(--space-2) 0 0" }}>
-            Selling is never blocked. Buying is refused once any limit is reached, and when the wallet would be left without
-            enough {symbol} to pay the network fee to sell.
+            Selling is never blocked. A buy is refused once you reach a limit, or if it would leave too little {symbol} to pay the fee to sell.
           </p>
         </div>
 
@@ -261,7 +259,7 @@ export function FloatPanel({ accountId, siteName }: { accountId: string; siteNam
 
         {state.links && state.links.length > 0 && (
           <div style={{ display: "grid", gap: "var(--space-2)" }}>
-            <div style={{ fontSize: 13, fontWeight: 600 }}>Linked sites</div>
+            <div style={{ fontSize: 13, fontWeight: 600 }}>Connected sites</div>
             {state.links.map((l) => (
               <div key={l.topic} style={{ ...row, alignItems: "center" }}>
                 <span>
@@ -281,7 +279,7 @@ export function FloatPanel({ accountId, siteName }: { accountId: string; siteNam
             {state.trades.map((t, i) => (
               <div key={`${t.at}-${i}`} style={row}>
                 <span>
-                  <strong>{t.result === "SENT" ? (t.kind === "login" ? "Signed in" : t.kind === "sweep" ? "Returned" : "Sent") : t.result === "REFUSED" ? "Blocked" : "Failed"}</strong>
+                  <strong>{t.result === "SENT" ? (t.kind === "login" ? "Signed in" : t.kind === "sweep" ? "Withdrawn" : "Sent") : t.result === "REFUSED" ? "Blocked" : "Failed"}</strong>
                   {t.kind !== "login" && t.kind !== "sweep" ? ` ${t.kind}` : ""}
                   {t.site ? ` · ${t.site}` : ""}
                   {t.valueWei && t.valueWei !== "0" ? ` · ${bnb(t.valueWei)} ${symbol}` : ""}
@@ -299,18 +297,18 @@ export function FloatPanel({ accountId, siteName }: { accountId: string; siteNam
             variant="subtle"
             size="sm"
             disabled={busy}
-            onClick={() => void run("Returning your funds…", async () => describeSweep((await api.sweepFloat(accountId)).items))}
+            onClick={() => void run("Withdrawing…", async () => describeSweep((await api.sweepFloat(accountId)).items))}
           >
-            Return everything to my Safe
+            Withdraw everything
           </Button>
           {on ? (
             <Button
               variant="subtle"
               size="sm"
               disabled={busy}
-              onClick={() => void run("Switching off and returning your funds…", async () => describeSweep((await api.switchFloat(accountId, false)).items ?? []))}
+              onClick={() => void run("Switching off and withdrawing…", async () => describeSweep((await api.switchFloat(accountId, false)).items ?? []))}
             >
-              Switch off and return funds
+              Switch off and withdraw
             </Button>
           ) : (
             <Button variant="subtle" size="sm" disabled={busy} onClick={() => void run("Switching on…", () => api.switchFloat(accountId, true).then(() => undefined))}>
