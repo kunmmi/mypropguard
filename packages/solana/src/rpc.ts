@@ -6,6 +6,12 @@ export interface SolanaRpc {
   getBalance(address: string): Promise<bigint>;
   /** An account's data, or null when the account does not exist. */
   getAccountData(address: string): Promise<Uint8Array | null>;
+  /** The program that owns an account (for a coin's mint: which token program it uses), or null when it does not exist. */
+  getAccountOwner(address: string): Promise<string | null>;
+  /** A recent blockhash to build a transaction with. */
+  getLatestBlockhash(): Promise<string>;
+  /** Waits until a sent transaction is confirmed. Throws if it failed or did not land in time. */
+  confirm(signature: string): Promise<void>;
   /** The raw token amount `owner` holds of `mint`, across both token programs. */
   getTokenBalance(owner: string, mint: string): Promise<bigint>;
   /** Runs a transaction against the chain without sending it. `err` is null when it would succeed. */
@@ -29,6 +35,21 @@ export class Web3Rpc implements SolanaRpc {
   async getAccountData(address: string): Promise<Uint8Array | null> {
     const info = await this.connection.getAccountInfo(new PublicKey(address));
     return info ? info.data : null;
+  }
+
+  async getAccountOwner(address: string): Promise<string | null> {
+    const info = await this.connection.getAccountInfo(new PublicKey(address));
+    return info ? info.owner.toBase58() : null;
+  }
+
+  async getLatestBlockhash(): Promise<string> {
+    return (await this.connection.getLatestBlockhash("confirmed")).blockhash;
+  }
+
+  async confirm(signature: string): Promise<void> {
+    const latest = await this.connection.getLatestBlockhash("confirmed");
+    const result = await this.connection.confirmTransaction({ signature, ...latest }, "confirmed");
+    if (result.value.err) throw new Error(`The transaction failed: ${JSON.stringify(result.value.err)}`);
   }
 
   async getTokenBalance(owner: string, mint: string): Promise<bigint> {

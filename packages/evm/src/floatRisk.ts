@@ -1,4 +1,4 @@
-import { formatEther, type Address } from "viem";
+import { formatUnits, type Address } from "viem";
 import type { FloatRefusalCode } from "./floatPolicy.js";
 
 /** The account's MyPropGuard rules that depend on what the wallet is worth. Amounts are in US dollars. */
@@ -18,6 +18,8 @@ export const hasValueRules = (r: FloatValueRules): boolean =>
 
 export interface FloatRiskInput {
   rules: FloatValueRules;
+  /** Decimals of the unit all amounts are in: 18 for BNB (wei, the default), 9 for SOL (lamports). */
+  decimals?: number;
   usdPerBnb: number;
   buy: {
     spendWei: bigint;
@@ -34,7 +36,7 @@ export interface FloatRiskInput {
 
 export type FloatRiskRefusal = { code: Extract<FloatRefusalCode, "LOSS_LIMIT" | "DRAWDOWN_LIMIT" | "POSITION_LIMIT" | "EXPOSURE_LIMIT">; message: string };
 
-const bnbToUsd = (wei: bigint, usdPerBnb: number): number => Number(formatEther(wei)) * usdPerBnb;
+const toUsd = (amount: bigint, usdPerUnit: number, decimals: number): number => Number(formatUnits(amount, decimals)) * usdPerUnit;
 const usd = (n: number): string => `$${n.toLocaleString(undefined, { maximumFractionDigits: n < 10 ? 2 : 0 })}`;
 
 /**
@@ -43,6 +45,8 @@ const usd = (n: number): string => `$${n.toLocaleString(undefined, { maximumFrac
  */
 export function checkValueRules(input: FloatRiskInput): FloatRiskRefusal | null {
   const { rules, usdPerBnb, buy, holdings } = input;
+  const decimals = input.decimals ?? 18;
+  const bnbToUsd = (amount: bigint, price: number): number => toUsd(amount, price, decimals);
 
   if (rules.maxDailyLossUsd !== undefined && input.pnlTodayWei < 0n) {
     const lost = bnbToUsd(-input.pnlTodayWei, usdPerBnb);

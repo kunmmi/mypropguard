@@ -62,6 +62,13 @@ export class SolanaValuer {
     return curve && !curve.complete ? curveBuyQuote(curve, lamports) : 0n;
   }
 
+  /** A coin's decimals, read from its mint account (byte 44 in both token programs). */
+  async decimals(mint: string): Promise<number> {
+    const data = await this.rpc.getAccountData(mint);
+    if (!data || data.length < 45) throw new Error("Could not read the coin's decimals");
+    return data[44]!;
+  }
+
   async balanceOf(mint: string, owner: string): Promise<bigint> {
     return this.rpc.getTokenBalance(owner, mint);
   }
