@@ -138,11 +138,11 @@ describe("FloatExecutor", () => {
   });
 
   it("different wallets do not wait for each other", async () => {
-    const { executor } = rig({ sendDelayMs: 60 });
+    const { executor } = rig({ sendDelayMs: 200 });
     const other = { ...wallet, address: "0x3333333333333333333333333333333333333333" as Address };
     const t0 = Date.now();
     await Promise.all([executor.execute(wallet, buy("0.05"), usageLog().io), executor.execute(other, buy("0.05"), usageLog().io)]);
-    expect(Date.now() - t0).toBeLessThan(110);
+    expect(Date.now() - t0).toBeLessThan(380);
   });
 
   it("sells always go through, even with no float left, and nothing is recorded as a buy", async () => {

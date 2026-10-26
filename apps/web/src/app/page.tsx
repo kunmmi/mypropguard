@@ -9,6 +9,7 @@ import { Select } from "@/design-system/components/forms/Select";
 import { Panel } from "@/design-system/Panel";
 import { StatusBadge } from "@/design-system/StatusBadge";
 import { OneClickPanel } from "./OneClickPanel";
+import { FloatPanel } from "./FloatPanel";
 import { supabase } from "@/lib/supabaseClient";
 import { VENUES, getVenue, isSafeVenue, type VenueConfig } from "@/lib/venues";
 import {
@@ -1003,6 +1004,8 @@ function Dashboard({ session }: { session: Session }) {
         {status && selectedAccount?.evmSafeAddress && isSafeVenue(venue) && (
           <OneClickPanel accountId={accountId} nativeSymbol={venue.nativeSymbol} exchangeName={venue.exchangeName} />
         )}
+
+        {status && selectedAccount?.evmSafeAddress && isSafeVenue(venue) && venue.nativeSymbol === "BNB" && <FloatPanel accountId={accountId} />}
 
         {status && !isSafeVenue(venue) && (
           <Panel title="Watcher">

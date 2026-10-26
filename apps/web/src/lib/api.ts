@@ -151,6 +151,49 @@ export interface OneClickStatus {
   trades: Array<{ at: string; site: string | null; to: string | null; valueWei: string | null; txHash: string | null; result: "SENT" | "REFUSED" | "ERROR"; message: string | null }>;
 }
 
+export interface FloatLimitsView {
+  maxBuyWei: string;
+  maxBuysPerDay: number;
+  dailySpendWei: string;
+  cooldownSec: number;
+  frozen: boolean;
+}
+
+export interface FloatStatus {
+  available: boolean;
+  exists: boolean;
+  nativeSymbol: string;
+  chainId: number;
+  address?: string;
+  status?: "active" | "off";
+  floatWei?: string;
+  limits?: FloatLimitsView;
+  balanceWei?: string;
+  holdings?: Array<{ token: string; symbol: string; decimals: number; balance: string }>;
+  returnsTo?: string;
+  links?: Array<{ topic: string; name: string | null; url: string | null; linkedAt: string }>;
+  trades?: Array<{
+    at: string;
+    site: string | null;
+    kind: string;
+    token: string | null;
+    valueWei: string | null;
+    txHash: string | null;
+    result: "SENT" | "REFUSED" | "ERROR";
+    code: string | null;
+    message: string | null;
+    totalMs: number | null;
+  }>;
+}
+
+export interface FloatSettingsInput {
+  float?: string;
+  maxBuy?: string;
+  dailySpend?: string;
+  maxBuysPerDay?: number;
+  cooldownSec?: number;
+}
+
 export const api = {
   createAccount: (input: CreateAccountInput) =>
     request<{ accountId: string; protectionOn: boolean; agentWalletAddress: string | null; evmSafeAddress?: string | null }>(
@@ -250,6 +293,27 @@ export const api = {
   disableOneClick: (accountId: string) =>
     request<{ status: string; chainId?: number; ownerAddress?: string; transaction: OneClickTransaction | null }>(
       `/v1/accounts/${encodeURIComponent(accountId)}/one-click/disable`,
+      { method: "POST", body: "{}" },
+    ),
+  getFloat: (accountId: string) => request<FloatStatus>(`/v1/accounts/${encodeURIComponent(accountId)}/float`),
+  createFloat: (accountId: string, float: string) =>
+    request<{ ok: boolean; address: string }>(`/v1/accounts/${encodeURIComponent(accountId)}/float/create`, { method: "POST", body: JSON.stringify({ float }) }),
+  updateFloat: (accountId: string, input: FloatSettingsInput) =>
+    request<{ ok: boolean }>(`/v1/accounts/${encodeURIComponent(accountId)}/float/settings`, { method: "POST", body: JSON.stringify(input) }),
+  freezeFloat: (accountId: string, frozen: boolean) =>
+    request<{ ok: boolean }>(`/v1/accounts/${encodeURIComponent(accountId)}/float/freeze`, { method: "POST", body: JSON.stringify({ frozen }) }),
+  pairFloat: (accountId: string, uri: string) =>
+    request<{ ok: boolean; message: string }>(`/v1/accounts/${encodeURIComponent(accountId)}/float/pair`, { method: "POST", body: JSON.stringify({ uri }) }),
+  disconnectFloat: (accountId: string, topic: string) =>
+    request<{ ok: boolean }>(`/v1/accounts/${encodeURIComponent(accountId)}/float/disconnect`, { method: "POST", body: JSON.stringify({ topic }) }),
+  sweepFloat: (accountId: string) =>
+    request<{ ok: boolean; returnedTo: string; items: Array<{ asset: string; amount: string; txHash: string | null; error: string | null }> }>(
+      `/v1/accounts/${encodeURIComponent(accountId)}/float/sweep`,
+      { method: "POST", body: "{}" },
+    ),
+  switchFloat: (accountId: string, on: boolean) =>
+    request<{ ok: boolean; items?: Array<{ asset: string; amount: string; txHash: string | null; error: string | null }> }>(
+      `/v1/accounts/${encodeURIComponent(accountId)}/float/${on ? "on" : "off"}`,
       { method: "POST", body: "{}" },
     ),
 };
