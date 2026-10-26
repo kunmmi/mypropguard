@@ -5,6 +5,7 @@ import { Button } from "@/design-system/components/core/Button";
 import { Panel } from "@/design-system/Panel";
 import { StatusBadge } from "@/design-system/StatusBadge";
 import { api, type FloatStatus } from "@/lib/api";
+import { accountRuleLines } from "@/lib/accountRuleLines";
 import { WalletConnectLinkBox } from "./WalletConnectLinkBox";
 
 /** Wei -> "0.25", exactly (no floating point), trailing zeros dropped. */
@@ -14,21 +15,6 @@ function bnb(wei: string | bigint | undefined): string {
   const whole = v / 10n ** 18n;
   const frac = (v % 10n ** 18n).toString().padStart(18, "0").replace(/0+$/, "");
   return frac ? `${whole}.${frac}` : `${whole}`;
-}
-
-/** The account rules that bind this wallet, in plain words. */
-function accountRuleLines(rules: FloatStatus["accountRules"]): string[] {
-  if (!rules) return [];
-  const usd = (n: number) => `${n.toLocaleString()}`;
-  const lines: string[] = [];
-  if (rules.maxTradesPerDay !== undefined) lines.push(`At most ${rules.maxTradesPerDay} trades a day`);
-  if (rules.cooldownSec !== undefined) lines.push(`${rules.cooldownSec} seconds between trades`);
-  if (rules.value.maxDailyLossUsd !== undefined) lines.push(`Buying pauses for the day if you lose ${usd(rules.value.maxDailyLossUsd)}`);
-  if (rules.value.maxDrawdown !== undefined) lines.push(`Buying pauses if the wallet falls ${Math.round(rules.value.maxDrawdown * 1000) / 10}% from its highest value`);
-  if (rules.value.maxExposureUsd !== undefined) lines.push(`No more than ${usd(rules.value.maxExposureUsd)} in open positions`);
-  const sized = Object.keys(rules.value.tokenLimits ?? {}).length;
-  if (sized > 0) lines.push(`A size limit on ${sized} token${sized === 1 ? "" : "s"}`);
-  return lines;
 }
 
 const input: React.CSSProperties = {

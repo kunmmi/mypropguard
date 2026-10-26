@@ -203,17 +203,40 @@ export interface SolanaStatus {
   exists: boolean;
   address?: string;
   status?: "active" | "off";
+  /** Whether the server signs trades at all. When false, trades are only recorded and refused. */
+  tradingEnabled?: boolean;
+  limits?: { maxBuyPct: number; dailySpendPct: number; maxBuysPerDay: number; cooldownSec: number; frozen: boolean };
+  accountRules?: {
+    maxTradesPerDay?: number;
+    cooldownSec?: number;
+    value: { maxDailyLossUsd?: number; maxDrawdown?: number; maxExposureUsd?: number; tokenLimits?: Record<string, number> };
+  };
+  withdrawalAddress?: string | null;
+  /** SOL in the wallet, in lamports, or null when it could not be read just now. */
+  balanceLamports?: string | null;
+  holdings?: Array<{ mint: string; balance: string; valueLamports: string }>;
   links?: Array<{ topic: string; name: string | null; url: string | null; linkedAt: string }>;
   requests?: Array<{
     at: string;
     site: string | null;
-    kind: "login" | "transaction" | "other";
+    kind: "login" | "transaction" | "sweep" | "other";
     method: string;
     result: "SIGNED" | "REFUSED" | "ERROR";
     code: string | null;
     message: string | null;
     detail: unknown;
+    tradeKind: "buy" | "sell" | null;
+    mint: string | null;
+    lamports: string | null;
+    signature: string | null;
+    totalMs: number | null;
   }>;
+}
+
+export interface SolanaWithdrawResult {
+  ok: boolean;
+  to?: string;
+  items?: Array<{ asset: string; amount: string; signature: string | null; error: string | null; skipped: string | null }>;
 }
 
 export const api = {
@@ -325,7 +348,15 @@ export const api = {
   disconnectSolana: (accountId: string, topic: string) =>
     request<{ ok: boolean }>(`/v1/accounts/${encodeURIComponent(accountId)}/solana/disconnect`, { method: "POST", body: JSON.stringify({ topic }) }),
   switchSolana: (accountId: string, on: boolean) =>
-    request<{ ok: boolean }>(`/v1/accounts/${encodeURIComponent(accountId)}/solana/${on ? "on" : "off"}`, { method: "POST", body: "{}" }),
+    request<SolanaWithdrawResult>(`/v1/accounts/${encodeURIComponent(accountId)}/solana/${on ? "on" : "off"}`, { method: "POST", body: "{}" }),
+  updateSolana: (accountId: string, input: { maxBuyPct?: number; dailySpendPct?: number; maxBuysPerDay?: number; cooldownSec?: number }) =>
+    request<{ ok: boolean }>(`/v1/accounts/${encodeURIComponent(accountId)}/solana/settings`, { method: "POST", body: JSON.stringify(input) }),
+  freezeSolana: (accountId: string, frozen: boolean) =>
+    request<{ ok: boolean }>(`/v1/accounts/${encodeURIComponent(accountId)}/solana/freeze`, { method: "POST", body: JSON.stringify({ frozen }) }),
+  setSolanaWithdrawalAddress: (accountId: string, address: string) =>
+    request<{ ok: boolean; withdrawalAddress: string }>(`/v1/accounts/${encodeURIComponent(accountId)}/solana/withdrawal-address`, { method: "POST", body: JSON.stringify({ address }) }),
+  withdrawSolana: (accountId: string) =>
+    request<SolanaWithdrawResult>(`/v1/accounts/${encodeURIComponent(accountId)}/solana/withdraw`, { method: "POST", body: "{}" }),
 
   getFloat: (accountId: string) => request<FloatStatus>(`/v1/accounts/${encodeURIComponent(accountId)}/float`),
   createFloat: (accountId: string) =>
