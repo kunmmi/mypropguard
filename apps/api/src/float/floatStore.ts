@@ -29,6 +29,8 @@ export interface FloatTradeRecord {
   toAddress: string | null;
   tokenAddress: string | null;
   valueWei: bigint | null;
+  /** For a sale or a token handed back: what it returned in BNB (an estimate from the quote taken just before). */
+  proceedsWei?: bigint | null;
   txHash: string | null;
   result: "SENT" | "REFUSED" | "ERROR";
   code: string | null;
@@ -136,8 +138,8 @@ export class FloatStore {
   async recordTrade(t: FloatTradeRecord): Promise<void> {
     await this.pool.query(
       `insert into evm_float_trades
-         (account_id, dapp_name, kind, to_address, token_address, value_wei, tx_hash, result, code, message, check_ms, estimate_ms, send_ms, total_ms)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+         (account_id, dapp_name, kind, to_address, token_address, value_wei, tx_hash, result, code, message, check_ms, estimate_ms, send_ms, total_ms, proceeds_wei)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
       [
         t.accountId,
         t.dappName,
@@ -153,8 +155,47 @@ export class FloatStore {
         t.timings?.estimateMs ?? null,
         t.timings?.sendMs ?? null,
         t.timings?.totalMs ?? null,
+        t.proceedsWei === null || t.proceedsWei === undefined ? null : t.proceedsWei.toString(),
       ],
     );
+  }
+
+  /**
+   * For every token this wallet has traded: what its buys cost and what its sales (and tokens handed back) returned.
+   * With each token's value now, that gives the wallet's trading result without needing to know about deposits.
+   */
+  async tokenFlows(accountId: string): Promise<Array<{ token: Address; costWei: bigint; proceedsWei: bigint }>> {
+    const { rows } = await this.pool.query(
+      `select token_address,
+              coalesce(sum(case when kind = 'buy' then value_wei end), 0)::text as cost,
+              coalesce(sum(case when kind in ('sell', 'sweep') then proceeds_wei end), 0)::text as proceeds
+         from evm_float_trades
+        where account_id = $1 and token_address is not null and result = 'SENT'
+        group by token_address`,
+      [accountId],
+    );
+    const big = (v: unknown) => BigInt(String(v ?? "0").split(".")[0] || "0");
+    return rows.map((r) => ({ token: r.token_address as Address, costWei: big(r.cost), proceedsWei: big(r.proceeds) }));
+  }
+
+  async getRiskState(accountId: string): Promise<{ day: string | null; dayStartPnlWei: bigint; peakEquityWei: bigint }> {
+    const { rows } = await this.pool.query("select to_char(day, 'YYYY-MM-DD') as day, day_start_pnl_wei::text as p, peak_equity_wei::text as e from evm_float_risk where account_id = $1", [accountId]);
+    const r = rows[0];
+    const big = (v: unknown) => BigInt(String(v ?? "0").split(".")[0] || "0");
+    return r ? { day: r.day ?? null, dayStartPnlWei: big(r.p), peakEquityWei: big(r.e) } : { day: null, dayStartPnlWei: 0n, peakEquityWei: 0n };
+  }
+
+  async saveRiskState(accountId: string, state: { day: string; dayStartPnlWei: bigint; peakEquityWei: bigint }): Promise<void> {
+    await this.pool.query(
+      `insert into evm_float_risk (account_id, day, day_start_pnl_wei, peak_equity_wei) values ($1, $2, $3, $4)
+       on conflict (account_id) do update set day = excluded.day, day_start_pnl_wei = excluded.day_start_pnl_wei, peak_equity_wei = excluded.peak_equity_wei, updated_at = now()`,
+      [accountId, state.day, state.dayStartPnlWei.toString(), state.peakEquityWei.toString()],
+    );
+  }
+
+  /** Forgets the wallet's high-water mark, e.g. after the owner took money out, so a withdrawal is not read as a loss. */
+  async resetPeak(accountId: string): Promise<void> {
+    await this.pool.query("update evm_float_risk set peak_equity_wei = 0, updated_at = now() where account_id = $1", [accountId]);
   }
 
   async listTrades(accountId: string, limit: number): Promise<FloatTradeView[]> {

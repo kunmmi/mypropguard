@@ -34,6 +34,7 @@ function rig() {
     setFrozen: async (id: string, frozen: boolean) => void (rows.get(id)!.frozen = frozen),
     setStatus: async (id: string, status: "active" | "off") => void (rows.get(id)!.status = status),
     knownTokens: async () => [],
+    resetPeak: async () => undefined,
     listTrades: async () => [],
     recordTrade: async (t: FloatTradeRecord) => void trades.push(t),
   };
@@ -43,6 +44,7 @@ function rig() {
     createWallet: async () => ({ id: "privy-1", address: FLOAT }),
     signer: { sendTransaction: async (_i, tx) => (sent.push({ to: tx.to, value: tx.value }), `0x${"ab".repeat(32)}` as Hash) },
     publicClient: { getBalance: async () => parseEther("0.5"), getGasPrice: async () => 3_000_000_000n, readContract: async () => 0n, waitForTransactionReceipt: async () => ({}) } as never,
+    valuer: { quoteSell: async () => 0n },
     chainId: 56,
     nativeSymbol: "BNB",
   };
@@ -101,7 +103,7 @@ describe("wallet routes", () => {
     await app.inject({ method: "POST", url: "/v1/accounts/a1/rules", payload: { ruleType: RuleType.MAX_TRADE_FREQUENCY, param: "3" } });
     await app.inject({ method: "POST", url: "/v1/accounts/a1/rules", payload: { ruleType: RuleType.COOLDOWN, param: "45" } });
     const status = (await app.inject({ method: "GET", url: "/v1/accounts/a1/float" })).json();
-    expect(status.accountRules).toEqual({ maxTradesPerDay: 3, cooldownSec: 45 });
+    expect(status.accountRules).toEqual({ maxTradesPerDay: 3, cooldownSec: 45, value: {} });
   });
 
   it("pauses and resumes buying", async () => {

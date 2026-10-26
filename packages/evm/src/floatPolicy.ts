@@ -70,7 +70,12 @@ export type FloatRefusalCode =
   | "BAD_RECIPIENT"
   | "BAD_APPROVAL"
   | "BAD_FEE"
-  | "SELL_WITH_VALUE";
+  | "SELL_WITH_VALUE"
+  | "LOSS_LIMIT"
+  | "DRAWDOWN_LIMIT"
+  | "POSITION_LIMIT"
+  | "EXPOSURE_LIMIT"
+  | "VALUE_UNAVAILABLE";
 
 export type FloatDecision =
   | {
@@ -80,6 +85,8 @@ export type FloatDecision =
       spendWei: bigint;
       /** The meme token being bought, sold or approved, when the call names one. */
       token?: Address;
+      /** For a sell: how many tokens it sells, when the call says. */
+      sellAmount?: bigint;
       /** A short description for the trader and the log. */
       summary: string;
     }
@@ -178,7 +185,8 @@ export function checkFloatTransaction(tx: FloatTx, limits: FloatLimits, state: F
     if (typeof feeRate === "bigint" && feeRate > BigInt(MAX_ROUTER_FEE_RATE)) {
       return refuse("BAD_FEE", `That sale takes a ${Number(feeRate) / 100}% cut for a third party. The limit is ${MAX_ROUTER_FEE_RATE / 100}%.`);
     }
-    return { ok: true, kind: "sell", spendWei: 0n, token, summary: `sell on ${venue.name}` };
+    const amount = argByName(decoded.args, inputs, "amount");
+    return { ok: true, kind: "sell", spendWei: 0n, token, sellAmount: typeof amount === "bigint" ? amount : undefined, summary: `sell on ${venue.name}` };
   }
 
   // 5. BUY. BNB sent is what is spent. Limits apply in a fixed order so the message names the first one hit.

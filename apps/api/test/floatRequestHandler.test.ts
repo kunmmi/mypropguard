@@ -22,7 +22,7 @@ const session = (over: Partial<LinkedSession> = {}): LinkedSession => ({
   ...over,
 });
 
-function rig(over: { wallet?: Partial<FloatWalletRow> | null; balance?: bigint; estimate?: bigint | Error; now?: () => number; accountRules?: () => Promise<{ maxTradesPerDay?: number; cooldownSec?: number }> } = {}) {
+function rig(over: { wallet?: Partial<FloatWalletRow> | null; balance?: bigint; estimate?: bigint | Error; now?: () => number; accountRules?: () => Promise<{ maxTradesPerDay?: number; cooldownSec?: number; value?: Record<string, unknown> }>; riskGuard?: { checkBuy: (...a: any[]) => Promise<any>; valueSell: (...a: any[]) => Promise<bigint | null> } } = {}) {
   const trades: FloatTradeRecord[] = [];
   const signed: string[] = [];
   const sent: Array<{ to: Address; value: bigint }> = [];
@@ -72,7 +72,7 @@ function rig(over: { wallet?: Partial<FloatWalletRow> | null; balance?: bigint; 
   };
   const executor = new FloatExecutor({ publicClient: publicClient as never, signer });
   const logs: string[] = [];
-  const handler = new FloatRequestHandler({ store, executor, signer, now: over.now, accountRules: over.accountRules, log: (m) => logs.push(m) });
+  const handler = new FloatRequestHandler({ store, executor, signer, now: over.now, accountRules: over.accountRules as never, riskGuard: over.riskGuard as never, log: (m) => logs.push(m) });
   return { handler, trades, signed, sent, logs };
 }
 
@@ -267,6 +267,47 @@ describe("the account's own rules also apply", () => {
     const sell = { from: FLOAT, to: V2, value: "0x0", data: encodeFunctionData({ abi: TOKEN_MANAGER_V2_ABI, functionName: "sellToken", args: [MEME, 5n] }) };
     expect((await send(handler, sell) as any).result).toBeDefined();
     expect(sent).toHaveLength(1);
+  });
+});
+
+describe("rules that depend on the wallet's value", () => {
+  it("a buy the guard refuses is recorded with its code and never sent", async () => {
+    const { handler, sent, trades } = rig({
+      accountRules: async () => ({ value: { maxDailyLossUsd: 10 } }),
+      riskGuard: { checkBuy: async () => ({ code: "LOSS_LIMIT", message: "You are down too much today." }), valueSell: async () => null },
+    });
+    const r = await send(handler, buyTx("0.05"));
+    expect(err(r).message).toBe("You are down too much today.");
+    expect(sent).toHaveLength(0);
+    expect(trades.at(-1)).toMatchObject({ kind: "buy", result: "REFUSED", code: "LOSS_LIMIT" });
+  });
+
+  it("the guard is handed the account's value rules", async () => {
+    let seen: unknown;
+    const { handler } = rig({
+      accountRules: async () => ({ value: { maxDrawdown: 0.3 } }),
+      riskGuard: { checkBuy: async (_w: unknown, rules: unknown) => ((seen = rules), null), valueSell: async () => null },
+    });
+    await send(handler, buyTx("0.05"));
+    expect(seen).toEqual({ maxDrawdown: 0.3 });
+  });
+
+  it("a sale is recorded with what it should return, and is never held up by the guard", async () => {
+    const { handler, trades } = rig({
+      riskGuard: { checkBuy: async () => ({ code: "LOSS_LIMIT", message: "no" }), valueSell: async () => parseEther("0.07") },
+    });
+    const sell = { from: FLOAT, to: V2, value: "0x0", data: encodeFunctionData({ abi: TOKEN_MANAGER_V2_ABI, functionName: "sellToken", args: [MEME, 5n] }) };
+    expect((await send(handler, sell) as any).result).toBeDefined();
+    expect(trades.at(-1)).toMatchObject({ kind: "sell", result: "SENT", tokenAddress: MEME, proceedsWei: parseEther("0.07") });
+  });
+
+  it("if the value check cannot run, the buy is stopped and says selling still works", async () => {
+    const { handler, sent, trades } = rig({
+      riskGuard: { checkBuy: async () => { throw new Error("rpc down"); }, valueSell: async () => null },
+    });
+    expect(err(await send(handler, buyTx("0.05"))).message).toMatch(/Selling still works/);
+    expect(sent).toHaveLength(0);
+    expect(trades.at(-1)).toMatchObject({ result: "REFUSED", code: "VALUE_UNAVAILABLE" });
   });
 });
 

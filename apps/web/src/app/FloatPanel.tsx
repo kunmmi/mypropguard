@@ -16,6 +16,21 @@ function bnb(wei: string | bigint | undefined): string {
   return frac ? `${whole}.${frac}` : `${whole}`;
 }
 
+/** The account rules that bind this wallet, in plain words. */
+function accountRuleLines(rules: FloatStatus["accountRules"]): string[] {
+  if (!rules) return [];
+  const usd = (n: number) => `${n.toLocaleString()}`;
+  const lines: string[] = [];
+  if (rules.maxTradesPerDay !== undefined) lines.push(`At most ${rules.maxTradesPerDay} trades a day`);
+  if (rules.cooldownSec !== undefined) lines.push(`${rules.cooldownSec} seconds between trades`);
+  if (rules.value.maxDailyLossUsd !== undefined) lines.push(`Buying pauses for the day if you lose ${usd(rules.value.maxDailyLossUsd)}`);
+  if (rules.value.maxDrawdown !== undefined) lines.push(`Buying pauses if the wallet falls ${Math.round(rules.value.maxDrawdown * 1000) / 10}% from its highest value`);
+  if (rules.value.maxExposureUsd !== undefined) lines.push(`No more than ${usd(rules.value.maxExposureUsd)} in open positions`);
+  const sized = Object.keys(rules.value.tokenLimits ?? {}).length;
+  if (sized > 0) lines.push(`A size limit on ${sized} token${sized === 1 ? "" : "s"}`);
+  return lines;
+}
+
 const input: React.CSSProperties = {
   width: 110,
   padding: "var(--space-2)",
@@ -216,12 +231,15 @@ export function FloatPanel({ accountId, siteName }: { accountId: string; siteNam
               {limits.frozen ? "Resume buying" : "Pause buying"}
             </Button>
           </div>
-          {(state.accountRules?.maxTradesPerDay !== undefined || state.accountRules?.cooldownSec !== undefined) && (
-            <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "var(--space-2) 0 0" }}>
-              Your MyPropGuard account rules also apply here
-              {state.accountRules?.maxTradesPerDay !== undefined ? `: at most ${state.accountRules.maxTradesPerDay} trades a day` : ""}
-              {state.accountRules?.cooldownSec !== undefined ? `${state.accountRules?.maxTradesPerDay !== undefined ? ", and" : ":"} ${state.accountRules.cooldownSec}s between trades` : ""}. The stricter one wins.
-            </p>
+          {accountRuleLines(state.accountRules).length > 0 && (
+            <div style={{ fontSize: 12, color: "var(--text-muted)", margin: "var(--space-2) 0 0" }}>
+              Your MyPropGuard account rules also apply to this wallet (the stricter limit wins):
+              <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>
+                {accountRuleLines(state.accountRules).map((line) => (
+                  <li key={line}>{line}</li>
+                ))}
+              </ul>
+            </div>
           )}
           <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "var(--space-2) 0 0" }}>
             Selling is never blocked. A buy is refused once you reach a limit, or if it would leave too little {symbol} to pay the fee to sell.

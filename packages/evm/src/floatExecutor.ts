@@ -102,7 +102,15 @@ export class FloatExecutor {
        * Called inside the lock, after the transaction was accepted by the network and before the next trade is judged,
        * with the timings of every step so far (the total is added by the caller, who knows when the request arrived).
        */
-      onSent(decision: Extract<FloatDecision, { ok: true }>, hash: Hash, timings: Omit<FloatTimings, "totalMs">): Promise<void>;
+      onSent(decision: Extract<FloatDecision, { ok: true }>, hash: Hash, timings: Omit<FloatTimings, "totalMs">, meta: { proceedsWei: bigint | null }): Promise<void>;
+      /**
+       * Judges a buy that already passed the wallet's own limits against rules that depend on what the wallet is worth.
+       * Returns a refusal, or null to go on. Throwing means "could not check": the buy is stopped, since an unchecked
+       * buy is not a safe one. Never called for sells.
+       */
+      beforeBuy?(decision: Extract<FloatDecision, { ok: true }>, balanceWei: bigint): Promise<{ code: FloatRefusalCode; message: string } | null>;
+      /** What a sell should return in BNB, asked at the same time as the dry run. Used for the books, never to block. */
+      valueSell?(decision: Extract<FloatDecision, { ok: true }>): Promise<bigint | null>;
     },
   ): Promise<{ hash: Hash; decision: Extract<FloatDecision, { ok: true }>; timings: FloatTimings }> {
     const requestedAt = this.now();
@@ -121,13 +129,29 @@ export class FloatExecutor {
         { ...usage, balanceWei, nowSec: Math.floor(this.now() / 1000) },
         { gasReserveWei: DEFAULT_GAS_RESERVE_WEI, ...this.deps.policy, floatAddress: wallet.address },
       );
-      const t1 = this.now();
       if (!decision.ok) throw new FloatTradeRefused(decision.code, decision.message);
+
+      // Rules that depend on what the wallet is worth. An unchecked buy is not a safe one, so failing to check stops it.
+      if (decision.kind === "buy" && io.beforeBuy) {
+        let refusal: { code: FloatRefusalCode; message: string } | null;
+        try {
+          refusal = await io.beforeBuy(decision, balanceWei);
+        } catch {
+          throw new FloatTradeRefused("VALUE_UNAVAILABLE", "Could not check your loss limits right now, so this buy was not sent. Selling still works. Try again in a moment.");
+        }
+        if (refusal) throw new FloatTradeRefused(refusal.code, refusal.message);
+      }
+      const t1 = this.now();
 
       // Would four.meme accept this right now? A reverted meme buy still costs gas, so find out before signing.
       let gas: bigint;
+      let proceedsWei: bigint | null = null;
       try {
-        const estimate = await this.deps.publicClient.estimateGas({ account: wallet.address, to: tx.to, value: tx.value, data: tx.data });
+        const [estimate, valued] = await Promise.all([
+          this.deps.publicClient.estimateGas({ account: wallet.address, to: tx.to, value: tx.value, data: tx.data }),
+          decision.kind === "sell" && io.valueSell ? io.valueSell(decision).catch(() => null) : Promise.resolve(null),
+        ]);
+        proceedsWei = valued;
         gas = (estimate * GAS_HEADROOM_NUM) / GAS_HEADROOM_DEN;
       } catch (error) {
         const why = error instanceof Error ? (error as { shortMessage?: string }).shortMessage ?? error.message : String(error);
@@ -137,7 +161,7 @@ export class FloatExecutor {
 
       const hash = await this.deps.signer.sendTransaction(wallet.walletId, { to: tx.to, value: tx.value, data: tx.data, gas });
       const t3 = this.now();
-      await io.onSent(decision, hash, { checkMs: t1 - t0, estimateMs: t2 - t1, sendMs: t3 - t2 });
+      await io.onSent(decision, hash, { checkMs: t1 - t0, estimateMs: t2 - t1, sendMs: t3 - t2 }, { proceedsWei });
       return {
         hash,
         decision,

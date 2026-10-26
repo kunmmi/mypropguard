@@ -168,7 +168,11 @@ export interface FloatStatus {
   status?: "active" | "off";
   limits?: FloatLimitsView;
   /** The account's own MyPropGuard rules that also apply to this wallet's buys. */
-  accountRules?: { maxTradesPerDay?: number; cooldownSec?: number };
+  accountRules?: {
+    maxTradesPerDay?: number;
+    cooldownSec?: number;
+    value: { maxDailyLossUsd?: number; maxDrawdown?: number; maxExposureUsd?: number; tokenLimits?: Record<string, number> };
+  };
   balanceWei?: string;
   holdings?: Array<{ token: string; symbol: string; decimals: number; balance: string }>;
   returnsTo?: string;

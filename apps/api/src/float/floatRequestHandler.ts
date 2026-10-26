@@ -1,5 +1,7 @@
 import { getAddress, isAddress, isAddressEqual, isHex, type Address, type Hex } from "viem";
 import { FloatTradeRefused, checkLoginMessage, type FloatExecutor, type FloatWalletSigner } from "@mypropguard/evm";
+import type { FloatRiskGuard } from "./floatRiskGuard.js";
+import type { WalletAccountRules } from "./accountRules.js";
 import type { FloatStore, FloatTradeKind } from "./floatStore.js";
 import type { LinkedSession } from "../oneClick/oneClickStore.js";
 import type { RpcReply } from "../oneClick/oneClickRequestHandler.js";
@@ -12,7 +14,9 @@ export interface FloatHandlerDeps {
    * The account's own MyPropGuard rules that also bind this wallet (the trade-frequency and cooldown rules). The
    * tighter of these and the wallet's own limits applies. If they cannot be read, buying is paused (selling is not).
    */
-  accountRules?(accountId: string): Promise<{ maxTradesPerDay?: number; cooldownSec?: number }>;
+  accountRules?(accountId: string): Promise<WalletAccountRules>;
+  /** Enforces the rules that depend on what the wallet is worth. Absent = those rules are not applied. */
+  riskGuard?: Pick<FloatRiskGuard, "checkBuy" | "valueSell">;
   now?: () => number;
   /** Per-step timing, printed so slow steps are visible in the host's logs. */
   log?: (message: string) => void;
@@ -49,6 +53,7 @@ export class FloatRequestHandler {
       to?: string | null;
       token?: string | null;
       value?: bigint | null;
+      proceeds?: bigint | null;
       hash?: string | null;
       timings?: { checkMs: number; estimateMs: number; sendMs: number; totalMs: number };
     }) =>
@@ -60,6 +65,7 @@ export class FloatRequestHandler {
           toAddress: r.to ?? null,
           tokenAddress: r.token ?? null,
           valueWei: r.value ?? null,
+          proceedsWei: r.proceeds ?? null,
           txHash: r.hash ?? null,
           result: r.result,
           code: r.code ?? null,
@@ -132,6 +138,7 @@ export class FloatRequestHandler {
       to?: string | null;
       token?: string | null;
       value?: bigint | null;
+      proceeds?: bigint | null;
       hash?: string | null;
       timings?: { checkMs: number; estimateMs: number; sendMs: number; totalMs: number };
     }) => Promise<void>,
@@ -156,9 +163,11 @@ export class FloatRequestHandler {
     let frozen = wallet.frozen;
     let maxBuysPerDay = wallet.maxBuysPerDay;
     let cooldownSec = wallet.cooldownSec;
+    let valueRules: WalletAccountRules["value"] = {};
     if (this.deps.accountRules) {
       try {
         const rules = await this.deps.accountRules(wallet.accountId);
+        valueRules = rules.value;
         if (rules.maxTradesPerDay !== undefined) maxBuysPerDay = Math.min(maxBuysPerDay, rules.maxTradesPerDay);
         if (rules.cooldownSec !== undefined) cooldownSec = Math.max(cooldownSec, rules.cooldownSec);
       } catch {
@@ -179,14 +188,19 @@ export class FloatRequestHandler {
         { to, value, data: data as Hex },
         {
           loadUsage: () => this.deps.store.usageToday(wallet.accountId, this.now()),
+          beforeBuy: this.deps.riskGuard
+            ? (decision) => this.deps.riskGuard!.checkBuy({ accountId: wallet.accountId, address: getAddress(wallet.address) }, valueRules, decision)
+            : undefined,
+          valueSell: this.deps.riskGuard ? (decision) => this.deps.riskGuard!.valueSell(decision) : undefined,
           // Recorded INSIDE the executor's lock, so the very next trade already sees this one in the day's counters.
-          onSent: (decision, hash, timings) =>
+          onSent: (decision, hash, timings, meta) =>
             audit({
               kind: decision.kind,
               result: "SENT",
               to,
               token: decision.token ?? null,
               value,
+              proceeds: meta.proceedsWei,
               hash,
               message: decision.summary,
               timings: { ...timings, totalMs: this.now() - requestedAt },

@@ -186,4 +186,80 @@ describe("FloatExecutor", () => {
     await expect(executor.execute(percent, buy("0.15"), u.io)).rejects.toMatchObject({ code: "DAILY_SPEND" });
     expect((await executor.execute(percent, buy("0.1"), u.io)).hash).toBeDefined();
   });
+
+  describe("rules that depend on the wallet's value", () => {
+    const sellData = encodeFunctionData({ abi: TOKEN_MANAGER_V2_ABI, functionName: "sellToken", args: [MEME, 5_000n] });
+
+    it("a buy the value check refuses is stopped before the dry run and before anything is signed", async () => {
+      const { executor, sent } = rig();
+      const u = usageLog();
+      const err = await executor
+        .execute(wallet, buy("0.1"), { ...u.io, beforeBuy: async () => ({ code: "LOSS_LIMIT", message: "You are down too much today." }) })
+        .catch((e) => e);
+      expect(err).toBeInstanceOf(FloatTradeRefused);
+      expect(err.code).toBe("LOSS_LIMIT");
+      expect(sent).toHaveLength(0);
+      expect(u.log).toHaveLength(0);
+    });
+
+    it("a buy the value check passes goes through, and is told the balance it was judged against", async () => {
+      const { executor, sent } = rig({ balance: parseEther("2") });
+      let seen = 0n;
+      await executor.execute(wallet, buy("0.1"), { ...usageLog().io, beforeBuy: async (_d, balance) => ((seen = balance), null) });
+      expect(seen).toBe(parseEther("2"));
+      expect(sent).toHaveLength(1);
+    });
+
+    it("if the value check cannot run, the buy is stopped, not waved through", async () => {
+      const { executor, sent } = rig();
+      const err = await executor
+        .execute(wallet, buy("0.1"), {
+          ...usageLog().io,
+          beforeBuy: async () => {
+            throw new Error("rpc down");
+          },
+        })
+        .catch((e) => e);
+      expect(err.code).toBe("VALUE_UNAVAILABLE");
+      expect(err.message).toMatch(/Selling still works/);
+      expect(sent).toHaveLength(0);
+    });
+
+    it("the value check never runs for a sell, so a sell cannot be blocked by it", async () => {
+      const { executor, sent } = rig();
+      let asked = false;
+      const frozen = { ...wallet, limits: { ...wallet.limits, frozen: true } };
+      await executor.execute(frozen, { to: V2, value: 0n, data: sellData }, {
+        ...usageLog().io,
+        beforeBuy: async () => ((asked = true), { code: "LOSS_LIMIT" as const, message: "no" }),
+      });
+      expect(asked).toBe(false);
+      expect(sent).toHaveLength(1);
+    });
+
+    it("a sell is valued alongside the dry run and the figure reaches the books", async () => {
+      const { executor } = rig();
+      let proceeds: bigint | null = -1n;
+      await executor.execute(wallet, { to: V2, value: 0n, data: sellData }, {
+        ...usageLog().io,
+        valueSell: async (d) => (d.kind === "sell" && d.sellAmount === 5_000n ? parseEther("0.07") : null),
+        onSent: async (_d, _h, _t, meta) => void (proceeds = meta.proceedsWei),
+      });
+      expect(proceeds).toBe(parseEther("0.07"));
+    });
+
+    it("a sell is never held up or failed by its valuation", async () => {
+      const { executor, sent } = rig();
+      let proceeds: bigint | null = -1n;
+      await executor.execute(wallet, { to: V2, value: 0n, data: sellData }, {
+        ...usageLog().io,
+        valueSell: async () => {
+          throw new Error("quote failed");
+        },
+        onSent: async (_d, _h, _t, meta) => void (proceeds = meta.proceedsWei),
+      });
+      expect(sent).toHaveLength(1);
+      expect(proceeds).toBeNull();
+    });
+  });
 });

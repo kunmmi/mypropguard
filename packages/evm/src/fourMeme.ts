@@ -57,3 +57,15 @@ export const HELPER3_ABI = parseAbi([
 
 /** Router fee on a sell is capped by four.meme at 5% (feeRate / 10000). Anything above is refused. */
 export const MAX_ROUTER_FEE_RATE = 500;
+
+/** Read-only quotes from TokenManagerHelper3 (source: four.meme's ITokenManagerHelper3.sol, checked 2026-10-26). */
+export const HELPER3_VIEW_ABI = parseAbi([
+  "function getTokenInfo(address token) view returns (uint256 version, address tokenManager, address quote, uint256 lastPrice, uint256 tradingFeeRate, uint256 minTradingFee, uint256 launchTime, uint256 offers, uint256 maxOffers, uint256 funds, uint256 maxFunds, bool liquidityAdded)",
+  "function tryBuy(address token, uint256 amount, uint256 funds) view returns (address tokenManager, address quote, uint256 estimatedAmount, uint256 estimatedCost, uint256 estimatedFee, uint256 amountMsgValue, uint256 amountApproval, uint256 amountFunds)",
+  "function trySell(address token, uint256 amount) view returns (address tokenManager, address quote, uint256 funds, uint256 fee)",
+]);
+
+/** Where a four.meme token trades once it has outgrown the bonding curve. */
+export const PANCAKE_V2_ROUTER = "0x10ED43C718714eb63d5aA57B78B54704E256024E" as Address;
+export const WBNB = "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c" as Address;
+export const PANCAKE_ROUTER_ABI = parseAbi(["function getAmountsOut(uint256 amountIn, address[] path) view returns (uint256[] amounts)"]);

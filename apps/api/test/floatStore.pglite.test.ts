@@ -31,7 +31,7 @@ afterAll(async () => {
   await db.close();
 });
 beforeEach(async () => {
-  await db.exec("truncate evm_float_trades, evm_float_wallets, evm_wc_sessions; delete from protected_accounts;");
+  await db.exec("truncate evm_float_trades, evm_float_risk, evm_float_wallets, evm_wc_sessions; delete from protected_accounts;");
   await db.exec("insert into protected_accounts (account_id) values ('acct_1'), ('acct_2');");
 });
 
@@ -181,5 +181,59 @@ describe("links to the Safe vs to the trading wallet", () => {
 
   it("the database rejects any other kind", async () => {
     await expect(db.exec("insert into evm_wc_sessions (topic, account_id, kind) values ('x','acct_1','weird')")).rejects.toThrow();
+  });
+});
+
+describe("what each token cost and returned, and the risk bookkeeping", () => {
+  const trade = (over: Partial<Parameters<FloatStore["recordTrade"]>[0]> = {}) =>
+    store.recordTrade({ accountId: "acct_1", dappName: "four.meme", kind: "buy", toAddress: "0xaa", tokenAddress: "0xbb", valueWei: WEI(0.1), txHash: "0xh", result: "SENT", code: null, message: null, ...over });
+
+  beforeEach(async () => {
+    await create();
+  });
+
+  it("sums, per token, what the buys cost and what the sales and handed-back tokens returned", async () => {
+    await trade({ tokenAddress: "0xA1", valueWei: WEI(0.1) });
+    await trade({ tokenAddress: "0xA1", valueWei: WEI(0.2) });
+    await trade({ tokenAddress: "0xA1", kind: "sell", valueWei: 0n, proceedsWei: WEI(0.25) });
+    await trade({ tokenAddress: "0xA1", kind: "sweep", valueWei: null, proceedsWei: WEI(0.05) });
+    await trade({ tokenAddress: "0xB2", valueWei: WEI(1) });
+    const flows = await store.tokenFlows("acct_1");
+    const a1 = flows.find((f) => f.token === "0xA1")!;
+    expect(a1.costWei).toBe(WEI(0.3));
+    expect(a1.proceedsWei).toBe(WEI(0.3));
+    expect(flows.find((f) => f.token === "0xB2")).toMatchObject({ costWei: WEI(1), proceedsWei: 0n });
+  });
+
+  it("ignores refused and failed trades, other accounts, and rows with no token", async () => {
+    await db.exec("insert into evm_float_wallets (account_id, wallet_id, wallet_address, chain_id) values ('acct_2','w2','0x2',56)");
+    await trade({ tokenAddress: "0xA1", valueWei: WEI(0.1) });
+    await trade({ tokenAddress: "0xA1", valueWei: WEI(5), result: "REFUSED" });
+    await trade({ tokenAddress: "0xA1", valueWei: WEI(5), result: "ERROR" });
+    await trade({ accountId: "acct_2", tokenAddress: "0xA1", valueWei: WEI(7) });
+    await trade({ tokenAddress: null, valueWei: WEI(9) });
+    const flows = await store.tokenFlows("acct_1");
+    expect(flows).toHaveLength(1);
+    expect(flows[0]!.costWei).toBe(WEI(0.1));
+  });
+
+  it("keeps proceeds exact", async () => {
+    const odd = 123_456_789_012_345_678n;
+    await trade({ tokenAddress: "0xA1", kind: "sell", valueWei: 0n, proceedsWei: odd });
+    expect((await store.tokenFlows("acct_1"))[0]!.proceedsWei).toBe(odd);
+  });
+
+  it("starts with no day and no peak, then saves and reads them back, including a negative result", async () => {
+    expect(await store.getRiskState("acct_1")).toEqual({ day: null, dayStartPnlWei: 0n, peakEquityWei: 0n });
+    await store.saveRiskState("acct_1", { day: "2026-10-26", dayStartPnlWei: -WEI(0.2), peakEquityWei: WEI(3) });
+    expect(await store.getRiskState("acct_1")).toEqual({ day: "2026-10-26", dayStartPnlWei: -WEI(0.2), peakEquityWei: WEI(3) });
+    await store.saveRiskState("acct_1", { day: "2026-10-27", dayStartPnlWei: 5n, peakEquityWei: WEI(4) });
+    expect((await store.getRiskState("acct_1")).day).toBe("2026-10-27");
+  });
+
+  it("forgets only the peak when asked", async () => {
+    await store.saveRiskState("acct_1", { day: "2026-10-26", dayStartPnlWei: 7n, peakEquityWei: WEI(3) });
+    await store.resetPeak("acct_1");
+    expect(await store.getRiskState("acct_1")).toEqual({ day: "2026-10-26", dayStartPnlWei: 7n, peakEquityWei: 0n });
   });
 });

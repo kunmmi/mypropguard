@@ -47,6 +47,7 @@ import {
   SafeStateReader,
   SafeSessionExecutor,
   FloatExecutor,
+  FloatValuer,
   type FloatWalletSigner,
 } from "@mypropguard/evm";
 import { OneClickStore } from "./oneClick/oneClickStore.js";
@@ -59,6 +60,7 @@ import type { FloatDeps } from "./routes/float.js";
 import { FloatStore } from "./float/floatStore.js";
 import { FloatRequestHandler } from "./float/floatRequestHandler.js";
 import { loadWalletAccountRules } from "./float/accountRules.js";
+import { FloatRiskGuard } from "./float/floatRiskGuard.js";
 
 // PancakeSwap's own canonical BSC mainnet addresses - public, not secrets, so hardcoded rather
 // than made configurable (one less thing to misconfigure). See PancakeSwapEquityReader's NatSpec
@@ -411,12 +413,27 @@ async function setUpOneClick(): Promise<OneClickDeps | undefined> {
     sendTransaction: (walletId, tx) => privy.sendTransaction(walletId, `eip155:${bsc.id}`, tx),
     personalSign: (walletId, message) => privy.personalSign(walletId, message),
   };
+  const floatValuer = new FloatValuer(publicClient);
+  // What one BNB is worth in dollars, for the loss and size rules (which the owner sets in dollars). Cached for a minute.
+  const bnbPrice = { at: 0, usd: 0 };
+  const usdPerBnb = async (): Promise<number> => {
+    if (Date.now() - bnbPrice.at < 60_000 && bnbPrice.usd > 0) return bnbPrice.usd;
+    const reader = evmEquityReaders?.[bsc.id];
+    if (!reader) throw new Error("no price source for BNB");
+    const usd = (await reader.getTokenValueUsd("0x0000000000000000000000000000000000000000", 10n ** 18n)).toNumber();
+    if (!(usd > 0)) throw new Error("BNB price unavailable");
+    bnbPrice.at = Date.now();
+    bnbPrice.usd = usd;
+    return usd;
+  };
+  const floatRiskGuard = new FloatRiskGuard({ store: floatStore, valuer: floatValuer, usdPerBnb });
   const floatHandler = floatEnabled
     ? new FloatRequestHandler({
         store: floatStore,
         executor: new FloatExecutor({ publicClient, signer: floatSigner }),
         signer: floatSigner,
         accountRules: (accountId) => loadWalletAccountRules(store, accountId),
+        riskGuard: floatRiskGuard,
         log: (message) => console.log(`[float] ${message}`),
       })
     : undefined;
@@ -504,6 +521,7 @@ async function setUpOneClick(): Promise<OneClickDeps | undefined> {
         },
         signer: floatSigner,
         publicClient,
+        valuer: floatValuer,
         chainId: bsc.id,
         nativeSymbol: "BNB",
       }

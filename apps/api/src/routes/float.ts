@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { erc20Abi, formatEther, getAddress, type Address, type PublicClient } from "viem";
-import type { FloatWalletSigner } from "@mypropguard/evm";
+import type { FloatValuer, FloatWalletSigner } from "@mypropguard/evm";
 import { assertAccountOwnership, type AppDeps } from "../app.js";
 import type { FloatStore } from "../float/floatStore.js";
 import { sweepFloat } from "../float/sweep.js";
@@ -15,6 +15,8 @@ export interface FloatDeps {
   createWallet(): Promise<{ id: string; address: string }>;
   signer: Pick<FloatWalletSigner, "sendTransaction">;
   publicClient: PublicClient;
+  /** Prices what the wallet holds (used to record what a withdrawn token was worth). */
+  valuer: Pick<FloatValuer, "quoteSell">;
   chainId: number;
   nativeSymbol: string;
   maxTradesShown?: number;
@@ -218,6 +220,7 @@ export function registerFloatRoutes(app: FastifyInstance, deps: AppDeps): void {
       signer: float.signer,
     });
     for (const item of items) {
+      const proceeds = item.asset !== "BNB" && !item.error ? await float.valuer.quoteSell(item.asset as Address, item.amount).catch(() => null) : null;
       await float.store
         .recordTrade({
           accountId,
@@ -226,6 +229,7 @@ export function registerFloatRoutes(app: FastifyInstance, deps: AppDeps): void {
           toAddress: safe,
           tokenAddress: item.asset === "BNB" ? null : item.asset,
           valueWei: item.asset === "BNB" ? item.amount : null,
+          proceedsWei: proceeds,
           txHash: item.txHash,
           result: item.error ? "ERROR" : "SENT",
           code: null,
@@ -233,6 +237,8 @@ export function registerFloatRoutes(app: FastifyInstance, deps: AppDeps): void {
         })
         .catch(() => undefined);
     }
+    // Money the owner took out is not a loss: forget the wallet's high-water mark so the drawdown rule starts afresh.
+    await float.store.resetPeak(accountId).catch(() => undefined);
     return items.map((i) => ({ asset: i.asset, amount: i.amount.toString(), txHash: i.txHash, error: i.error }));
   }
 

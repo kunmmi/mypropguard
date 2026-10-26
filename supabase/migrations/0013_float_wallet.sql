@@ -35,6 +35,9 @@ create table if not exists evm_float_trades (
   to_address text,
   token_address text,
   value_wei numeric(78, 0),
+  -- For a sale (or a token handed back to the owner): what it returned in BNB, estimated from the market quote taken just
+  -- before it was sent. With what each buy cost, this is how the wallet's trading result is worked out.
+  proceeds_wei numeric(78, 0),
   tx_hash text,
   result text not null check (result in ('SENT', 'REFUSED', 'ERROR')),
   -- A stable reason code for a refusal (MAX_BUY, DAILY_SPEND, ...), and the sentence the trader was shown.
@@ -49,6 +52,19 @@ create table if not exists evm_float_trades (
 create index if not exists evm_float_trades_account_idx on evm_float_trades (account_id, created_at desc);
 create index if not exists evm_float_trades_usage_idx on evm_float_trades (account_id, kind, result, created_at);
 alter table evm_float_trades enable row level security;
+
+-- Where the wallet stood at the start of the UTC day and at its highest, for the loss and drawdown rules.
+create table if not exists evm_float_risk (
+  account_id text primary key references protected_accounts (account_id),
+  -- The UTC day the figure below was taken for.
+  day date,
+  -- The wallet's cumulative trading result (BNB, wei) when that day began. Can be negative.
+  day_start_pnl_wei numeric(78, 0) not null default 0,
+  -- The most the wallet (BNB plus holdings) has ever been worth, in wei of BNB.
+  peak_equity_wei numeric(78, 0) not null default 0,
+  updated_at timestamptz not null default now()
+);
+alter table evm_float_risk enable row level security;
 
 -- A WalletConnect link is either to the account's Safe (one-click trading) or to its trading wallet.
 alter table evm_wc_sessions add column if not exists kind text not null default 'safe' check (kind in ('safe', 'float'));
