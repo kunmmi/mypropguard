@@ -1,0 +1,25 @@
+{
+  "name": "@mypropguard/solana",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@solana/web3.js": "^1.98.4",
+    "bs58": "^6.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.8"
+  }
+}

@@ -91,3 +91,25 @@ describe("PrivyClient existing calls are unchanged", () => {
     for (const c of calls) expect((c.init.headers as Record<string, string>)["privy-idempotency-key"]).toBeUndefined();
   });
 });
+
+describe("PrivyClient Solana wallets", () => {
+  it("creates a Solana wallet and returns its id and address", async () => {
+    const { privy, calls } = client(() => ({ body: { id: "w-sol", address: "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin", chain_type: "solana" } }));
+    expect(await privy.createSolanaWallet()).toEqual({ id: "w-sol", address: "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin", chainType: "solana" });
+    expect(calls[0]!.url).toBe("https://api.privy.io/v1/wallets");
+    expect(calls[0]!.body).toEqual({ chain_type: "solana" });
+  });
+
+  it("signs a message: base64 in, base64 signature out", async () => {
+    const { privy, calls } = client(() => ({ body: { method: "signMessage", data: { signature: "c2ln", encoding: "base64" } } }));
+    expect(await privy.solanaSignMessage("w-sol", "aGVsbG8=")).toBe("c2ln");
+    expect(calls[0]!.url).toBe("https://api.privy.io/v1/wallets/w-sol/rpc");
+    expect(calls[0]!.body).toEqual({ method: "signMessage", params: { message: "aGVsbG8=", encoding: "base64" } });
+  });
+
+  it("throws with Privy's message on an error, and when no signature comes back", async () => {
+    await expect(client(() => ({ status: 403, body: { error: "nope" } })).privy.solanaSignMessage("w", "aA==")).rejects.toThrow(/403/);
+    await expect(client(() => ({ body: { data: {} } })).privy.solanaSignMessage("w", "aA==")).rejects.toThrow(/no signature/);
+    await expect(client(() => ({ status: 500, body: { error: "x" } })).privy.createSolanaWallet()).rejects.toThrow(/500/);
+  });
+});

@@ -62,6 +62,9 @@ import { FloatStore } from "./float/floatStore.js";
 import { FloatRequestHandler } from "./float/floatRequestHandler.js";
 import { loadWalletAccountRules } from "./float/accountRules.js";
 import { FloatRiskGuard } from "./float/floatRiskGuard.js";
+import type { SolanaDeps } from "./routes/solana.js";
+import { SolanaStore } from "./solana/solanaStore.js";
+import { SolanaRequestHandler } from "./solana/solanaRequestHandler.js";
 
 // PancakeSwap's own canonical BSC mainnet addresses - public, not secrets, so hardcoded rather
 // than made configurable (one less thing to misconfigure). See PancakeSwapEquityReader's NatSpec
@@ -438,7 +441,18 @@ async function setUpOneClick(): Promise<OneClickDeps | undefined> {
         log: (message) => console.log(`[float] ${message}`),
       })
     : undefined;
-  const handler = new OneClickRequestHandler({ store: oneClickStore, findAccount, executors: { [bsc.id]: executor }, float: floatHandler });
+  // The Solana wallet (pump.fun and similar): links a site and signs its login; it records transaction requests but signs
+  // none yet. Off unless ENABLE_SOLANA_WALLET=true.
+  const solanaEnabled = process.env.ENABLE_SOLANA_WALLET === "true";
+  const solanaStore = new SolanaStore(pool);
+  const solanaHandler = solanaEnabled
+    ? new SolanaRequestHandler({
+        store: solanaStore,
+        signer: { signMessage: (walletId, messageBase64) => privy.solanaSignMessage(walletId, messageBase64) },
+        log: (message) => console.log(`[solana] ${message}`),
+      })
+    : undefined;
+  const handler = new OneClickRequestHandler({ store: oneClickStore, findAccount, executors: { [bsc.id]: executor }, float: floatHandler, solana: solanaHandler });
   const publicUrl = process.env.PUBLIC_WEB_URL?.trim() || "https://mypropguard.com";
   // Only one copy of the server may own the WalletConnect connection. The host runs the old and the new copy side by
   // side during a deploy, so the new one waits for the old one to let go. This runs in the background: the server
@@ -473,6 +487,12 @@ async function setUpOneClick(): Promise<OneClickDeps | undefined> {
           ? async (accountId) => {
               const wallet = await floatStore.get(accountId);
               return wallet && { address: wallet.address, chainId: wallet.chainId, active: wallet.status === "active" };
+            }
+          : undefined,
+        findSolana: solanaEnabled
+          ? async (accountId) => {
+              const wallet = await solanaStore.get(accountId);
+              return wallet && { address: wallet.address, active: wallet.status === "active" };
             }
           : undefined,
         metadata: { name: "MyPropGuard", description: "Trade with your protected account, with your risk rules enforced.", url: publicUrl, icons: [`${publicUrl}/favicon.ico`] },
@@ -524,6 +544,17 @@ async function setUpOneClick(): Promise<OneClickDeps | undefined> {
       }
     : undefined;
 
+  solanaDeps = solanaEnabled
+    ? {
+        store: solanaStore,
+        service,
+        createWallet: async () => {
+          const wallet = await privy.createSolanaWallet();
+          return { id: wallet.id, address: wallet.address };
+        },
+      }
+    : undefined;
+
   return {
     store: oneClickStore,
     service,
@@ -544,6 +575,7 @@ async function setUpOneClick(): Promise<OneClickDeps | undefined> {
 }
 
 let floatDeps: FloatDeps | undefined;
+let solanaDeps: SolanaDeps | undefined;
 let oneClick: OneClickDeps | undefined;
 if (process.env.ENABLE_ONE_CLICK === "true") {
   try {
@@ -574,6 +606,7 @@ const app = buildApp({
   evmTokenDiscoveries,
   oneClick,
   float: floatDeps,
+  solana: solanaDeps,
 });
 
 // Max-daily-loss freezing is equity-based, not just realized P&L from trades - an account can

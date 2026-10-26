@@ -4,6 +4,7 @@ import { buildApprovedNamespaces, getSdkError } from "@walletconnect/utils";
 import { getAddress } from "viem";
 import type { LinkKind, OneClickStore } from "./oneClickStore.js";
 import { OneClickRequestHandler, SUPPORTED_METHODS } from "./oneClickRequestHandler.js";
+import { SOLANA_MAINNET_CAIP2, SOLANA_WC_METHODS } from "@mypropguard/solana";
 
 export interface WalletConnectServiceOptions {
   projectId: string;
@@ -14,6 +15,8 @@ export interface WalletConnectServiceOptions {
   findAccount(accountId: string): Promise<{ evmSafeAddress?: string | null; evmChainId?: number | null } | undefined | null>;
   /** The account's active trading wallet, if any. Absent = links to a trading wallet are refused. */
   findFloat?(accountId: string): Promise<{ address: string; chainId: number; active: boolean } | undefined | null>;
+  /** The account's active Solana wallet, if any. Absent = links to a Solana wallet are refused. */
+  findSolana?(accountId: string): Promise<{ address: string; active: boolean } | undefined | null>;
   metadata: { name: string; description: string; url: string; icons: string[] };
   log?: (message: string) => void;
 }
@@ -112,7 +115,17 @@ export class WalletConnectService {
     let chain: string;
     let address: string;
     let methods: readonly string[];
-    if (pending.kind === "float") {
+    let events: string[] = ["accountsChanged", "chainChanged"];
+    let namespace: "eip155" | "solana" = "eip155";
+    if (pending.kind === "solana") {
+      const wallet = await this.options.findSolana?.(pending.accountId);
+      if (!wallet || !wallet.active) return reject("the account has no active Solana wallet");
+      chain = SOLANA_MAINNET_CAIP2;
+      address = wallet.address;
+      methods = SOLANA_WC_METHODS;
+      events = [];
+      namespace = "solana";
+    } else if (pending.kind === "float") {
       const wallet = await this.options.findFloat?.(pending.accountId);
       if (!wallet || !wallet.active) return reject("the account has no active trading wallet");
       chain = `eip155:${wallet.chainId}`;
@@ -131,11 +144,11 @@ export class WalletConnectService {
       namespaces = buildApprovedNamespaces({
         proposal: proposal.params,
         supportedNamespaces: {
-          eip155: {
+          [namespace]: {
             chains: [chain],
             methods: [...methods],
-            events: ["accountsChanged", "chainChanged"],
-            accounts: [`${chain}:${getAddress(address)}`],
+            events,
+            accounts: [`${chain}:${namespace === "solana" ? address : getAddress(address)}`],
           },
         },
       });
@@ -153,7 +166,7 @@ export class WalletConnectService {
       dappUrl: meta?.url ?? null,
       expiresAt: new Date(session.expiry * 1000),
     });
-    this.log(`Linked ${meta?.name ?? "a site"} to ${pending.kind === "float" ? "the trading wallet of" : "account"} ${pending.accountId}`);
+    this.log(`Linked ${meta?.name ?? "a site"} to ${pending.kind === "float" ? "the trading wallet of" : pending.kind === "solana" ? "the Solana wallet of" : "account"} ${pending.accountId}`);
   }
 
   private async onRequest(event: any): Promise<void> {

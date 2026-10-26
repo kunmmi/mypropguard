@@ -26,6 +26,8 @@ export interface OneClickHandlerDeps {
   executors: Record<number, TradeExecutor>;
   /** Answers requests on links to a trading ("float") wallet instead of the Safe. Absent = those links are refused. */
   float?: { handle(session: LinkedSession, caipChainId: string, request: { method: string; params?: unknown }): Promise<RpcReply> };
+  /** Answers requests on links to a Solana wallet. Absent = those links are refused. */
+  solana?: { handle(session: LinkedSession, caipChainId: string, request: { method: string; params?: unknown }): Promise<RpcReply> };
 }
 
 const KNOWN_SELECTORS: Record<string, string> = {
@@ -75,6 +77,9 @@ export class OneClickRequestHandler {
   async handle(topic: string, caipChainId: string, request: { method: string; params?: unknown }): Promise<RpcReply> {
     const session = await this.deps.store.getSession(topic);
     if (!session) return fail(4100, "This link to MyPropGuard is no longer active. Link the site again from the MyPropGuard dashboard.");
+    if (session.kind === "solana") {
+      return this.deps.solana ? this.deps.solana.handle(session, caipChainId, request) : fail(4100, "Solana wallets are not set up on this server.");
+    }
     if (session.kind === "float") {
       return this.deps.float ? this.deps.float.handle(session, caipChainId, request) : fail(4100, "Trading wallets are not set up on this server.");
     }

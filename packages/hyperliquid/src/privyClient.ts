@@ -60,6 +60,39 @@ export class PrivyClient {
     return { id: raw.id, address: raw.address, chainType: raw.chain_type };
   }
 
+  /** Creates a Solana wallet. Its key stays at Privy; only the id and public address come back. */
+  async createSolanaWallet(): Promise<PrivyWallet> {
+    const response = await this.fetchImpl(`${this.baseUrl}/v1/wallets`, {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify({ chain_type: "solana" }),
+    });
+    if (!response.ok) {
+      throw new Error(`Privy createSolanaWallet failed: ${response.status} ${await response.text()}`);
+    }
+    const raw = (await response.json()) as { id: string; address: string; chain_type: string };
+    return { id: raw.id, address: raw.address, chainType: raw.chain_type };
+  }
+
+  /**
+   * Signs a message with a Solana wallet. Per Privy's REST docs (docs.privy.io/api-reference/wallets/solana/sign-message)
+   * the message goes in base64 and the signature comes back base64. Callers must have approved the message first
+   * (packages/solana loginMessage.ts).
+   */
+  async solanaSignMessage(walletId: string, messageBase64: string): Promise<string> {
+    const response = await this.fetchImpl(`${this.baseUrl}/v1/wallets/${walletId}/rpc`, {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify({ method: "signMessage", params: { message: messageBase64, encoding: "base64" } }),
+    });
+    if (!response.ok) {
+      throw new Error(`Privy solanaSignMessage failed: ${response.status} ${await response.text()}`);
+    }
+    const raw = (await response.json()) as { data?: { signature?: string } };
+    if (!raw.data?.signature) throw new Error("Privy solanaSignMessage returned no signature");
+    return raw.data.signature;
+  }
+
   /**
    * Signs a text message (EIP-191 personal_sign) with a wallet. Request and response shapes follow Privy's REST docs
    * (docs.privy.io/api-reference/wallets/ethereum/personal-sign): `params.message` + `params.encoding`, answered with
