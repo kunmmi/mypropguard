@@ -113,3 +113,17 @@ describe("PrivyClient Solana wallets", () => {
     await expect(client(() => ({ status: 500, body: { error: "x" } })).privy.createSolanaWallet()).rejects.toThrow(/500/);
   });
 });
+
+describe("PrivyClient.solanaSignTransaction", () => {
+  it("posts signTransaction with the transaction in base64 and returns the signed transaction", async () => {
+    const { privy, calls } = client(() => ({ body: { method: "signTransaction", data: { signed_transaction: "c2lnbmVk", encoding: "base64" } } }));
+    expect(await privy.solanaSignTransaction("w-sol", "dHg=")).toBe("c2lnbmVk");
+    expect(calls[0]!.url).toBe("https://api.privy.io/v1/wallets/w-sol/rpc");
+    expect(calls[0]!.body).toEqual({ method: "signTransaction", params: { transaction: "dHg=", encoding: "base64" } });
+  });
+
+  it("throws with Privy's message on an error, and when nothing comes back", async () => {
+    await expect(client(() => ({ status: 400, body: { error: "bad tx" } })).privy.solanaSignTransaction("w", "dHg=")).rejects.toThrow(/400/);
+    await expect(client(() => ({ body: { data: {} } })).privy.solanaSignTransaction("w", "dHg=")).rejects.toThrow(/no signed transaction/);
+  });
+});

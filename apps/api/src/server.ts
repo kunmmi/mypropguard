@@ -65,6 +65,8 @@ import { FloatRiskGuard } from "./float/floatRiskGuard.js";
 import type { SolanaDeps } from "./routes/solana.js";
 import { SolanaStore } from "./solana/solanaStore.js";
 import { SolanaRequestHandler } from "./solana/solanaRequestHandler.js";
+import { SolanaRiskGuard } from "./solana/solanaRiskGuard.js";
+import { SolanaExecutor, SolanaValuer, Web3Rpc, type SolanaWalletSigner } from "@mypropguard/solana";
 
 // PancakeSwap's own canonical BSC mainnet addresses - public, not secrets, so hardcoded rather
 // than made configurable (one less thing to misconfigure). See PancakeSwapEquityReader's NatSpec
@@ -445,10 +447,28 @@ async function setUpOneClick(): Promise<OneClickDeps | undefined> {
   // none yet. Off unless ENABLE_SOLANA_WALLET=true.
   const solanaEnabled = process.env.ENABLE_SOLANA_WALLET === "true";
   const solanaStore = new SolanaStore(pool);
+  // Signing trades is a second, separate switch: with ENABLE_SOLANA_TRADING off, transactions are read, recorded and refused.
+  const solanaTradingEnabled = solanaEnabled && process.env.ENABLE_SOLANA_TRADING === "true";
+  const solanaRpc = new Web3Rpc(process.env.SOLANA_RPC_URL?.trim() || "https://api.mainnet-beta.solana.com");
+  const solanaValuer = new SolanaValuer(solanaRpc);
+  const solanaSigner: SolanaWalletSigner = { signTransaction: (walletId, transactionBase64) => privy.solanaSignTransaction(walletId, transactionBase64) };
+  // What one SOL is worth in dollars, for the loss and size rules (which the owner sets in dollars). Cached for a minute.
+  const solPrice = { at: 0, usd: 0 };
+  const usdPerSol = async (): Promise<number> => {
+    if (Date.now() - solPrice.at < 60_000 && solPrice.usd > 0) return solPrice.usd;
+    const usd = await solanaValuer.usdPerSol();
+    solPrice.at = Date.now();
+    solPrice.usd = usd;
+    return usd;
+  };
   const solanaHandler = solanaEnabled
     ? new SolanaRequestHandler({
         store: solanaStore,
         signer: { signMessage: (walletId, messageBase64) => privy.solanaSignMessage(walletId, messageBase64) },
+        executor: new SolanaExecutor({ rpc: solanaRpc, signer: solanaSigner }),
+        tradingEnabled: solanaTradingEnabled,
+        accountRules: (accountId) => loadWalletAccountRules(store, accountId),
+        riskGuard: new SolanaRiskGuard({ store: solanaStore, valuer: solanaValuer, usdPerSol }),
         log: (message) => console.log(`[solana] ${message}`),
       })
     : undefined;
@@ -552,6 +572,10 @@ async function setUpOneClick(): Promise<OneClickDeps | undefined> {
           const wallet = await privy.createSolanaWallet();
           return { id: wallet.id, address: wallet.address };
         },
+        rpc: solanaRpc,
+        signer: solanaSigner,
+        valuer: solanaValuer,
+        tradingEnabled: solanaTradingEnabled,
       }
     : undefined;
 
