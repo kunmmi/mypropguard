@@ -89,8 +89,11 @@ export class FloatExecutor {
     tx: FloatTx,
     io: {
       loadUsage(): Promise<FloatUsage>;
-      /** Called inside the lock, after the transaction was accepted by the network and before the next trade is judged. */
-      onSent(decision: Extract<FloatDecision, { ok: true }>, hash: Hash): Promise<void>;
+      /**
+       * Called inside the lock, after the transaction was accepted by the network and before the next trade is judged,
+       * with the timings of every step so far (the total is added by the caller, who knows when the request arrived).
+       */
+      onSent(decision: Extract<FloatDecision, { ok: true }>, hash: Hash, timings: Omit<FloatTimings, "totalMs">): Promise<void>;
     },
   ): Promise<{ hash: Hash; decision: Extract<FloatDecision, { ok: true }>; timings: FloatTimings }> {
     const requestedAt = this.now();
@@ -119,7 +122,7 @@ export class FloatExecutor {
 
       const hash = await this.deps.signer.sendTransaction(wallet.walletId, { to: tx.to, value: tx.value, data: tx.data, gas });
       const t3 = this.now();
-      await io.onSent(decision, hash);
+      await io.onSent(decision, hash, { checkMs: t1 - t0, estimateMs: t2 - t1, sendMs: t3 - t2 });
       return {
         hash,
         decision,

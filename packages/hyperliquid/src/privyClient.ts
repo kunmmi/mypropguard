@@ -36,11 +36,12 @@ export class PrivyClient {
     this.authHeader = `Basic ${Buffer.from(`${options.appId}:${options.appSecret}`).toString("base64")}`;
   }
 
-  private headers(): Record<string, string> {
+  private headers(extra: Record<string, string> = {}): Record<string, string> {
     return {
       Authorization: this.authHeader,
       "privy-app-id": this.options.appId,
       "Content-Type": "application/json",
+      ...extra,
     };
   }
 
@@ -57,6 +58,53 @@ export class PrivyClient {
 
     const raw = (await response.json()) as { id: string; address: string; chain_type: string };
     return { id: raw.id, address: raw.address, chainType: raw.chain_type };
+  }
+
+  /**
+   * Signs a text message (EIP-191 personal_sign) with a wallet. Request and response shapes follow Privy's REST docs
+   * (docs.privy.io/api-reference/wallets/ethereum/personal-sign): `params.message` + `params.encoding`, answered with
+   * `data.signature`. Callers must have approved the message first (packages/evm loginMessage.ts).
+   */
+  async personalSign(walletId: string, message: string): Promise<`0x${string}`> {
+    const response = await this.fetchImpl(`${this.baseUrl}/v1/wallets/${walletId}/rpc`, {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify({ method: "personal_sign", params: { message, encoding: "utf-8" } }),
+    });
+    if (!response.ok) {
+      throw new Error(`Privy personalSign failed: ${response.status} ${await response.text()}`);
+    }
+    const raw = (await response.json()) as { data?: { signature?: `0x${string}` } };
+    if (!raw.data?.signature) throw new Error("Privy personalSign returned no signature");
+    return raw.data.signature;
+  }
+
+  /**
+   * Signs AND broadcasts one transaction from a wallet. Per Privy's REST docs
+   * (docs.privy.io/api-reference/wallets/ethereum/eth-send-transaction) the call is synchronous: success means the
+   * transaction was broadcast, not that it was mined. Privy chooses the nonce and gas price. A fresh idempotency key
+   * goes on every call, and the caller must NOT retry a failed send: an ambiguous failure could already be on-chain.
+   *
+   * `caip2` is the chain, e.g. "eip155:56" for BNB Chain.
+   */
+  async sendTransaction(
+    walletId: string,
+    caip2: string,
+    tx: { to: string; value: bigint; data: `0x${string}`; gas?: bigint },
+  ): Promise<`0x${string}`> {
+    const transaction: Record<string, unknown> = { to: tx.to, value: `0x${tx.value.toString(16)}`, data: tx.data };
+    if (tx.gas !== undefined) transaction.gas_limit = Number(tx.gas);
+    const response = await this.fetchImpl(`${this.baseUrl}/v1/wallets/${walletId}/rpc`, {
+      method: "POST",
+      headers: this.headers({ "privy-idempotency-key": globalThis.crypto.randomUUID() }),
+      body: JSON.stringify({ method: "eth_sendTransaction", caip2, chain_type: "ethereum", params: { transaction } }),
+    });
+    if (!response.ok) {
+      throw new Error(`Privy sendTransaction failed: ${response.status} ${await response.text()}`);
+    }
+    const raw = (await response.json()) as { data?: { hash?: `0x${string}` } };
+    if (!raw.data?.hash) throw new Error("Privy sendTransaction returned no transaction hash");
+    return raw.data.hash;
   }
 
   async signTypedData(walletId: string, typedData: TypedData): Promise<`0x${string}`> {
