@@ -24,6 +24,7 @@ import { registerProtectionRoutes } from "./routes/protection.js";
 import { registerEnforcementRoutes } from "./routes/enforcement.js";
 import { registerOneClickRoutes, type OneClickDeps } from "./routes/oneClick.js";
 import { registerFloatRoutes, type FloatDeps } from "./routes/float.js";
+import { registerSolanaRoutes, type SolanaDeps } from "./routes/solana.js";
 import { registerReconciliationRoutes } from "./routes/reconciliation.js";
 import { registerExecutionRoutes } from "./routes/execution.js";
 import { registerRuleRoutes } from "./routes/rules.js";
@@ -92,6 +93,7 @@ export interface AppDeps {
   /** One-click trading (session key + WalletConnect). Absent when it is not configured: the routes then do not exist. */
   oneClick?: OneClickDeps;
   float?: FloatDeps;
+  solana?: SolanaDeps;
   /**
    * When configured, every route requires a valid Supabase bearer token and
    * populates request.userId - route handlers then use it to derive
@@ -226,6 +228,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   registerEnforcementRoutes(app, deps);
   registerOneClickRoutes(app, deps);
   registerFloatRoutes(app, deps);
+  registerSolanaRoutes(app, deps);
 
   // Route handlers already return typed errors (400/409/501) for expected
   // cases. Anything reaching here is unexpected (e.g. a database driver

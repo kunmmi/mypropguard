@@ -198,6 +198,24 @@ export interface FloatSettingsInput {
   cooldownSec?: number;
 }
 
+export interface SolanaStatus {
+  available: boolean;
+  exists: boolean;
+  address?: string;
+  status?: "active" | "off";
+  links?: Array<{ topic: string; name: string | null; url: string | null; linkedAt: string }>;
+  requests?: Array<{
+    at: string;
+    site: string | null;
+    kind: "login" | "transaction" | "other";
+    method: string;
+    result: "SIGNED" | "REFUSED" | "ERROR";
+    code: string | null;
+    message: string | null;
+    detail: unknown;
+  }>;
+}
+
 export const api = {
   createAccount: (input: CreateAccountInput) =>
     request<{ accountId: string; protectionOn: boolean; agentWalletAddress: string | null; evmSafeAddress?: string | null }>(
@@ -299,6 +317,16 @@ export const api = {
       `/v1/accounts/${encodeURIComponent(accountId)}/one-click/disable`,
       { method: "POST", body: "{}" },
     ),
+  getSolana: (accountId: string) => request<SolanaStatus>(`/v1/accounts/${encodeURIComponent(accountId)}/solana`),
+  createSolana: (accountId: string) =>
+    request<{ ok: boolean; address: string }>(`/v1/accounts/${encodeURIComponent(accountId)}/solana/create`, { method: "POST", body: "{}" }),
+  pairSolana: (accountId: string, uri: string) =>
+    request<{ ok: boolean; message: string }>(`/v1/accounts/${encodeURIComponent(accountId)}/solana/pair`, { method: "POST", body: JSON.stringify({ uri }) }),
+  disconnectSolana: (accountId: string, topic: string) =>
+    request<{ ok: boolean }>(`/v1/accounts/${encodeURIComponent(accountId)}/solana/disconnect`, { method: "POST", body: JSON.stringify({ topic }) }),
+  switchSolana: (accountId: string, on: boolean) =>
+    request<{ ok: boolean }>(`/v1/accounts/${encodeURIComponent(accountId)}/solana/${on ? "on" : "off"}`, { method: "POST", body: "{}" }),
+
   getFloat: (accountId: string) => request<FloatStatus>(`/v1/accounts/${encodeURIComponent(accountId)}/float`),
   createFloat: (accountId: string) =>
     request<{ ok: boolean; address: string }>(`/v1/accounts/${encodeURIComponent(accountId)}/float/create`, { method: "POST", body: "{}" }),

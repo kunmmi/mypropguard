@@ -11,6 +11,7 @@
     { "path": "../../packages/risk-ledger" },
     { "path": "../../packages/hyperliquid" },
     { "path": "../../packages/execution" },
-    { "path": "../../packages/evm" }
+    { "path": "../../packages/evm" },
+    { "path": "../../packages/solana" }
   ]
 }

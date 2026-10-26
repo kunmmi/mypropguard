@@ -12,7 +12,7 @@ export interface OneClickRecord {
 }
 
 /** What a link is to: the account's Safe (one-click trading) or its trading wallet (the "float" wallet). */
-export type LinkKind = "safe" | "float";
+export type LinkKind = "safe" | "float" | "solana";
 
 export interface LinkedSession {
   topic: string;
