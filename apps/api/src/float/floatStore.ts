@@ -1,0 +1,242 @@
+import type pg from "pg";
+import type { Address } from "viem";
+import { DEFAULT_DAILY_SPEND_PCT, DEFAULT_MAX_BUYS_PER_DAY, DEFAULT_MAX_BUY_PCT } from "@mypropguard/evm";
+
+export type FloatStatus = "active" | "off";
+
+export interface FloatWalletRow {
+  accountId: string;
+  walletId: string;
+  address: Address;
+  chainId: number;
+  status: FloatStatus;
+  /** One buy may use at most this share (percent) of the BNB in the wallet. */
+  maxBuyPct: number;
+  /** A day's buys may use at most this share (percent) of the BNB the wallet started the day with. */
+  dailySpendPct: number;
+  maxBuysPerDay: number;
+  cooldownSec: number;
+  frozen: boolean;
+  createdAt: Date;
+}
+
+export type FloatTradeKind = "buy" | "sell" | "approve" | "login" | "sweep" | "other";
+
+export interface FloatTradeRecord {
+  accountId: string;
+  dappName: string | null;
+  kind: FloatTradeKind;
+  toAddress: string | null;
+  tokenAddress: string | null;
+  valueWei: bigint | null;
+  /** For a sale or a token handed back: what it returned in BNB (an estimate from the quote taken just before). */
+  proceedsWei?: bigint | null;
+  txHash: string | null;
+  result: "SENT" | "REFUSED" | "ERROR";
+  code: string | null;
+  message: string | null;
+  timings?: { checkMs: number; estimateMs: number; sendMs: number; totalMs: number };
+}
+
+export interface FloatTradeView {
+  createdAt: Date;
+  dappName: string | null;
+  kind: FloatTradeKind;
+  toAddress: string | null;
+  tokenAddress: string | null;
+  valueWei: string | null;
+  txHash: string | null;
+  result: "SENT" | "REFUSED" | "ERROR";
+  code: string | null;
+  message: string | null;
+  totalMs: number | null;
+}
+
+/** 00:00 UTC of the day containing `nowMs`: the day the daily limits are counted over. */
+export function utcDayStart(nowMs: number): Date {
+  const d = new Date(nowMs);
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+}
+
+/** Everything the trading wallet keeps in Postgres (see supabase/migrations/0013_float_wallet.sql). */
+export class FloatStore {
+  constructor(private readonly pool: pg.Pool) {}
+
+  async get(accountId: string): Promise<FloatWalletRow | undefined> {
+    const { rows } = await this.pool.query("select * from evm_float_wallets where account_id = $1", [accountId]);
+    return rows[0] && this.toWallet(rows[0]);
+  }
+
+  /** The wallet whose address a linked site was given (used to answer eth_accounts). */
+  async create(input: {
+    accountId: string;
+    walletId: string;
+    address: string;
+    chainId: number;
+    maxBuyPct?: number;
+    dailySpendPct?: number;
+    maxBuysPerDay?: number;
+    cooldownSec?: number;
+  }): Promise<void> {
+    await this.pool.query(
+      `insert into evm_float_wallets
+         (account_id, wallet_id, wallet_address, chain_id, max_buy_pct, daily_spend_pct, max_buys_per_day, cooldown_sec)
+       values ($1, $2, $3, $4, $5, $6, $7, $8)
+       on conflict (account_id) do nothing`,
+      [
+        input.accountId,
+        input.walletId,
+        input.address,
+        input.chainId,
+        input.maxBuyPct ?? DEFAULT_MAX_BUY_PCT,
+        input.dailySpendPct ?? DEFAULT_DAILY_SPEND_PCT,
+        input.maxBuysPerDay ?? DEFAULT_MAX_BUYS_PER_DAY,
+        input.cooldownSec ?? 0,
+      ],
+    );
+  }
+
+  /** Changes the owner's limits. Only the fields given change. */
+  async updateSettings(
+    accountId: string,
+    patch: Partial<{ maxBuyPct: number; dailySpendPct: number; maxBuysPerDay: number; cooldownSec: number }>,
+  ): Promise<void> {
+    await this.pool.query(
+      `update evm_float_wallets set
+         max_buy_pct = coalesce($2::integer, max_buy_pct),
+         daily_spend_pct = coalesce($3::integer, daily_spend_pct),
+         max_buys_per_day = coalesce($4::integer, max_buys_per_day),
+         cooldown_sec = coalesce($5::integer, cooldown_sec),
+         updated_at = now()
+       where account_id = $1`,
+      [accountId, patch.maxBuyPct ?? null, patch.dailySpendPct ?? null, patch.maxBuysPerDay ?? null, patch.cooldownSec ?? null],
+    );
+  }
+
+  async setFrozen(accountId: string, frozen: boolean): Promise<void> {
+    await this.pool.query("update evm_float_wallets set frozen = $2, updated_at = now() where account_id = $1", [accountId, frozen]);
+  }
+
+  async setStatus(accountId: string, status: FloatStatus): Promise<void> {
+    await this.pool.query("update evm_float_wallets set status = $2, updated_at = now() where account_id = $1", [accountId, status]);
+  }
+
+  /** The day's buy count, BNB spent and last buy time, from the trade log. Only SENT buys count. */
+  async usageToday(accountId: string, nowMs: number): Promise<{ buysToday: number; spentTodayWei: bigint; lastBuyAtSec: number | null }> {
+    const { rows } = await this.pool.query(
+      `select count(*)::int as buys,
+              coalesce(sum(value_wei), 0)::text as spent,
+              (extract(epoch from max(created_at)))::bigint::text as last_at
+         from evm_float_trades
+        where account_id = $1 and kind = 'buy' and result = 'SENT' and created_at >= $2`,
+      [accountId, utcDayStart(nowMs)],
+    );
+    const r = rows[0] ?? {};
+    return { buysToday: Number(r.buys ?? 0), spentTodayWei: BigInt(String(r.spent ?? "0").split(".")[0] || "0"), lastBuyAtSec: r.last_at ? Number(r.last_at) : null };
+  }
+
+  async recordTrade(t: FloatTradeRecord): Promise<void> {
+    await this.pool.query(
+      `insert into evm_float_trades
+         (account_id, dapp_name, kind, to_address, token_address, value_wei, tx_hash, result, code, message, check_ms, estimate_ms, send_ms, total_ms, proceeds_wei)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
+      [
+        t.accountId,
+        t.dappName,
+        t.kind,
+        t.toAddress,
+        t.tokenAddress,
+        t.valueWei === null ? null : t.valueWei.toString(),
+        t.txHash,
+        t.result,
+        t.code,
+        t.message,
+        t.timings?.checkMs ?? null,
+        t.timings?.estimateMs ?? null,
+        t.timings?.sendMs ?? null,
+        t.timings?.totalMs ?? null,
+        t.proceedsWei === null || t.proceedsWei === undefined ? null : t.proceedsWei.toString(),
+      ],
+    );
+  }
+
+  /**
+   * For every token this wallet has traded: what its buys cost and what its sales (and tokens handed back) returned.
+   * With each token's value now, that gives the wallet's trading result without needing to know about deposits.
+   */
+  async tokenFlows(accountId: string): Promise<Array<{ token: Address; costWei: bigint; proceedsWei: bigint }>> {
+    const { rows } = await this.pool.query(
+      `select token_address,
+              coalesce(sum(case when kind = 'buy' then value_wei end), 0)::text as cost,
+              coalesce(sum(case when kind in ('sell', 'sweep') then proceeds_wei end), 0)::text as proceeds
+         from evm_float_trades
+        where account_id = $1 and token_address is not null and result = 'SENT'
+        group by token_address`,
+      [accountId],
+    );
+    const big = (v: unknown) => BigInt(String(v ?? "0").split(".")[0] || "0");
+    return rows.map((r) => ({ token: r.token_address as Address, costWei: big(r.cost), proceedsWei: big(r.proceeds) }));
+  }
+
+  async getRiskState(accountId: string): Promise<{ day: string | null; dayStartPnlWei: bigint; peakEquityWei: bigint }> {
+    const { rows } = await this.pool.query("select to_char(day, 'YYYY-MM-DD') as day, day_start_pnl_wei::text as p, peak_equity_wei::text as e from evm_float_risk where account_id = $1", [accountId]);
+    const r = rows[0];
+    const big = (v: unknown) => BigInt(String(v ?? "0").split(".")[0] || "0");
+    return r ? { day: r.day ?? null, dayStartPnlWei: big(r.p), peakEquityWei: big(r.e) } : { day: null, dayStartPnlWei: 0n, peakEquityWei: 0n };
+  }
+
+  async saveRiskState(accountId: string, state: { day: string; dayStartPnlWei: bigint; peakEquityWei: bigint }): Promise<void> {
+    await this.pool.query(
+      `insert into evm_float_risk (account_id, day, day_start_pnl_wei, peak_equity_wei) values ($1, $2, $3, $4)
+       on conflict (account_id) do update set day = excluded.day, day_start_pnl_wei = excluded.day_start_pnl_wei, peak_equity_wei = excluded.peak_equity_wei, updated_at = now()`,
+      [accountId, state.day, state.dayStartPnlWei.toString(), state.peakEquityWei.toString()],
+    );
+  }
+
+  /** Forgets the wallet's high-water mark, e.g. after the owner took money out, so a withdrawal is not read as a loss. */
+  async resetPeak(accountId: string): Promise<void> {
+    await this.pool.query("update evm_float_risk set peak_equity_wei = 0, updated_at = now() where account_id = $1", [accountId]);
+  }
+
+  async listTrades(accountId: string, limit: number): Promise<FloatTradeView[]> {
+    const { rows } = await this.pool.query("select * from evm_float_trades where account_id = $1 order by created_at desc, id desc limit $2", [accountId, limit]);
+    return rows.map((r) => ({
+      createdAt: r.created_at,
+      dappName: r.dapp_name,
+      kind: r.kind,
+      toAddress: r.to_address,
+      tokenAddress: r.token_address,
+      valueWei: r.value_wei === null ? null : String(r.value_wei).split(".")[0]!,
+      txHash: r.tx_hash,
+      result: r.result,
+      code: r.code,
+      message: r.message,
+      totalMs: r.total_ms,
+    }));
+  }
+
+  /** Tokens this wallet has bought, sold or approved: the positions worth showing and sweeping. */
+  async knownTokens(accountId: string): Promise<Address[]> {
+    const { rows } = await this.pool.query(
+      "select distinct token_address from evm_float_trades where account_id = $1 and token_address is not null and result = 'SENT'",
+      [accountId],
+    );
+    return rows.map((r) => r.token_address as Address);
+  }
+
+  private toWallet(r: any): FloatWalletRow {
+    return {
+      accountId: r.account_id,
+      walletId: r.wallet_id,
+      address: r.wallet_address,
+      chainId: r.chain_id,
+      status: r.status,
+      maxBuyPct: r.max_buy_pct,
+      dailySpendPct: r.daily_spend_pct,
+      maxBuysPerDay: r.max_buys_per_day,
+      cooldownSec: r.cooldown_sec,
+      frozen: r.frozen,
+      createdAt: r.created_at,
+    };
+  }
+}

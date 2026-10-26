@@ -67,7 +67,7 @@ export function registerOneClickRoutes(app: FastifyInstance, deps: AppDeps): voi
       sessionKeyAddress: record?.sessionWalletAddress ?? null,
       guardIsCurrent: guardOk,
       gasWalletLow: gasBalance !== undefined ? gasBalance < 3_000_000_000_000_000n : false,
-      links: sessions.map((s) => ({ topic: s.topic, name: s.dappName, url: s.dappUrl, linkedAt: s.createdAt.toISOString(), expiresAt: s.expiresAt?.toISOString() ?? null })),
+      links: sessions.filter((s) => s.kind === "safe").map((s) => ({ topic: s.topic, name: s.dappName, url: s.dappUrl, linkedAt: s.createdAt.toISOString(), expiresAt: s.expiresAt?.toISOString() ?? null })),
       trades: trades.map((t) => ({ at: t.createdAt.toISOString(), site: t.dappName, to: t.toAddress, valueWei: t.valueWei, txHash: t.txHash, result: t.result, message: t.message })),
     });
   });
@@ -167,7 +167,7 @@ export function registerOneClickRoutes(app: FastifyInstance, deps: AppDeps): voi
     if (!record) return reply.send({ status: "off" });
 
     await oneClick.store.setStatus(accountId, "revoked");
-    await oneClick.service.disconnectAccount(accountId);
+    await oneClick.service.disconnectAccount(accountId, "safe");
 
     let transaction: Awaited<ReturnType<typeof buildDisableSessionKeyTx>> | null = null;
     try {

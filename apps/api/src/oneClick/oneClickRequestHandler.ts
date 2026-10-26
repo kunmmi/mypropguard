@@ -24,6 +24,8 @@ export interface OneClickHandlerDeps {
   findAccount(accountId: string): Promise<{ evmSafeAddress?: string | null; evmChainId?: number | null } | undefined | null>;
   /** The executor for each chain id the server is set up for. */
   executors: Record<number, TradeExecutor>;
+  /** Answers requests on links to a trading ("float") wallet instead of the Safe. Absent = those links are refused. */
+  float?: { handle(session: LinkedSession, caipChainId: string, request: { method: string; params?: unknown }): Promise<RpcReply> };
 }
 
 const KNOWN_SELECTORS: Record<string, string> = {
@@ -73,6 +75,9 @@ export class OneClickRequestHandler {
   async handle(topic: string, caipChainId: string, request: { method: string; params?: unknown }): Promise<RpcReply> {
     const session = await this.deps.store.getSession(topic);
     if (!session) return fail(4100, "This link to MyPropGuard is no longer active. Link the site again from the MyPropGuard dashboard.");
+    if (session.kind === "float") {
+      return this.deps.float ? this.deps.float.handle(session, caipChainId, request) : fail(4100, "Trading wallets are not set up on this server.");
+    }
 
     const [account, record] = await Promise.all([this.deps.findAccount(session.accountId), this.deps.store.get(session.accountId)]);
     if (!account?.evmSafeAddress || !account.evmChainId) return fail(4100, "This MyPropGuard account has no protected Safe.");

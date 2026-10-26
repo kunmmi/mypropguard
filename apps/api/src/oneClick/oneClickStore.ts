@@ -11,9 +11,13 @@ export interface OneClickRecord {
   enabledAt: Date | null;
 }
 
+/** What a link is to: the account's Safe (one-click trading) or its trading wallet (the "float" wallet). */
+export type LinkKind = "safe" | "float";
+
 export interface LinkedSession {
   topic: string;
   accountId: string;
+  kind: LinkKind;
   dappName: string | null;
   dappUrl: string | null;
   createdAt: Date;
@@ -63,10 +67,10 @@ export class OneClickStore {
     );
   }
 
-  async addSession(session: Omit<LinkedSession, "createdAt">): Promise<void> {
+  async addSession(session: Omit<LinkedSession, "createdAt" | "kind"> & { kind?: LinkKind }): Promise<void> {
     await this.pool.query(
-      "insert into evm_wc_sessions (topic, account_id, dapp_name, dapp_url, expires_at) values ($1, $2, $3, $4, $5) on conflict (topic) do update set expires_at = excluded.expires_at",
-      [session.topic, session.accountId, session.dappName, session.dappUrl, session.expiresAt],
+      "insert into evm_wc_sessions (topic, account_id, dapp_name, dapp_url, expires_at, kind) values ($1, $2, $3, $4, $5, $6) on conflict (topic) do update set expires_at = excluded.expires_at",
+      [session.topic, session.accountId, session.dappName, session.dappUrl, session.expiresAt, session.kind ?? "safe"],
     );
   }
 
@@ -118,6 +122,6 @@ export class OneClickStore {
   }
 
   private toSession(r: any): LinkedSession {
-    return { topic: r.topic, accountId: r.account_id, dappName: r.dapp_name, dappUrl: r.dapp_url, createdAt: r.created_at, expiresAt: r.expires_at };
+    return { topic: r.topic, accountId: r.account_id, kind: r.kind ?? "safe", dappName: r.dapp_name, dappUrl: r.dapp_url, createdAt: r.created_at, expiresAt: r.expires_at };
   }
 }

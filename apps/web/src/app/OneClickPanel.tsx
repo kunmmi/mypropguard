@@ -5,6 +5,7 @@ import { Button } from "@/design-system/components/core/Button";
 import { Panel } from "@/design-system/Panel";
 import { StatusBadge } from "@/design-system/StatusBadge";
 import { api, type OneClickStatus, type OneClickTransaction } from "@/lib/api";
+import { WalletConnectLinkBox } from "./WalletConnectLinkBox";
 
 type Eip1193 = { request(args: { method: string; params?: unknown[] }): Promise<unknown> };
 
@@ -39,7 +40,6 @@ export function OneClickPanel({ accountId, nativeSymbol, exchangeName }: { accou
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [uri, setUri] = useState("");
 
   const refresh = useCallback(async () => {
     try {
@@ -90,13 +90,20 @@ export function OneClickPanel({ accountId, nativeSymbol, exchangeName }: { accou
       throw new Error("The transaction did not confirm in time. Check your wallet, then press Enable again.");
     });
 
-  const link = () =>
-    run("Linking…", async () => {
-      const result = await api.pairOneClick(accountId, uri);
-      setUri("");
+  // Errors go back to the link box, which shows them next to the code the owner pasted.
+  const link = async (code: string) => {
+    setBusy(true);
+    setNote("Linking…");
+    try {
+      const result = await api.pairOneClick(accountId, code);
       setNote(result.message);
       await new Promise((resolve) => setTimeout(resolve, 6000));
-    });
+    } finally {
+      setNote(null);
+      setBusy(false);
+      void refresh();
+    }
+  };
 
   const disable = () =>
     run("Switching off…", async () => {
@@ -154,24 +161,7 @@ export function OneClickPanel({ accountId, nativeSymbol, exchangeName }: { accou
 
       {on && (
         <div style={{ display: "grid", gap: "var(--space-3)" }}>
-          <div>
-            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>Link {exchangeName ?? "an exchange"}</div>
-            <ol style={{ margin: "0 0 var(--space-2)", paddingLeft: 18, fontSize: 13, color: "var(--text-muted)", display: "grid", gap: 2 }}>
-              <li>On {exchangeName ?? "the exchange"}, press Connect wallet and choose WalletConnect.</li>
-              <li>Copy the code it shows (it starts with wc:) and paste it here.</li>
-            </ol>
-            <div style={{ display: "flex", gap: "var(--space-2)" }}>
-              <input
-                value={uri}
-                onChange={(e) => setUri(e.target.value)}
-                placeholder="wc:…"
-                style={{ flex: 1, padding: "var(--space-2)", borderRadius: "var(--radius-md)", border: "1px solid var(--border-default)", fontFamily: "var(--font-accent)", fontSize: 12 }}
-              />
-              <Button onClick={() => void link()} disabled={busy || !uri.trim().startsWith("wc:")}>
-                Link
-              </Button>
-            </div>
-          </div>
+          <WalletConnectLinkBox siteName={exchangeName ?? "the exchange"} busy={busy} onLink={link} />
 
           {state.links.length > 0 && (
             <div style={{ display: "grid", gap: "var(--space-2)" }}>

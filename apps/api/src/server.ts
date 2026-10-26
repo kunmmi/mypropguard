@@ -46,13 +46,21 @@ import {
   SafeTxServiceTokenDiscovery,
   SafeStateReader,
   SafeSessionExecutor,
+  FloatExecutor,
+  FloatValuer,
+  type FloatWalletSigner,
 } from "@mypropguard/evm";
 import { OneClickStore } from "./oneClick/oneClickStore.js";
 import { OneClickRequestHandler } from "./oneClick/oneClickRequestHandler.js";
 import { PgWalletConnectStorage } from "./oneClick/pgWalletConnectStorage.js";
 import { WalletConnectService } from "./oneClick/walletConnectService.js";
-import { PgLeaseStore, WalletConnectLease } from "./oneClick/walletConnectLease.js";
+import { PgLeaseStore, WalletConnectLease, handOver } from "./oneClick/walletConnectLease.js";
 import type { OneClickDeps } from "./routes/oneClick.js";
+import type { FloatDeps } from "./routes/float.js";
+import { FloatStore } from "./float/floatStore.js";
+import { FloatRequestHandler } from "./float/floatRequestHandler.js";
+import { loadWalletAccountRules } from "./float/accountRules.js";
+import { FloatRiskGuard } from "./float/floatRiskGuard.js";
 
 // PancakeSwap's own canonical BSC mainnet addresses - public, not secrets, so hardcoded rather
 // than made configurable (one less thing to misconfigure). See PancakeSwapEquityReader's NatSpec
@@ -397,14 +405,55 @@ async function setUpOneClick(): Promise<OneClickDeps | undefined> {
 
   const oneClickStore = new OneClickStore(pool);
   const findAccount = (accountId: string) => store.findAccountById(accountId);
-  const handler = new OneClickRequestHandler({ store: oneClickStore, findAccount, executors: { [bsc.id]: executor } });
+  // The trading wallet: a plain wallet sites like four.meme can log in to, judged by MyPropGuard's rules before every
+  // signature. Off unless ENABLE_FLOAT_WALLET=true.
+  const floatEnabled = process.env.ENABLE_FLOAT_WALLET === "true";
+  const floatStore = new FloatStore(pool);
+  const floatSigner: FloatWalletSigner = {
+    sendTransaction: (walletId, tx) => privy.sendTransaction(walletId, `eip155:${bsc.id}`, tx),
+    personalSign: (walletId, message) => privy.personalSign(walletId, message),
+  };
+  const floatValuer = new FloatValuer(publicClient);
+  // What one BNB is worth in dollars, for the loss and size rules (which the owner sets in dollars). Cached for a minute.
+  const bnbPrice = { at: 0, usd: 0 };
+  const usdPerBnb = async (): Promise<number> => {
+    if (Date.now() - bnbPrice.at < 60_000 && bnbPrice.usd > 0) return bnbPrice.usd;
+    const reader = evmEquityReaders?.[bsc.id];
+    if (!reader) throw new Error("no price source for BNB");
+    const usd = (await reader.getTokenValueUsd("0x0000000000000000000000000000000000000000", 10n ** 18n)).toNumber();
+    if (!(usd > 0)) throw new Error("BNB price unavailable");
+    bnbPrice.at = Date.now();
+    bnbPrice.usd = usd;
+    return usd;
+  };
+  const floatRiskGuard = new FloatRiskGuard({ store: floatStore, valuer: floatValuer, usdPerBnb });
+  const floatHandler = floatEnabled
+    ? new FloatRequestHandler({
+        store: floatStore,
+        executor: new FloatExecutor({ publicClient, signer: floatSigner }),
+        signer: floatSigner,
+        accountRules: (accountId) => loadWalletAccountRules(store, accountId),
+        riskGuard: floatRiskGuard,
+        log: (message) => console.log(`[float] ${message}`),
+      })
+    : undefined;
+  const handler = new OneClickRequestHandler({ store: oneClickStore, findAccount, executors: { [bsc.id]: executor }, float: floatHandler });
   const publicUrl = process.env.PUBLIC_WEB_URL?.trim() || "https://mypropguard.com";
   // Only one copy of the server may own the WalletConnect connection. The host runs the old and the new copy side by
   // side during a deploy, so the new one waits for the old one to let go. This runs in the background: the server
   // itself must come up at once so the host sees it as healthy and stops the old copy.
   const log = (message: string) => console.log(`[one-click] ${message}`);
-  const lease = new WalletConnectLease(new PgLeaseStore(pool), { log });
   let running: WalletConnectService | undefined;
+  // Set when this copy no longer owns the WalletConnect connection. From then on one-click is off on THIS copy: it must
+  // not answer requests or accept new links while another copy owns the identity.
+  let standingDown = false;
+  const lease = new WalletConnectLease(new PgLeaseStore(pool), {
+    log,
+    onLost: async () => {
+      standingDown = true;
+      await running?.stop();
+    },
+  });
   const ready = (async () => {
     try {
       try {
@@ -419,6 +468,12 @@ async function setUpOneClick(): Promise<OneClickDeps | undefined> {
         store: oneClickStore,
         handler,
         findAccount,
+        findFloat: floatEnabled
+          ? async (accountId) => {
+              const wallet = await floatStore.get(accountId);
+              return wallet && { address: wallet.address, chainId: wallet.chainId, active: wallet.status === "active" };
+            }
+          : undefined,
         metadata: { name: "MyPropGuard", description: "Trade with your protected account, with your risk rules enforced.", url: publicUrl, icons: [`${publicUrl}/favicon.ico`] },
         log,
       });
@@ -427,6 +482,12 @@ async function setUpOneClick(): Promise<OneClickDeps | undefined> {
         starting,
         new Promise<never>((_, reject) => setTimeout(() => reject(new Error("the WalletConnect relay did not answer within 30 seconds")), 30_000)),
       ]);
+      if (standingDown) {
+        // The lease was lost while the service was still starting: close what just came up.
+        await running.stop();
+        running = undefined;
+        return;
+      }
       console.log(`One-click trading on (BSC). Gas is paid by ${gasAccount.address}.`);
     } catch (error) {
       console.error(`[one-click] NOT started, the rest of the server is running without it: ${error instanceof Error ? error.message : error}`);
@@ -434,6 +495,7 @@ async function setUpOneClick(): Promise<OneClickDeps | undefined> {
   })();
   const whenRunning = async (): Promise<WalletConnectService> => {
     await Promise.race([ready, new Promise((resolve) => setTimeout(resolve, 25_000))]);
+    if (standingDown) throw new Error("One-click trading moved to another copy of the server. Try again in a minute.");
     if (!running) throw new Error("One-click trading is still starting up. Try again in a minute.");
     return running;
   };
@@ -442,12 +504,28 @@ async function setUpOneClick(): Promise<OneClickDeps | undefined> {
     disconnect: async (topic) => (await whenRunning()).disconnect(topic),
     disconnectAccount: async (accountId) => (await whenRunning()).disconnectAccount(accountId),
   };
-  // Told to stop (a deploy): let go of the connection and the lease at once so the new copy does not wait.
-  const handOver = () => {
-    void Promise.allSettled([running?.stop(), lease.release()]).finally(() => process.exit(0));
+  // Told to stop (a deploy): close the connection, then let go of the lease, so the new copy neither waits nor overlaps.
+  const onStop = () => {
+    void handOver(() => running?.stop(), lease).finally(() => process.exit(0));
   };
-  process.once("SIGTERM", handOver);
-  process.once("SIGINT", handOver);
+  process.once("SIGTERM", onStop);
+  process.once("SIGINT", onStop);
+
+  floatDeps = floatEnabled
+    ? {
+        store: floatStore,
+        service,
+        createWallet: async () => {
+          const wallet = await privy.createEthereumWallet();
+          return { id: wallet.id, address: wallet.address };
+        },
+        signer: floatSigner,
+        publicClient,
+        valuer: floatValuer,
+        chainId: bsc.id,
+        nativeSymbol: "BNB",
+      }
+    : undefined;
 
   return {
     store: oneClickStore,
@@ -468,6 +546,7 @@ async function setUpOneClick(): Promise<OneClickDeps | undefined> {
   };
 }
 
+let floatDeps: FloatDeps | undefined;
 let oneClick: OneClickDeps | undefined;
 if (process.env.ENABLE_ONE_CLICK === "true") {
   try {
@@ -497,6 +576,7 @@ const app = buildApp({
   evmStateReaders,
   evmTokenDiscoveries,
   oneClick,
+  float: floatDeps,
 });
 
 // Max-daily-loss freezing is equity-based, not just realized P&L from trades - an account can

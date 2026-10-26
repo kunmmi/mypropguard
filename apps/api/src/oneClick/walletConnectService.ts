@@ -2,7 +2,7 @@ import { Core } from "@walletconnect/core";
 import { WalletKit } from "@reown/walletkit";
 import { buildApprovedNamespaces, getSdkError } from "@walletconnect/utils";
 import { getAddress } from "viem";
-import type { OneClickStore } from "./oneClickStore.js";
+import type { LinkKind, OneClickStore } from "./oneClickStore.js";
 import { OneClickRequestHandler, SUPPORTED_METHODS } from "./oneClickRequestHandler.js";
 
 export interface WalletConnectServiceOptions {
@@ -12,9 +12,14 @@ export interface WalletConnectServiceOptions {
   store: OneClickStore;
   handler: OneClickRequestHandler;
   findAccount(accountId: string): Promise<{ evmSafeAddress?: string | null; evmChainId?: number | null } | undefined | null>;
+  /** The account's active trading wallet, if any. Absent = links to a trading wallet are refused. */
+  findFloat?(accountId: string): Promise<{ address: string; chainId: number; active: boolean } | undefined | null>;
   metadata: { name: string; description: string; url: string; icons: string[] };
   log?: (message: string) => void;
 }
+
+/** A trading wallet only ever answers these: no typed data, no raw signing. */
+export const FLOAT_METHODS = ["eth_sendTransaction", "eth_accounts", "eth_requestAccounts", "eth_chainId", "wallet_switchEthereumChain", "personal_sign"] as const;
 
 const PAIRING_WINDOW_MS = 5 * 60_000;
 const EXTEND_EVERY_MS = 12 * 60 * 60_000;
@@ -28,7 +33,7 @@ const EXTEND_EVERY_MS = 12 * 60 * 60_000;
  * here is refused, so nobody else can attach a site to someone's account.
  */
 export class WalletConnectService {
-  private readonly pendingPairs = new Map<string, { accountId: string; at: number }>();
+  private readonly pendingPairs = new Map<string, { accountId: string; at: number; kind: LinkKind }>();
   private readonly log: (message: string) => void;
 
   private constructor(
@@ -49,11 +54,11 @@ export class WalletConnectService {
   }
 
   /** Starts linking an exchange to an account from the exchange's WalletConnect code. */
-  async pair(accountId: string, uri: string): Promise<void> {
+  async pair(accountId: string, uri: string, kind: LinkKind = "safe"): Promise<void> {
     const trimmed = uri.trim();
     const topic = /^wc:([0-9a-f]{64})@2/i.exec(trimmed)?.[1];
     if (!topic) throw new Error("That is not a WalletConnect code. On the exchange, choose WalletConnect, then copy the code (it starts with wc:).");
-    this.pendingPairs.set(topic, { accountId, at: Date.now() });
+    this.pendingPairs.set(topic, { accountId, at: Date.now(), kind });
     try {
       await this.kit.pair({ uri: trimmed });
     } catch (error) {
@@ -81,8 +86,10 @@ export class WalletConnectService {
   }
 
   /** Ends every link of one account (used when one-click trading is switched off). */
-  async disconnectAccount(accountId: string): Promise<void> {
-    for (const session of await this.options.store.listSessions(accountId)) await this.disconnect(session.topic);
+  async disconnectAccount(accountId: string, kind?: LinkKind): Promise<void> {
+    for (const session of await this.options.store.listSessions(accountId)) {
+      if (!kind || session.kind === kind) await this.disconnect(session.topic);
+    }
   }
 
   private listen(): void {
@@ -102,11 +109,23 @@ export class WalletConnectService {
     if (!pending || Date.now() - pending.at > PAIRING_WINDOW_MS) return reject("not started from the dashboard");
     this.pendingPairs.delete(pairingTopic!);
 
-    const [record, account] = await Promise.all([this.options.store.get(pending.accountId), this.options.findAccount(pending.accountId)]);
-    if (!record || record.status !== "enabled") return reject("one-click trading is not enabled for the account");
-    if (!account?.evmSafeAddress || !account.evmChainId) return reject("the account has no Safe");
-
-    const chain = `eip155:${account.evmChainId}`;
+    let chain: string;
+    let address: string;
+    let methods: readonly string[];
+    if (pending.kind === "float") {
+      const wallet = await this.options.findFloat?.(pending.accountId);
+      if (!wallet || !wallet.active) return reject("the account has no active trading wallet");
+      chain = `eip155:${wallet.chainId}`;
+      address = wallet.address;
+      methods = FLOAT_METHODS;
+    } else {
+      const [record, account] = await Promise.all([this.options.store.get(pending.accountId), this.options.findAccount(pending.accountId)]);
+      if (!record || record.status !== "enabled") return reject("one-click trading is not enabled for the account");
+      if (!account?.evmSafeAddress || !account.evmChainId) return reject("the account has no Safe");
+      chain = `eip155:${account.evmChainId}`;
+      address = account.evmSafeAddress;
+      methods = SUPPORTED_METHODS;
+    }
     let namespaces;
     try {
       namespaces = buildApprovedNamespaces({
@@ -114,9 +133,9 @@ export class WalletConnectService {
         supportedNamespaces: {
           eip155: {
             chains: [chain],
-            methods: [...SUPPORTED_METHODS],
+            methods: [...methods],
             events: ["accountsChanged", "chainChanged"],
-            accounts: [`${chain}:${getAddress(account.evmSafeAddress)}`],
+            accounts: [`${chain}:${getAddress(address)}`],
           },
         },
       });
@@ -129,11 +148,12 @@ export class WalletConnectService {
     await this.options.store.addSession({
       topic: session.topic,
       accountId: pending.accountId,
+      kind: pending.kind,
       dappName: meta?.name ?? null,
       dappUrl: meta?.url ?? null,
       expiresAt: new Date(session.expiry * 1000),
     });
-    this.log(`Linked ${meta?.name ?? "a site"} to account ${pending.accountId}`);
+    this.log(`Linked ${meta?.name ?? "a site"} to ${pending.kind === "float" ? "the trading wallet of" : "account"} ${pending.accountId}`);
   }
 
   private async onRequest(event: any): Promise<void> {
