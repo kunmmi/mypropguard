@@ -75,6 +75,25 @@ export class PrivyClient {
   }
 
   /**
+   * Signs a Solana transaction WITHOUT sending it. Per Privy's REST docs (docs.privy.io/api-reference/wallets/solana/sign-transaction)
+   * the transaction goes in base64 and the signed transaction comes back base64. Callers must have approved the
+   * transaction first (packages/solana solanaPolicy.ts), and the caller sends it.
+   */
+  async solanaSignTransaction(walletId: string, transactionBase64: string): Promise<string> {
+    const response = await this.fetchImpl(`${this.baseUrl}/v1/wallets/${walletId}/rpc`, {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify({ method: "signTransaction", params: { transaction: transactionBase64, encoding: "base64" } }),
+    });
+    if (!response.ok) {
+      throw new Error(`Privy solanaSignTransaction failed: ${response.status} ${await response.text()}`);
+    }
+    const raw = (await response.json()) as { data?: { signed_transaction?: string } };
+    if (!raw.data?.signed_transaction) throw new Error("Privy solanaSignTransaction returned no signed transaction");
+    return raw.data.signed_transaction;
+  }
+
+  /**
    * Signs a message with a Solana wallet. Per Privy's REST docs (docs.privy.io/api-reference/wallets/solana/sign-message)
    * the message goes in base64 and the signature comes back base64. Callers must have approved the message first
    * (packages/solana loginMessage.ts).
