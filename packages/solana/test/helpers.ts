@@ -1,5 +1,5 @@
 import { Keypair, PublicKey, TransactionInstruction, TransactionMessage, VersionedTransaction } from "@solana/web3.js";
-import { PUMP_INSTRUCTIONS, PUMP_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, WSOL_MINT, associatedTokenAddress } from "../src/index.js";
+import { PUMP_INSTRUCTIONS, PUMP_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID, WSOL_MINT, associatedTokenAddress } from "../src/index.js";
 
 export const SOL = 1_000_000_000n;
 export const wallet = Keypair.generate();
@@ -24,6 +24,8 @@ export function pumpIx(name: string, over: { user?: PublicKey; tokenProgram?: st
   set(layout.accounts.tokenProgram, new PublicKey(tokenProgram));
   set(layout.accounts.associatedUser, new PublicKey(associatedTokenAddress(user.toBase58(), tokenProgram, theMint.toBase58())));
   if (layout.accounts.quoteMint >= 0) set(layout.accounts.quoteMint, new PublicKey(WSOL_MINT));
+  set(layout.accounts.quoteTokenProgram, new PublicKey(TOKEN_PROGRAM_ID));
+  set(layout.accounts.quoteUser, new PublicKey(associatedTokenAddress(user.toBase58(), TOKEN_PROGRAM_ID, WSOL_MINT)));
   const args = over.u64 ?? (layout.kind === "buy" ? [1_000_000n, SOL / 10n] : [1_000_000n, 0n]);
   const data = Buffer.alloc(8 + 8 * args.length + 2);
   Buffer.from(disc, "hex").copy(data);

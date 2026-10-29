@@ -25,24 +25,35 @@ export interface PumpInstructionLayout {
   kind: "buy" | "sell";
   /** The u64 arguments, in order, after the 8-byte discriminator. */
   u64: readonly string[];
-  /** Index of each account in the instruction's account list; -1 where the instruction has none. */
-  accounts: { user: number; mint: number; bondingCurve: number; associatedUser: number; tokenProgram: number; quoteMint: number };
+  /**
+   * Index of each account in the instruction's account list; -1 where the instruction has none. `market` is the bonding
+   * curve (pump.fun) or the pool (PumpSwap). `quoteUser` is the wallet's own account for the quote asset: where a buy's
+   * SOL comes from and a sale's SOL goes, when that is wrapped SOL.
+   */
+  accounts: { user: number; mint: number; market: number; associatedUser: number; tokenProgram: number; quoteMint: number; quoteUser: number; quoteTokenProgram: number };
 }
 
+const OLD = { quoteMint: -1, quoteUser: -1, quoteTokenProgram: -1 };
+const V2 = { user: 13, mint: 1, market: 10, associatedUser: 14, tokenProgram: 3, quoteMint: 2, quoteUser: 15, quoteTokenProgram: 4 };
+const V3 = { user: 8, mint: 1, market: 5, associatedUser: 9, tokenProgram: 3, quoteMint: 2, quoteUser: 10, quoteTokenProgram: 4 };
+
 export const PUMP_INSTRUCTIONS: Readonly<Record<string, PumpInstructionLayout>> = {
-  "66063d1201daebea": { name: "buy", kind: "buy", u64: ["amount", "max_sol_cost"], accounts: { user: 6, mint: 2, bondingCurve: 3, associatedUser: 5, tokenProgram: 8, quoteMint: -1 } },
-  "38fc74089edfcd5f": { name: "buy_exact_sol_in", kind: "buy", u64: ["spendable_sol_in", "min_tokens_out"], accounts: { user: 6, mint: 2, bondingCurve: 3, associatedUser: 5, tokenProgram: 8, quoteMint: -1 } },
-  b817ee6167c5d33d: { name: "buy_v2", kind: "buy", u64: ["amount", "max_sol_cost"], accounts: { user: 13, mint: 1, bondingCurve: 10, associatedUser: 14, tokenProgram: 3, quoteMint: 2 } },
-  "07051dc4f5176550": { name: "buy_v3", kind: "buy", u64: ["amount", "max_sol_cost"], accounts: { user: 8, mint: 1, bondingCurve: 5, associatedUser: 9, tokenProgram: 3, quoteMint: 2 } },
-  c2ab1c46684d5b2f: { name: "buy_exact_quote_in_v2", kind: "buy", u64: ["spendable_quote_in", "min_tokens_out"], accounts: { user: 13, mint: 1, bondingCurve: 10, associatedUser: 14, tokenProgram: 3, quoteMint: 2 } },
-  e1f7501ed5b38488: { name: "buy_exact_quote_in_v3", kind: "buy", u64: ["spendable_quote_in", "min_tokens_out"], accounts: { user: 8, mint: 1, bondingCurve: 5, associatedUser: 9, tokenProgram: 3, quoteMint: 2 } },
-  "33e685a4017f83ad": { name: "sell", kind: "sell", u64: ["amount", "min_sol_output"], accounts: { user: 6, mint: 2, bondingCurve: 3, associatedUser: 5, tokenProgram: 9, quoteMint: -1 } },
-  "5df6823ce7e940b2": { name: "sell_v2", kind: "sell", u64: ["amount", "min_sol_output"], accounts: { user: 13, mint: 1, bondingCurve: 10, associatedUser: 14, tokenProgram: 3, quoteMint: 2 } },
-  "1c92de7726c469d5": { name: "sell_v3", kind: "sell", u64: ["amount", "min_sol_output"], accounts: { user: 8, mint: 1, bondingCurve: 5, associatedUser: 9, tokenProgram: 3, quoteMint: 2 } },
+  "66063d1201daebea": { name: "buy", kind: "buy", u64: ["amount", "max_sol_cost"], accounts: { user: 6, mint: 2, market: 3, associatedUser: 5, tokenProgram: 8, ...OLD } },
+  "38fc74089edfcd5f": { name: "buy_exact_sol_in", kind: "buy", u64: ["spendable_sol_in", "min_tokens_out"], accounts: { user: 6, mint: 2, market: 3, associatedUser: 5, tokenProgram: 8, ...OLD } },
+  b817ee6167c5d33d: { name: "buy_v2", kind: "buy", u64: ["amount", "max_sol_cost"], accounts: V2 },
+  "07051dc4f5176550": { name: "buy_v3", kind: "buy", u64: ["amount", "max_sol_cost"], accounts: V3 },
+  c2ab1c46684d5b2f: { name: "buy_exact_quote_in_v2", kind: "buy", u64: ["spendable_quote_in", "min_tokens_out"], accounts: V2 },
+  e1f7501ed5b38488: { name: "buy_exact_quote_in_v3", kind: "buy", u64: ["spendable_quote_in", "min_tokens_out"], accounts: V3 },
+  "33e685a4017f83ad": { name: "sell", kind: "sell", u64: ["amount", "min_sol_output"], accounts: { user: 6, mint: 2, market: 3, associatedUser: 5, tokenProgram: 9, ...OLD } },
+  "5df6823ce7e940b2": { name: "sell_v2", kind: "sell", u64: ["amount", "min_sol_output"], accounts: V2 },
+  "1c92de7726c469d5": { name: "sell_v3", kind: "sell", u64: ["amount", "min_sol_output"], accounts: V3 },
 };
 
+export type PumpVenue = "pump.fun" | "PumpSwap";
+
 export interface PumpTrade {
-  /** Which pump.fun instruction it is, e.g. "buy_v2". */
+  venue: PumpVenue;
+  /** Which instruction it is, e.g. "buy_v2". */
   instruction: string;
   kind: "buy" | "sell";
   mint: string;
@@ -51,9 +62,13 @@ export interface PumpTrade {
   /** Where the tokens go (buy) or come from (sell). */
   associatedUser: string;
   tokenProgram: string;
-  bondingCurve: string;
+  /** The bonding curve (pump.fun) or the pool (PumpSwap) the trade is made against. */
+  market: string;
   /** The coin's quote asset, when the instruction names one (undefined on the older instructions). */
   quoteMint?: string;
+  /** The account a buy's quote is paid from and a sale's quote is paid to, when the instruction names one. */
+  quoteUser?: string;
+  quoteTokenProgram?: string;
   /** For a buy: the most SOL (lamports) it may cost, or the SOL it will spend. Zero for a sell. */
   spendLamports: bigint;
   /** For a buy: the tokens it asks for or at least expects. For a sell: the tokens it gives up. */
@@ -67,7 +82,16 @@ const u64At = (data: Buffer, offset: number): bigint => data.readBigUInt64LE(off
 /** Reads a pump.fun buy or sell. Returns undefined for any other pump.fun instruction, and throws if it is malformed. */
 export function decodePumpTrade(ix: InspectedInstruction): PumpTrade | undefined {
   if (ix.programId !== PUMP_PROGRAM_ID) return undefined;
-  const layout = PUMP_INSTRUCTIONS[ix.discriminator];
+  return decodeTrade(ix, PUMP_INSTRUCTIONS, "pump.fun");
+}
+
+/**
+ * Reads a trade from one of pump.fun's programs with its layout table. The two programs name their arguments differently
+ * (pump.fun: `max_sol_cost`, `min_sol_output`; PumpSwap: `max_quote_amount_in`, `min_quote_amount_out`), so each amount is
+ * looked up under every name it goes by.
+ */
+export function decodeTrade(ix: InspectedInstruction, table: Readonly<Record<string, PumpInstructionLayout>>, venue: PumpVenue): PumpTrade | undefined {
+  const layout = table[ix.discriminator];
   if (!layout) return undefined;
   const data = Buffer.from(ix.dataHex, "hex");
   if (data.length < 8 + 8 * layout.u64.length) throw new Error(`The ${layout.name} instruction is too short.`);
@@ -81,17 +105,20 @@ export function decodePumpTrade(ix: InspectedInstruction): PumpTrade | undefined
   const a = layout.accounts;
   const isBuy = layout.kind === "buy";
   return {
+    venue,
     instruction: layout.name,
     kind: layout.kind,
     mint: at(a.mint),
     user: at(a.user),
     associatedUser: at(a.associatedUser),
     tokenProgram: at(a.tokenProgram),
-    bondingCurve: at(a.bondingCurve),
+    market: at(a.market),
     quoteMint: a.quoteMint >= 0 ? at(a.quoteMint) : undefined,
-    spendLamports: isBuy ? (args.max_sol_cost ?? args.spendable_quote_in ?? args.spendable_sol_in ?? 0n) : 0n,
-    tokenAmount: isBuy ? (args.amount ?? args.min_tokens_out ?? 0n) : (args.amount ?? 0n),
-    minSolOut: isBuy ? 0n : (args.min_sol_output ?? 0n),
+    quoteUser: a.quoteUser >= 0 ? at(a.quoteUser) : undefined,
+    quoteTokenProgram: a.quoteTokenProgram >= 0 ? at(a.quoteTokenProgram) : undefined,
+    spendLamports: isBuy ? (args.max_sol_cost ?? args.max_quote_amount_in ?? args.spendable_quote_in ?? args.spendable_sol_in ?? 0n) : 0n,
+    tokenAmount: isBuy ? (args.amount ?? args.base_amount_out ?? args.min_tokens_out ?? args.min_base_amount_out ?? 0n) : (args.amount ?? args.base_amount_in ?? 0n),
+    minSolOut: isBuy ? 0n : (args.min_sol_output ?? args.min_quote_amount_out ?? 0n),
   };
 }
 

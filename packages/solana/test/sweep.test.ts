@@ -1,6 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { Keypair } from "@solana/web3.js";
-import { BASE_FEE_LAMPORTS, TOKEN_2022_PROGRAM_ID, associatedTokenAddress, buildSolTransfer, buildTokenTransfer, inspectTransaction, sweepSolanaWallet } from "../src/index.js";
+import {
+  BASE_FEE_LAMPORTS,
+  TOKEN_2022_PROGRAM_ID,
+  TOKEN_PROGRAM_ID,
+  WSOL_MINT,
+  associatedTokenAddress,
+  buildSolTransfer,
+  buildTokenTransfer,
+  buildUnwrapSol,
+  inspectTransaction,
+  sweepSolanaWallet,
+} from "../src/index.js";
 import { BLOCKHASH, SOL, W } from "./helpers.js";
 
 const OWNER = Keypair.generate().publicKey.toBase58(); // the owner's withdrawal address
@@ -36,10 +47,22 @@ describe("building the withdrawal transactions", () => {
   });
 });
 
-function rig(over: { sol?: bigint; fail?: string[] } = {}) {
+describe("unwrapping SOL left by a PumpSwap trade", () => {
+  it("closes the wallet's own wrapped-SOL account into the wallet, and touches nothing else", () => {
+    const t = inspectTransaction(buildUnwrapSol(W, BLOCKHASH));
+    expect(t.requiredSigners).toEqual([W]);
+    expect(t.instructions).toHaveLength(1);
+    expect(t.instructions[0]!.programName).toBe("Token");
+    expect(t.instructions[0]!.dataHex).toBe("09");
+    // CloseAccount: [account, destination, owner]
+    expect(t.instructions[0]!.accounts.map((a) => a.pubkey)).toEqual([associatedTokenAddress(W, TOKEN_PROGRAM_ID, WSOL_MINT), W, W]);
+  });
+});
+
+function rig(over: { sol?: bigint; fail?: string[]; wrapped?: bigint; unwrapFails?: boolean } = {}) {
   const sent: string[] = [];
   const signed: string[] = [];
-  const balances: Record<string, bigint> = { [MINT_A]: 500n, [MINT_B]: 9n, [MINT_DEAD]: 70n };
+  const balances: Record<string, bigint> = { [MINT_A]: 500n, [MINT_B]: 9n, [MINT_DEAD]: 70n, [WSOL_MINT]: over.wrapped ?? 0n };
   const mintData = Buffer.alloc(82);
   mintData[44] = 6;
   const rpc = {
@@ -57,6 +80,7 @@ function rig(over: { sol?: bigint; fail?: string[] } = {}) {
   const signer = {
     signTransaction: async (_id: string, tx: string) => {
       const t = inspectTransaction(tx);
+      if (over.unwrapFails && t.instructions[0]?.dataHex === "09") throw new Error("privy down");
       if (over.fail?.some((m) => t.instructions.some((i) => i.accounts.some((a) => a.pubkey === associatedTokenAddress(OWNER, TOKEN_2022_PROGRAM_ID, m))))) throw new Error("privy down\nmore");
       signed.push(tx);
       return tx;
@@ -89,6 +113,22 @@ describe("withdrawing everything to the owner's address", () => {
     const { run } = rig({ sol: 4_000n });
     const items = await run();
     expect(items.find((i) => i.asset === "SOL")).toBeUndefined();
+  });
+
+  it("unwraps SOL left wrapped by a PumpSwap trade before sending the SOL, so it goes out too", async () => {
+    const { run, sent } = rig({ wrapped: SOL / 4n });
+    const items = await run();
+    expect(sent).toHaveLength(4);
+    expect(inspectTransaction(sent[2]!).instructions[0]!.dataHex).toBe("09");
+    expect(inspectTransaction(sent[3]!).instructions[0]!.programName).toBe("System");
+    expect(items.map((i) => i.asset)).toEqual([MINT_A, MINT_B, MINT_DEAD, "SOL"]);
+  });
+
+  it("still sends the SOL when unwrapping fails, and says so", async () => {
+    const { run } = rig({ wrapped: SOL / 4n, unwrapFails: true });
+    const items = await run();
+    expect(items.find((i) => i.asset === WSOL_MINT)).toMatchObject({ signature: null, error: expect.stringMatching(/could not unwrap.*privy down/) });
+    expect(items.at(-1)).toMatchObject({ asset: "SOL", error: null });
   });
 
   it("one coin failing does not stop the rest, and says which", async () => {

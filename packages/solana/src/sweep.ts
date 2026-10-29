@@ -1,5 +1,5 @@
 import { PublicKey, SystemProgram, TransactionInstruction, TransactionMessage, VersionedTransaction } from "@solana/web3.js";
-import { ASSOCIATED_TOKEN_PROGRAM_ID, SYSTEM_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID, associatedTokenAddress } from "./pumpfun.js";
+import { ASSOCIATED_TOKEN_PROGRAM_ID, SYSTEM_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID, WSOL_MINT, associatedTokenAddress } from "./pumpfun.js";
 import type { SolanaRpc } from "./rpc.js";
 import type { SolanaWalletSigner } from "./solanaExecutor.js";
 import type { SolanaValuer } from "./solanaValuer.js";
@@ -70,7 +70,22 @@ export function buildTokenTransfer(input: { wallet: string; to: string; mint: st
   return b64(compile(wallet, input.blockhash, [createDestination, transfer]));
 }
 
-type SweepRpc = Pick<SolanaRpc, "getBalance" | "getTokenBalance" | "getAccountData" | "getAccountOwner" | "getLatestBlockhash" | "sendRaw" | "confirm">;
+/** Closes the wallet's wrapped-SOL account, which unwraps everything in it back into the wallet as SOL. Unsigned, base64. */
+export function buildUnwrapSol(wallet: string, blockhash: string): string {
+  const owner = new PublicKey(wallet);
+  const close = new TransactionInstruction({
+    programId: new PublicKey(TOKEN_PROGRAM_ID),
+    keys: [
+      { pubkey: new PublicKey(associatedTokenAddress(wallet, TOKEN_PROGRAM_ID, WSOL_MINT)), isSigner: false, isWritable: true },
+      { pubkey: owner, isSigner: false, isWritable: true },
+      { pubkey: owner, isSigner: true, isWritable: false },
+    ],
+    data: Buffer.from([9]), // CloseAccount
+  });
+  return b64(compile(owner, blockhash, [close]));
+}
+
+type SweepRpc =Pick<SolanaRpc, "getBalance" | "getTokenBalance" | "getAccountData" | "getAccountOwner" | "getLatestBlockhash" | "sendRaw" | "confirm">;
 
 /**
  * Moves everything the wallet holds to `to`: each coin that has a market value, then the SOL that is left after the network
@@ -112,6 +127,17 @@ export async function sweepSolanaWallet(input: {
     } catch (error) {
       out.push({ asset: mint, amount, proceedsLamports: null, signature: null, error: reason(error) });
     }
+  }
+
+  // SOL left wrapped by a PumpSwap trade: unwrap it first so it goes out with the rest of the SOL.
+  try {
+    const wrapped = await rpc.getTokenBalance(input.wallet, WSOL_MINT);
+    if (wrapped > 0n) {
+      const unsigned = buildUnwrapSol(input.wallet, await rpc.getLatestBlockhash());
+      await rpc.confirm(await rpc.sendRaw(await signer.signTransaction(input.walletId, unsigned)));
+    }
+  } catch (error) {
+    out.push({ asset: WSOL_MINT, amount: 0n, proceedsLamports: null, signature: null, error: `could not unwrap the wrapped SOL: ${reason(error)}` });
   }
 
   try {
