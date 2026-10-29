@@ -255,15 +255,42 @@ export function SolanaPanel({ accountId }: { accountId: string }) {
             <input value={address} onChange={(e) => setAddress(e.target.value)} placeholder="Your own Solana wallet address" style={{ ...input, flex: 1, width: "auto" }} />
             <Button
               variant="subtle"
-              disabled={busy || !address.trim() || address.trim() === state.withdrawalAddress}
-              onClick={() => void run("Saving…", async () => void (await api.setSolanaWithdrawalAddress(accountId, address.trim())))}
+              disabled={busy || !address.trim() || address.trim() === state.withdrawalAddress || address.trim() === state.pendingWithdrawalAddress}
+              onClick={() => void run("Saving…", async () => (await api.setSolanaWithdrawalAddress(accountId, address.trim())).message)}
             >
               Save address
             </Button>
           </div>
           <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "var(--space-2) 0 0" }}>
             Withdrawals only ever go to this address. Use a wallet you control, and check it twice.
+            {state.withdrawalAddress && " For your safety, a new address takes effect 24 hours after you save it."}
           </p>
+          {state.pendingWithdrawalAddress && state.pendingWithdrawalAt && (
+            <div style={{ ...row, flexDirection: "column", gap: 4, marginTop: "var(--space-2)", borderColor: "var(--border-accent)" }}>
+              <strong>Address change waiting</strong>
+              <span>
+                From {new Date(state.pendingWithdrawalAt).toLocaleString()}, withdrawals will go to{" "}
+                <span style={{ fontFamily: "var(--font-accent)" }}>{shortKey(state.pendingWithdrawalAddress)}</span>. Until then they still go to{" "}
+                <span style={{ fontFamily: "var(--font-accent)" }}>{state.withdrawalAddress ? shortKey(state.withdrawalAddress) : "your current address"}</span>.
+              </span>
+              <span style={{ color: "var(--text-muted)" }}>Did not ask for this? Cancel it now and change your MyPropGuard password.</span>
+              <div>
+                <Button
+                  variant="subtle"
+                  disabled={busy || !state.withdrawalAddress}
+                  onClick={() =>
+                    void run("Cancelling…", async () => {
+                      const result = await api.setSolanaWithdrawalAddress(accountId, state.withdrawalAddress!);
+                      setAddress(state.withdrawalAddress!);
+                      return result.message;
+                    })
+                  }
+                >
+                  Cancel the change
+                </Button>
+              </div>
+            </div>
+          )}
         </div>
 
         {on && (

@@ -10,6 +10,7 @@ import type { LinkedSession } from "../src/oneClick/oneClickStore.js";
 
 const ADDRESS = Keypair.generate().publicKey.toBase58();
 const OWNER = Keypair.generate().publicKey.toBase58();
+const OTHER = Keypair.generate().publicKey.toBase58(); // a different address someone asks to switch withdrawals to
 const MINT = Keypair.generate().publicKey.toBase58();
 const SOL = 1_000_000_000n;
 
@@ -30,11 +31,19 @@ function rig(opts: { withNetwork?: boolean } = {}) {
   const store: any = {
     get: async (id: string) => rows.get(id),
     create: async (i: any) =>
-      void rows.set(i.accountId, { accountId: i.accountId, walletId: i.walletId, address: i.address, status: "active", maxBuyPct: 25, dailySpendPct: 50, maxBuysPerDay: 10, cooldownSec: 0, frozen: false, withdrawalAddress: null, createdAt: new Date() }),
+      void rows.set(i.accountId, { accountId: i.accountId, walletId: i.walletId, address: i.address, status: "active", maxBuyPct: 25, dailySpendPct: 50, maxBuysPerDay: 10, cooldownSec: 0, frozen: false, withdrawalAddress: null, pendingWithdrawalAddress: null, pendingWithdrawalAt: null, createdAt: new Date() }),
     setStatus: async (id: string, status: "active" | "off") => void (rows.get(id)!.status = status),
     setFrozen: async (id: string, frozen: boolean) => void (rows.get(id)!.frozen = frozen),
     updateSettings: async (id: string, p: any) => void rows.set(id, { ...rows.get(id)!, ...p }),
-    setWithdrawalAddress: async (id: string, a: string) => void (rows.get(id)!.withdrawalAddress = a),
+    // As the real store does (tested on Postgres in solanaStore.pglite.test.ts): the first address applies at once, a
+    // different one waits 24 hours, and the current one again cancels the wait.
+    setWithdrawalAddress: async (id: string, a: string) => {
+      const r = rows.get(id)!;
+      const now = !r.withdrawalAddress || r.withdrawalAddress === a;
+      r.withdrawalAddress = r.withdrawalAddress ?? a;
+      r.pendingWithdrawalAddress = now ? null : a;
+      r.pendingWithdrawalAt = now ? null : new Date(Date.now() + 24 * 3600_000);
+    },
     knownMints: async () => [MINT],
     resetPeak: async () => void peakReset++,
     recordRequest: async (r: SolanaRequestRecord) => void requests.push(r),
@@ -193,6 +202,39 @@ describe("withdrawing", () => {
       expect((await post("a1", "withdrawal-address", { address })).statusCode, String(address)).toBe(400);
     }
     expect(rows.get("a1")!.withdrawalAddress).toBe(OWNER);
+  });
+
+  it("applies the first address at once", async () => {
+    const { mk, post, get } = rig();
+    await mk("a1");
+    await post("a1", "create");
+    const r = (await post("a1", "withdrawal-address", { address: OWNER })).json();
+    expect(r).toMatchObject({ ok: true, withdrawalAddress: OWNER, pendingWithdrawalAddress: null, pendingWithdrawalAt: null, message: expect.stringMatching(/Withdrawals go to this address/) });
+    expect((await get("a1")).json()).toMatchObject({ withdrawalAddress: OWNER, pendingWithdrawalAddress: null });
+  });
+
+  it("makes a changed address wait 24 hours, shows it, and keeps withdrawing to the current one meanwhile", async () => {
+    const { mk, post, get } = rig();
+    await mk("a1");
+    await post("a1", "create");
+    await post("a1", "withdrawal-address", { address: OWNER });
+    const r = (await post("a1", "withdrawal-address", { address: OTHER })).json();
+    expect(r).toMatchObject({ ok: true, withdrawalAddress: OWNER, pendingWithdrawalAddress: OTHER, message: expect.stringMatching(/after 24 hours/) });
+    expect(new Date(r.pendingWithdrawalAt).getTime() - Date.now()).toBeGreaterThan(23 * 3600_000);
+    expect((await get("a1")).json()).toMatchObject({ withdrawalAddress: OWNER, pendingWithdrawalAddress: OTHER, pendingWithdrawalAt: r.pendingWithdrawalAt });
+    // Someone who got into the login cannot empty the wallet to their own address: it still goes to the owner's.
+    expect((await post("a1", "withdraw")).json().to).toBe(OWNER);
+  });
+
+  it("cancels a waiting change when the current address is saved again", async () => {
+    const { mk, post, get } = rig();
+    await mk("a1");
+    await post("a1", "create");
+    await post("a1", "withdrawal-address", { address: OWNER });
+    await post("a1", "withdrawal-address", { address: OTHER });
+    const r = (await post("a1", "withdrawal-address", { address: OWNER })).json();
+    expect(r).toMatchObject({ withdrawalAddress: OWNER, pendingWithdrawalAddress: null, message: expect.stringMatching(/cancelled/) });
+    expect((await get("a1")).json()).toMatchObject({ withdrawalAddress: OWNER, pendingWithdrawalAddress: null, pendingWithdrawalAt: null });
   });
 
   it("will not withdraw before an address is set", async () => {

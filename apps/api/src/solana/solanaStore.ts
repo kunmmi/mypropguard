@@ -14,10 +14,16 @@ export interface SolanaWalletRow {
   maxBuysPerDay: number;
   cooldownSec: number;
   frozen: boolean;
-  /** The one address withdrawals go to, or null until the owner sets it. */
+  /** The one address withdrawals go to now, or null until the owner sets it. */
   withdrawalAddress: string | null;
+  /** A change the owner asked for that has not taken effect yet, and when it will. Both null when none is waiting. */
+  pendingWithdrawalAddress: string | null;
+  pendingWithdrawalAt: Date | null;
   createdAt: Date;
 }
+
+/** How long a changed withdrawal address waits before withdrawals go to it. */
+export const WITHDRAWAL_ADDRESS_DELAY_SEC = 24 * 60 * 60;
 
 export const DEFAULT_SOLANA_MAX_BUY_PCT = 25;
 export const DEFAULT_SOLANA_DAILY_SPEND_PCT = 50;
@@ -69,12 +75,25 @@ export function solanaDayStart(nowMs: number): Date {
 
 const big = (v: unknown): bigint => BigInt(String(v ?? "0").split(".")[0] || "0");
 
-/** Everything the Solana wallet keeps in Postgres (see supabase/migrations/0014 and 0015). */
+/**
+ * The withdrawal address as it stands right now, by the database's clock: a waiting change counts once its time has come,
+ * whether or not anything has written it back yet.
+ */
+const CURRENT_WITHDRAWAL_ADDRESS = "case when pending_withdrawal_at <= now() then pending_withdrawal_address else withdrawal_address end";
+
+/** Everything the Solana wallet keeps in Postgres (see supabase/migrations/0014 to 0016). */
 export class SolanaStore {
   constructor(private readonly pool: pg.Pool) {}
 
   async get(accountId: string): Promise<SolanaWalletRow | undefined> {
-    const { rows } = await this.pool.query("select * from sol_wallets where account_id = $1", [accountId]);
+    const { rows } = await this.pool.query(
+      `select *,
+         ${CURRENT_WITHDRAWAL_ADDRESS} as current_withdrawal_address,
+         case when pending_withdrawal_at > now() then pending_withdrawal_address end as waiting_withdrawal_address,
+         case when pending_withdrawal_at > now() then pending_withdrawal_at end as waiting_withdrawal_at
+       from sol_wallets where account_id = $1`,
+      [accountId],
+    );
     return rows[0] && this.toWallet(rows[0]);
   }
 
@@ -107,8 +126,22 @@ export class SolanaStore {
     );
   }
 
-  async setWithdrawalAddress(accountId: string, address: string): Promise<void> {
-    await this.pool.query("update sol_wallets set withdrawal_address = $2, updated_at = now() where account_id = $1", [accountId, address]);
+  /**
+   * Sets where withdrawals go. The first address applies at once. After that a different address waits `delaySec` (24
+   * hours) while withdrawals keep going to the current one; asking for another address restarts the wait, so it can never
+   * be shortened. Asking for the current address again cancels a waiting change.
+   */
+  async setWithdrawalAddress(accountId: string, address: string, delaySec = WITHDRAWAL_ADDRESS_DELAY_SEC): Promise<void> {
+    await this.pool.query(
+      `update sol_wallets w set
+         withdrawal_address = coalesce(c.current, $2),
+         pending_withdrawal_address = case when c.current is null or c.current = $2 then null else $2 end,
+         pending_withdrawal_at = case when c.current is null or c.current = $2 then null else now() + $3::integer * interval '1 second' end,
+         updated_at = now()
+       from (select account_id, ${CURRENT_WITHDRAWAL_ADDRESS} as current from sol_wallets where account_id = $1) c
+       where w.account_id = c.account_id`,
+      [accountId, address, delaySec],
+    );
   }
 
   async recordRequest(r: SolanaRequestRecord): Promise<void> {
@@ -221,7 +254,9 @@ export class SolanaStore {
       maxBuysPerDay: r.max_buys_per_day,
       cooldownSec: r.cooldown_sec,
       frozen: r.frozen,
-      withdrawalAddress: r.withdrawal_address ?? null,
+      withdrawalAddress: r.current_withdrawal_address ?? null,
+      pendingWithdrawalAddress: r.waiting_withdrawal_address ?? null,
+      pendingWithdrawalAt: r.waiting_withdrawal_at ?? null,
       createdAt: r.created_at,
     };
   }

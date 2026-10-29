@@ -57,6 +57,12 @@ export function registerSolanaRoutes(app: FastifyInstance, deps: AppDeps): void 
     frozen: w.frozen,
   });
 
+  /** A withdrawal-address change that is waiting, for the owner to see (and to cancel if they did not ask for it). */
+  const pendingOf = (w: NonNullable<Awaited<ReturnType<SolanaStore["get"]>>>) => ({
+    pendingWithdrawalAddress: w.pendingWithdrawalAddress,
+    pendingWithdrawalAt: w.pendingWithdrawalAt ? new Date(w.pendingWithdrawalAt).toISOString() : null,
+  });
+
   app.get("/v1/accounts/:accountId/solana", async (request, reply) => {
     const { accountId } = request.params as { accountId: string };
     if (!(await assertAccountOwnership(deps, request, reply, accountId))) return;
@@ -92,6 +98,7 @@ export function registerSolanaRoutes(app: FastifyInstance, deps: AppDeps): void 
       limits: limitsOf(wallet),
       accountRules,
       withdrawalAddress: wallet.withdrawalAddress,
+      ...pendingOf(wallet),
       balanceLamports,
       holdings,
       links: sessions.filter((s) => s.kind === "solana").map((s) => ({ topic: s.topic, name: s.dappName, url: s.dappUrl, linkedAt: s.createdAt.toISOString() })),
@@ -172,8 +179,18 @@ export function registerSolanaRoutes(app: FastifyInstance, deps: AppDeps): void 
       return reply.status(400).send(bad("That is not a valid Solana address."));
     }
     if (valid.toBase58() === wallet.address) return reply.status(400).send(bad("That is this wallet's own address. Enter your own wallet's address."));
+    // A new address waits 24 hours (the store decides), so a stolen login cannot redirect withdrawals and empty the
+    // wallet at once. The owner sees the waiting change on the page and can cancel it by saving the current address.
+    const wasWaiting = wallet.pendingWithdrawalAddress !== null;
     await solana.store.setWithdrawalAddress(accountId, valid.toBase58());
-    return reply.send({ ok: true, withdrawalAddress: valid.toBase58() });
+    const updated = (await solana.store.get(accountId))!;
+    const pending = pendingOf(updated);
+    const message = pending.pendingWithdrawalAddress
+      ? "Saved. For your safety a new address takes effect after 24 hours. Until then withdrawals still go to your current address."
+      : wasWaiting && updated.withdrawalAddress === valid.toBase58()
+        ? "The change was cancelled. Withdrawals keep going to your current address."
+        : "Saved. Withdrawals go to this address.";
+    return reply.send({ ok: true, withdrawalAddress: updated.withdrawalAddress, ...pending, message });
   });
 
   async function withdraw(accountId: string) {
