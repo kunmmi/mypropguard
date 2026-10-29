@@ -86,6 +86,14 @@ describe("signing a login", () => {
     expect(checkSolanaLoginMessage(text("hi"), { url: "https://www.pump.fun/board" }).ok).toBe(true);
   });
 
+  it("signs for letsbonk.fun and Raydium (LaunchLab's sites), including their www hosts", () => {
+    for (const url of ["https://letsbonk.fun/", "https://www.letsbonk.fun/token/x", "https://raydium.io/launchpad/", "https://www.raydium.io/"]) {
+      expect(checkSolanaLoginMessage(text("Sign in"), { url }).ok).toBe(true);
+    }
+    expect(checkSolanaLoginMessage(text("Sign in"), { url: "https://letsbonk.fun.evil.example" }).ok).toBe(false);
+    expect(checkSolanaLoginMessage(text("Sign in"), { url: "https://raydium.io.evil.example" }).ok).toBe(false);
+  });
+
   it("does not sign for any other site, and says which", () => {
     const r = checkSolanaLoginMessage(text("Sign in"), { url: "https://evil.example" });
     expect(r).toMatchObject({ ok: false, preview: "Sign in" });

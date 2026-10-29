@@ -26,6 +26,11 @@ export interface PumpInstructionLayout {
   /** The u64 arguments, in order, after the 8-byte discriminator. */
   u64: readonly string[];
   /**
+   * Which argument is which amount, for programs whose names do not say (LaunchLab's `amount_in` is SOL on a buy but the
+   * coin on a sell). Without it the amounts are found by name.
+   */
+  amounts?: { spend?: string; tokens: string; minSolOut?: string };
+  /**
    * Index of each account in the instruction's account list; -1 where the instruction has none. `market` is the bonding
    * curve (pump.fun) or the pool (PumpSwap). `quoteUser` is the wallet's own account for the quote asset: where a buy's
    * SOL comes from and a sale's SOL goes, when that is wrapped SOL.
@@ -49,10 +54,10 @@ export const PUMP_INSTRUCTIONS: Readonly<Record<string, PumpInstructionLayout>> 
   "1c92de7726c469d5": { name: "sell_v3", kind: "sell", u64: ["amount", "min_sol_output"], accounts: V3 },
 };
 
-export type PumpVenue = "pump.fun" | "PumpSwap";
+export type TradeVenue = "pump.fun" | "PumpSwap" | "Raydium LaunchLab";
 
 export interface PumpTrade {
-  venue: PumpVenue;
+  venue: TradeVenue;
   /** Which instruction it is, e.g. "buy_v2". */
   instruction: string;
   kind: "buy" | "sell";
@@ -75,6 +80,8 @@ export interface PumpTrade {
   tokenAmount: bigint;
   /** For a sell: the least SOL (lamports) it will accept. */
   minSolOut: bigint;
+  /** The share of the trade the site asks to be paid to a fee receiver it chooses (LaunchLab), in millionths. */
+  shareFeeRate?: bigint;
 }
 
 const u64At = (data: Buffer, offset: number): bigint => data.readBigUInt64LE(offset);
@@ -86,11 +93,11 @@ export function decodePumpTrade(ix: InspectedInstruction): PumpTrade | undefined
 }
 
 /**
- * Reads a trade from one of pump.fun's programs with its layout table. The two programs name their arguments differently
- * (pump.fun: `max_sol_cost`, `min_sol_output`; PumpSwap: `max_quote_amount_in`, `min_quote_amount_out`), so each amount is
- * looked up under every name it goes by.
+ * Reads a trade with its program's layout table. pump.fun and PumpSwap name their arguments differently (pump.fun:
+ * `max_sol_cost`, `min_sol_output`; PumpSwap: `max_quote_amount_in`, `min_quote_amount_out`), so each amount is looked up
+ * under every name it goes by, unless the layout says which argument is which.
  */
-export function decodeTrade(ix: InspectedInstruction, table: Readonly<Record<string, PumpInstructionLayout>>, venue: PumpVenue): PumpTrade | undefined {
+export function decodeTrade(ix: InspectedInstruction, table: Readonly<Record<string, PumpInstructionLayout>>, venue: TradeVenue): PumpTrade | undefined {
   const layout = table[ix.discriminator];
   if (!layout) return undefined;
   const data = Buffer.from(ix.dataHex, "hex");
@@ -104,6 +111,15 @@ export function decodeTrade(ix: InspectedInstruction, table: Readonly<Record<str
   };
   const a = layout.accounts;
   const isBuy = layout.kind === "buy";
+  const roles = layout.amounts;
+  const arg = (name: string | undefined): bigint => (name !== undefined ? (args[name] ?? 0n) : 0n);
+  const amounts = roles
+    ? { spendLamports: isBuy ? arg(roles.spend) : 0n, tokenAmount: arg(roles.tokens), minSolOut: isBuy ? 0n : arg(roles.minSolOut) }
+    : {
+        spendLamports: isBuy ? (args.max_sol_cost ?? args.max_quote_amount_in ?? args.spendable_quote_in ?? args.spendable_sol_in ?? 0n) : 0n,
+        tokenAmount: isBuy ? (args.amount ?? args.base_amount_out ?? args.min_tokens_out ?? args.min_base_amount_out ?? 0n) : (args.amount ?? args.base_amount_in ?? 0n),
+        minSolOut: isBuy ? 0n : (args.min_sol_output ?? args.min_quote_amount_out ?? 0n),
+      };
   return {
     venue,
     instruction: layout.name,
@@ -116,9 +132,8 @@ export function decodeTrade(ix: InspectedInstruction, table: Readonly<Record<str
     quoteMint: a.quoteMint >= 0 ? at(a.quoteMint) : undefined,
     quoteUser: a.quoteUser >= 0 ? at(a.quoteUser) : undefined,
     quoteTokenProgram: a.quoteTokenProgram >= 0 ? at(a.quoteTokenProgram) : undefined,
-    spendLamports: isBuy ? (args.max_sol_cost ?? args.max_quote_amount_in ?? args.spendable_quote_in ?? args.spendable_sol_in ?? 0n) : 0n,
-    tokenAmount: isBuy ? (args.amount ?? args.base_amount_out ?? args.min_tokens_out ?? args.min_base_amount_out ?? 0n) : (args.amount ?? args.base_amount_in ?? 0n),
-    minSolOut: isBuy ? 0n : (args.min_sol_output ?? args.min_quote_amount_out ?? 0n),
+    ...amounts,
+    shareFeeRate: args.share_fee_rate,
   };
 }
 
