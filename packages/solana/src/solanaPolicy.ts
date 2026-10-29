@@ -14,6 +14,7 @@ import {
   type PumpTrade,
 } from "./pumpfun.js";
 import { PUMPSWAP_PROGRAM_ID, decodePumpSwapTrade } from "./pumpswap.js";
+import { LAUNCHLAB_PROGRAM_ID, decodeLaunchLabTrade } from "./launchlab.js";
 
 /**
  * What the owner has allowed, in lamports (1 SOL = 1,000,000,000). The amounts are worked out from the wallet's balance
@@ -44,10 +45,13 @@ export interface SolanaPolicyConfig {
   gasReserveLamports: bigint;
   /** The most a transaction may pay as a priority fee. */
   maxPriorityFeeLamports: bigint;
+  /** The largest share of a trade (millionths) a site may route to a fee receiver it chooses (LaunchLab). Default 1%. */
+  maxShareFeeRate?: bigint;
 }
 
 export const DEFAULT_SOLANA_GAS_RESERVE_LAMPORTS = 10_000_000n; // 0.01 SOL
 export const DEFAULT_MAX_PRIORITY_FEE_LAMPORTS = 10_000_000n; // 0.01 SOL
+export const DEFAULT_MAX_SHARE_FEE_RATE = 10_000n; // 1%, in millionths
 
 export type SolanaRefusalCode =
   | "NOT_WALLET_PAYER"
@@ -57,6 +61,7 @@ export type SolanaRefusalCode =
   | "BAD_ACCOUNT"
   | "HIDDEN_ACCOUNT"
   | "PRIORITY_FEE"
+  | "SHARE_FEE"
   | "UNSUPPORTED_COIN"
   | "NO_TRADE"
   | "MULTIPLE_TRADES"
@@ -162,21 +167,24 @@ function checkSupportingInstruction(ix: InspectedInstruction, wallet: string): S
       return null;
     }
     default:
-      return refuse("UNKNOWN_PROGRAM", `This wallet only trades on pump.fun and PumpSwap. It does not sign steps that call ${short(ix.programId)}${ix.programName ? ` (${ix.programName})` : ""}.`);
+      return refuse("UNKNOWN_PROGRAM", `This wallet only trades on pump.fun, PumpSwap and Raydium LaunchLab. It does not sign steps that call ${short(ix.programId)}${ix.programName ? ` (${ix.programName})` : ""}.`);
   }
 }
 
-/** Reads a trade from either of pump.fun's programs, or returns undefined for any other instruction. */
-function decodeAnyTrade(ix: InspectedInstruction): PumpTrade | undefined {
-  return ix.programId === PUMP_PROGRAM_ID ? decodePumpTrade(ix) : decodePumpSwapTrade(ix);
-}
+/** The programs the wallet trades on, by address: what to call them, and how to read their buys and sells. */
+const TRADE_PROGRAMS: Readonly<Record<string, { venue: string; decode(ix: InspectedInstruction): PumpTrade | undefined }>> = {
+  [PUMP_PROGRAM_ID]: { venue: "pump.fun", decode: decodePumpTrade },
+  [PUMPSWAP_PROGRAM_ID]: { venue: "PumpSwap", decode: decodePumpSwapTrade },
+  [LAUNCHLAB_PROGRAM_ID]: { venue: "Raydium LaunchLab", decode: decodeLaunchLabTrade },
+};
 
 /**
  * Judges one transaction a Solana site asked the wallet to sign, BEFORE anything is signed.
  *
  * Passes only a transaction that: is paid for and signed by the wallet alone; contains exactly one buy or sell of a
- * SOL-paired coin, on pump.fun's bonding curve or (once the coin has graduated) on PumpSwap, whose tokens go to (or come
- * from) the wallet's own token account and whose SOL comes from (or goes to) the wallet itself; and whose other steps are
+ * SOL-paired coin, on pump.fun's bonding curve, on PumpSwap (where pump.fun coins go once they graduate) or on Raydium
+ * LaunchLab (letsbonk.fun, Raydium's launchpad), whose tokens go to (or come from) the wallet's own token account and whose
+ * SOL comes from (or goes to) the wallet itself; whose share fee, if it has one, is small; and whose other steps are
  * only compute-budget settings, creating the wallet's own token account, wrapping and unwrapping SOL in the wallet's own
  * wrapped-SOL account, and memos. Anything else, including any transfer of SOL or tokens to another address, is refused.
  *
@@ -189,11 +197,12 @@ export function checkSolanaTransaction(tx: InspectedTransaction, limits: SolanaL
 
   let trade: PumpTrade | undefined;
   for (const ix of tx.instructions) {
-    if (ix.programId === PUMP_PROGRAM_ID || ix.programId === PUMPSWAP_PROGRAM_ID) {
-      const venue = ix.programId === PUMP_PROGRAM_ID ? "pump.fun" : "PumpSwap";
+    const program = TRADE_PROGRAMS[ix.programId];
+    if (program) {
+      const { venue } = program;
       let decoded: PumpTrade | undefined;
       try {
-        decoded = decodeAnyTrade(ix);
+        decoded = program.decode(ix);
       } catch (error) {
         return refuse("HIDDEN_ACCOUNT", error instanceof Error ? error.message : `A ${venue} step could not be read.`);
       }
@@ -205,7 +214,7 @@ export function checkSolanaTransaction(tx: InspectedTransaction, limits: SolanaL
     const problem = checkSupportingInstruction(ix, config.wallet);
     if (problem) return problem;
   }
-  if (!trade) return refuse("NO_TRADE", "This transaction does not contain a pump.fun or PumpSwap buy or sell, so it was not signed.");
+  if (!trade) return refuse("NO_TRADE", "This transaction does not contain a buy or sell on a site this wallet trades on, so it was not signed.");
 
   if (trade.user !== config.wallet) return refuse("BAD_ACCOUNT", "The trade would be made by an account that is not this wallet.");
   if (![TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID].includes(trade.tokenProgram)) return refuse("BAD_ACCOUNT", "The coin uses a token program this wallet does not recognise.");
@@ -230,6 +239,13 @@ export function checkSolanaTransaction(tx: InspectedTransaction, limits: SolanaL
   const fee = priorityFeeLamports(tx.instructions);
   if (fee > config.maxPriorityFeeLamports) {
     return refuse("PRIORITY_FEE", `This transaction would pay a priority fee of ${sol(fee)}, more than the ${sol(config.maxPriorityFeeLamports)} this wallet allows.`);
+  }
+  // A LaunchLab trade carries a rate the site chose for a cut paid to a fee receiver of its choosing. A small one is a
+  // normal referral fee; a large one skims the trade, so it is refused on a sell as well as a buy.
+  const maxShare = config.maxShareFeeRate ?? DEFAULT_MAX_SHARE_FEE_RATE;
+  if (trade.shareFeeRate !== undefined && trade.shareFeeRate > maxShare) {
+    const pct = (rate: bigint) => `${(Number(rate) / 10_000).toLocaleString(undefined, { maximumFractionDigits: 4 })}%`;
+    return refuse("SHARE_FEE", `This trade would pay ${pct(trade.shareFeeRate)} of it to a fee receiver the site chose, more than the ${pct(maxShare)} this wallet allows.`);
   }
 
   if (trade.kind === "sell") {

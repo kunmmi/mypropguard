@@ -131,7 +131,7 @@ export function SolanaPanel({ accountId }: { accountId: string }) {
     return (
       <Panel title="Your Solana wallet">
         <p style={{ marginTop: 0, fontSize: 13, color: "var(--text-muted)" }}>
-          A wallet for Solana sites such as pump.fun. Deposit SOL, connect the site once, and trade there as normal. MyPropGuard
+          A wallet for Solana sites such as pump.fun, letsbonk.fun and Raydium&apos;s launchpad. Deposit SOL, connect the site once, and trade there as normal. MyPropGuard
           checks every trade against your limits first, and you can withdraw everything to your own address whenever you like.
         </p>
         <Button disabled={busy} onClick={() => void run("Creating…", async () => void (await api.createSolana(accountId)))}>
@@ -268,7 +268,7 @@ export function SolanaPanel({ accountId }: { accountId: string }) {
 
         {on && (
           <WalletConnectLinkBox
-            siteName="pump.fun"
+            siteName="pump.fun, letsbonk.fun or Raydium"
             busy={busy}
             onLink={async (code) => {
               setBusy(true);

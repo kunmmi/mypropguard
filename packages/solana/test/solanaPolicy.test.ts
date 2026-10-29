@@ -6,6 +6,9 @@ import {
   PUMP_PROGRAM_ID,
   PUMPSWAP_INSTRUCTIONS,
   PUMPSWAP_PROGRAM_ID,
+  LAUNCHLAB_INSTRUCTIONS,
+  LAUNCHLAB_PROGRAM_ID,
+  decodeLaunchLabTrade,
   TOKEN_2022_PROGRAM_ID,
   TOKEN_PROGRAM_ID,
   WSOL_MINT,
@@ -370,5 +373,95 @@ describe("wrapping and unwrapping SOL", () => {
 
   it("but a wrap alone is still not a trade", () => {
     expect(code(tx([wrapSol(SOL / 10n), syncNative()]))).toBe("NO_TRADE");
+  });
+});
+
+// Raydium LaunchLab (letsbonk.fun, Raydium's launchpad). 15 accounts each, from raydium_launchpad.json.
+const LAUNCH_ACCOUNT_COUNT: Record<string, number> = { buy_exact_in: 15, buy_exact_out: 15, sell_exact_in: 15, sell_exact_out: 15 };
+/** A LaunchLab trade; the third argument is the share fee rate (millionths), 0 unless given. */
+const launchIx = (name: string, over: TradeOver & { shareFeeRate?: bigint } = {}) => {
+  const [first, second] = over.u64 ?? (name.startsWith("buy") ? (name === "buy_exact_in" ? [SOL / 10n, 5n] : [5n, SOL / 10n]) : [1000n, 0n]);
+  return tradeIx(LAUNCHLAB_PROGRAM_ID, LAUNCHLAB_INSTRUCTIONS, LAUNCH_ACCOUNT_COUNT, name, { ...over, u64: [first!, second!, over.shareFeeRate ?? 0n] });
+};
+
+describe("reading Raydium LaunchLab trades from their real layouts", () => {
+  it.each([
+    // [instruction, args, what a buy may spend, tokens bought or sold, least SOL a sale accepts]
+    ["buy_exact_in", [111n, 222n], 111n, 222n, 0n],
+    ["buy_exact_out", [222n, 111n], 111n, 222n, 0n],
+    ["sell_exact_in", [111n, 222n], 0n, 111n, 222n],
+    ["sell_exact_out", [222n, 111n], 0n, 111n, 222n],
+  ] as const)("decodes %s, with each amount in its role", (name, args, spend, tokens, minOut) => {
+    const trade = decodeLaunchLabTrade(tx([launchIx(name, { u64: [...args], shareFeeRate: 2500n })]).instructions[0]!)!;
+    expect(trade).toMatchObject({ venue: "Raydium LaunchLab", instruction: name, mint: mint.toBase58(), user: W, associatedUser: ata().toBase58() });
+    expect(trade).toMatchObject({ quoteMint: WSOL_MINT, quoteUser: wsolAta().toBase58(), quoteTokenProgram: TOKEN_PROGRAM_ID });
+    expect(trade).toMatchObject({ spendLamports: spend, tokenAmount: tokens, minSolOut: minOut, shareFeeRate: 2500n });
+  });
+
+  it("is never read with another program's table", () => {
+    expect(decodeLaunchLabTrade(tx([pumpIx("buy")]).instructions[0]!)).toBeUndefined();
+    expect(decodePumpSwapTrade(tx([launchIx("buy_exact_in")]).instructions[0]!)).toBeUndefined();
+  });
+});
+
+describe("a Raydium LaunchLab transaction that is allowed", () => {
+  it("passes a buy as a site sends it: wrap SOL, buy, unwrap what is left", () => {
+    const d = check(tx([ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 1000 }), createAta(), createWsolAta(), wrapSol(SOL / 10n), syncNative(), launchIx("buy_exact_in"), closeAccount()]));
+    // The fee is a price per unit with no limit set, so the network maximum of 1.4M units is assumed: 1,400 lamports.
+    expect(d).toMatchObject({ ok: true, kind: "buy", mint: mint.toBase58(), spendLamports: SOL / 10n + 1_400n, summary: expect.stringMatching(/on Raydium LaunchLab$/) });
+  });
+
+  it("counts the most a buy_exact_out may cost, not the tokens it asks for", () => {
+    expect(check(tx([launchIx("buy_exact_out", { u64: [10n ** 15n, SOL / 5n] })]))).toMatchObject({ ok: true, spendLamports: SOL / 5n });
+  });
+
+  it.each(["sell_exact_in", "sell_exact_out"])("passes a %s, even when buying is paused and the wallet has no SOL", (name) => {
+    const d = check(tx([launchIx(name), closeAccount()]), limits({ frozen: true }), state({ balanceLamports: 0n, buysToday: 99, spentTodayLamports: 99n * SOL }));
+    expect(d).toMatchObject({ ok: true, kind: "sell" });
+  });
+
+  it("allows a small share fee, up to 1% of the trade", () => {
+    expect(check(tx([launchIx("buy_exact_in", { shareFeeRate: 10_000n })])).ok).toBe(true);
+  });
+});
+
+describe("a Raydium LaunchLab transaction that is refused", () => {
+  const code = (t: ReturnType<typeof tx>, l?: SolanaLimits, s?: SolanaState) => {
+    const d = check(t, l, s);
+    return d.ok ? "OK" : d.code;
+  };
+
+  it("when a buy passes a limit, the same limits as everywhere else", () => {
+    const buy = (spend: bigint) => tx([wrapSol(spend), syncNative(), launchIx("buy_exact_in", { u64: [spend, 1n] })]);
+    expect(code(buy(SOL / 10n), limits({ frozen: true }))).toBe("FROZEN");
+    expect(code(buy(SOL / 2n))).toBe("MAX_BUY");
+    expect(code(buy(SOL / 10n), limits(), state({ buysToday: 5 }))).toBe("MAX_BUYS_PER_DAY");
+    expect(code(buy(SOL / 4n), limits(), state({ spentTodayLamports: SOL / 3n }))).toBe("DAILY_SPEND");
+    expect(code(buy(SOL / 10n), limits({ cooldownSec: 60 }), state({ lastBuyAtSec: 999_990 }))).toBe("COOLDOWN");
+    expect(code(buy(SOL / 10n), limits(), state({ balanceLamports: SOL / 10n }))).toBe("INSUFFICIENT_SOL");
+  });
+
+  it("when the share fee the site set is more than 1%, on a sell as well as a buy", () => {
+    expect(code(tx([launchIx("buy_exact_in", { shareFeeRate: 10_001n })]))).toBe("SHARE_FEE");
+    const d = check(tx([launchIx("sell_exact_in", { shareFeeRate: 50_000n })]));
+    expect(d).toMatchObject({ ok: false, code: "SHARE_FEE", message: expect.stringMatching(/pay 5% of it/) });
+  });
+
+  it("when a sale would pay its SOL to someone else, or the coins would go to someone else", () => {
+    expect(code(tx([launchIx("sell_exact_in", { quoteUser: wsolAta(stranger.toBase58()) })]))).toBe("BAD_ACCOUNT");
+    expect(code(tx([launchIx("sell_exact_out", { quoteUser: stranger })]))).toBe("BAD_ACCOUNT");
+    expect(code(tx([launchIx("buy_exact_in", { associatedUser: ata(stranger.toBase58()) })]))).toBe("BAD_ACCOUNT");
+  });
+
+  it("when the pool is paired with a stablecoin (some letsbonk.fun pools), not SOL", () => {
+    const stablecoin = Keypair.generate().publicKey.toBase58();
+    expect(code(tx([launchIx("buy_exact_in", { quoteMint: stablecoin, quoteUser: new PublicKey(associatedTokenAddress(W, TOKEN_PROGRAM_ID, stablecoin)) })]))).toBe("UNSUPPORTED_COIN");
+    expect(code(tx([launchIx("buy_exact_in", { quoteMint: SystemProgram.programId.toBase58() })]))).toBe("UNSUPPORTED_COIN");
+  });
+
+  it("when it is a LaunchLab call that is not a buy or a sell (creating a coin, claiming fees, ...)", () => {
+    const claim = new TransactionInstruction({ programId: new PublicKey(LAUNCHLAB_PROGRAM_ID), keys: [], data: Buffer.alloc(16) });
+    const d = check(tx([claim]));
+    expect(d).toMatchObject({ ok: false, code: "UNKNOWN_INSTRUCTION", message: expect.stringMatching(/Raydium LaunchLab call/) });
   });
 });

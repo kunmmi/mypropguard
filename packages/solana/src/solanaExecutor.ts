@@ -129,7 +129,7 @@ export class SolanaExecutor {
       }
       const t1 = this.now();
 
-      // Would pump.fun accept this right now? A failed transaction still costs a fee, so find out before signing.
+      // Would the exchange accept this right now? A failed transaction still costs a fee, so find out before signing.
       let proceedsLamports: bigint | null = null;
       try {
         const [simulation, valued] = await Promise.all([
@@ -139,7 +139,7 @@ export class SolanaExecutor {
         proceedsLamports = valued;
         if (simulation.err) {
           const why = simulation.logs.filter((l) => /error|failed|insufficient|slippage|exceeded/i.test(l)).pop() ?? JSON.stringify(simulation.err);
-          throw new SolanaTradeRefused("WOULD_FAIL", `pump.fun would reject this right now, so nothing was signed and no fee was spent: ${why.slice(0, 200)}`);
+          throw new SolanaTradeRefused("WOULD_FAIL", `The exchange would reject this right now, so nothing was signed and no fee was spent: ${why.slice(0, 200)}`);
         }
       } catch (error) {
         if (error instanceof SolanaTradeRefused) throw error;
