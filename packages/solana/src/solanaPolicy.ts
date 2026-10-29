@@ -5,6 +5,7 @@ import {
   COMPUTE_BUDGET_PROGRAM_ID,
   MEMO_PROGRAM_ID,
   PUMP_PROGRAM_ID,
+  SYSTEM_PROGRAM_ID,
   TOKEN_2022_PROGRAM_ID,
   TOKEN_PROGRAM_ID,
   WSOL_MINT,
@@ -12,6 +13,7 @@ import {
   decodePumpTrade,
   type PumpTrade,
 } from "./pumpfun.js";
+import { PUMPSWAP_PROGRAM_ID, decodePumpSwapTrade } from "./pumpswap.js";
 
 /**
  * What the owner has allowed, in lamports (1 SOL = 1,000,000,000). The amounts are worked out from the wallet's balance
@@ -105,10 +107,41 @@ function priorityFeeLamports(instructions: readonly InspectedInstruction[]): big
   return (microLamports * (units ?? 1_400_000n)) / 1_000_000n;
 }
 
+/** The wallet's own wrapped-SOL account. PumpSwap pays for a buy from it and pays a sale into it. */
+const wrappedSolAccount = (wallet: string): string => associatedTokenAddress(wallet, TOKEN_PROGRAM_ID, WSOL_MINT);
+
 /** Checks one non-trade instruction. Returns a refusal, or null if it is harmless and expected. */
 function checkSupportingInstruction(ix: InspectedInstruction, wallet: string): SolanaDecision | null {
   const data = Buffer.from(ix.dataHex, "hex");
+  const keys = ix.accounts.map((a) => a.pubkey);
   switch (ix.programId) {
+    case SYSTEM_PROGRAM_ID: {
+      // Only one move is allowed: wrapping SOL, i.e. a transfer (2) from the wallet into its own wrapped-SOL account.
+      if (data.length !== 12 || data.readUInt32LE(0) !== 2) return refuse("UNKNOWN_INSTRUCTION", "That system instruction is not one this wallet allows.");
+      const [from, to] = keys;
+      if (!from || !to || from.startsWith("lookup:") || to.startsWith("lookup:")) return refuse("HIDDEN_ACCOUNT", "A transfer hides an account that must be checked.");
+      if (from !== wallet || to !== wrappedSolAccount(wallet)) {
+        return refuse("BAD_ACCOUNT", `This transaction would send SOL to ${short(to)}. This wallet only moves SOL into its own wrapped-SOL account.`);
+      }
+      return null;
+    }
+    case TOKEN_PROGRAM_ID:
+    case TOKEN_2022_PROGRAM_ID: {
+      if (keys.some((k) => k.startsWith("lookup:"))) return refuse("HIDDEN_ACCOUNT", "A token instruction hides an account that must be checked.");
+      // Sync native (17): counts SOL just moved into the wrapped-SOL account. Harmless, but only on the wallet's own.
+      if (data.length === 1 && data[0] === 17 && ix.programId === TOKEN_PROGRAM_ID) {
+        return keys[0] === wrappedSolAccount(wallet) ? null : refuse("BAD_ACCOUNT", "That wrapped-SOL step is on an account that is not this wallet's own.");
+      }
+      // Close account (9): [account, destination, owner]. Unwraps SOL, or returns an empty account's rent. Whatever the
+      // account held goes to the destination, so that must be the wallet; the owner signing must be the wallet too.
+      if (data.length === 1 && data[0] === 9) {
+        const [account, destination, owner] = keys;
+        if (!account || !destination || !owner) return refuse("UNKNOWN_INSTRUCTION", "That close-account step is missing accounts.");
+        if (destination !== wallet || owner !== wallet) return refuse("BAD_ACCOUNT", `Closing that token account would pay what it holds to ${short(destination)}, not this wallet.`);
+        return null;
+      }
+      return refuse("UNKNOWN_INSTRUCTION", "That token instruction is not one this wallet allows. It does not move tokens anywhere outside a trade.");
+    }
     case COMPUTE_BUDGET_PROGRAM_ID:
       // 1 request heap frame, 2 set unit limit, 3 set unit price, 4 set loaded accounts size limit.
       return data[0] !== undefined && [1, 2, 3, 4].includes(data[0]) ? null : refuse("UNKNOWN_INSTRUCTION", "That compute-budget instruction is not one this wallet allows.");
@@ -129,17 +162,23 @@ function checkSupportingInstruction(ix: InspectedInstruction, wallet: string): S
       return null;
     }
     default:
-      return refuse("UNKNOWN_PROGRAM", `This wallet only trades on pump.fun. It does not sign steps that call ${short(ix.programId)}${ix.programName ? ` (${ix.programName})` : ""}.`);
+      return refuse("UNKNOWN_PROGRAM", `This wallet only trades on pump.fun and PumpSwap. It does not sign steps that call ${short(ix.programId)}${ix.programName ? ` (${ix.programName})` : ""}.`);
   }
+}
+
+/** Reads a trade from either of pump.fun's programs, or returns undefined for any other instruction. */
+function decodeAnyTrade(ix: InspectedInstruction): PumpTrade | undefined {
+  return ix.programId === PUMP_PROGRAM_ID ? decodePumpTrade(ix) : decodePumpSwapTrade(ix);
 }
 
 /**
  * Judges one transaction a Solana site asked the wallet to sign, BEFORE anything is signed.
  *
- * Passes only a transaction that: is paid for and signed by the wallet alone; contains exactly one pump.fun buy or
- * sell on a SOL-paired coin whose tokens go to (or come from) the wallet's own token account; and whose other steps are
- * only compute-budget settings, creating the wallet's own token account, and memos. Anything else, including any
- * transfer of SOL or tokens to another address, is refused.
+ * Passes only a transaction that: is paid for and signed by the wallet alone; contains exactly one buy or sell of a
+ * SOL-paired coin, on pump.fun's bonding curve or (once the coin has graduated) on PumpSwap, whose tokens go to (or come
+ * from) the wallet's own token account and whose SOL comes from (or goes to) the wallet itself; and whose other steps are
+ * only compute-budget settings, creating the wallet's own token account, wrapping and unwrapping SOL in the wallet's own
+ * wrapped-SOL account, and memos. Anything else, including any transfer of SOL or tokens to another address, is refused.
  *
  * A sell is never blocked by a limit or a freeze: getting out must always be possible.
  */
@@ -150,14 +189,15 @@ export function checkSolanaTransaction(tx: InspectedTransaction, limits: SolanaL
 
   let trade: PumpTrade | undefined;
   for (const ix of tx.instructions) {
-    if (ix.programId === PUMP_PROGRAM_ID) {
+    if (ix.programId === PUMP_PROGRAM_ID || ix.programId === PUMPSWAP_PROGRAM_ID) {
+      const venue = ix.programId === PUMP_PROGRAM_ID ? "pump.fun" : "PumpSwap";
       let decoded: PumpTrade | undefined;
       try {
-        decoded = decodePumpTrade(ix);
+        decoded = decodeAnyTrade(ix);
       } catch (error) {
-        return refuse("HIDDEN_ACCOUNT", error instanceof Error ? error.message : "A pump.fun step could not be read.");
+        return refuse("HIDDEN_ACCOUNT", error instanceof Error ? error.message : `A ${venue} step could not be read.`);
       }
-      if (!decoded) return refuse("UNKNOWN_INSTRUCTION", "That pump.fun call is not a buy or a sell, so it was not signed.");
+      if (!decoded) return refuse("UNKNOWN_INSTRUCTION", `That ${venue} call is not a buy or a sell, so it was not signed.`);
       if (trade) return refuse("MULTIPLE_TRADES", "This transaction holds more than one trade. Send them one at a time.");
       trade = decoded;
       continue;
@@ -165,16 +205,26 @@ export function checkSolanaTransaction(tx: InspectedTransaction, limits: SolanaL
     const problem = checkSupportingInstruction(ix, config.wallet);
     if (problem) return problem;
   }
-  if (!trade) return refuse("NO_TRADE", "This transaction does not contain a pump.fun buy or sell, so it was not signed.");
+  if (!trade) return refuse("NO_TRADE", "This transaction does not contain a pump.fun or PumpSwap buy or sell, so it was not signed.");
 
   if (trade.user !== config.wallet) return refuse("BAD_ACCOUNT", "The trade would be made by an account that is not this wallet.");
   if (![TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID].includes(trade.tokenProgram)) return refuse("BAD_ACCOUNT", "The coin uses a token program this wallet does not recognise.");
   if (trade.associatedUser !== associatedTokenAddress(config.wallet, trade.tokenProgram, trade.mint)) {
     return refuse("BAD_ACCOUNT", `The tokens would ${trade.kind === "buy" ? "go to" : "come from"} an account that is not this wallet's own.`);
   }
-  // Newer instructions name the coin's quote asset: only SOL-paired coins are traded (the zero key means SOL on older coins).
-  if (trade.quoteMint !== undefined && trade.quoteMint !== WSOL_MINT && trade.quoteMint !== "11111111111111111111111111111111") {
+  // Newer instructions name the coin's quote asset: only SOL-paired coins are traded (the zero key means SOL on older
+  // pump.fun coins; a PumpSwap pool always names a real mint). A pool whose base is SOL is the wrong way round: its "buy"
+  // would spend the coin to get SOL.
+  const solQuote = trade.quoteMint === WSOL_MINT || (trade.venue === "pump.fun" && trade.quoteMint === SYSTEM_PROGRAM_ID);
+  if ((trade.quoteMint !== undefined && !solQuote) || trade.mint === WSOL_MINT) {
     return refuse("UNSUPPORTED_COIN", "This coin is paired with something other than SOL, which this wallet does not trade.");
+  }
+  // When the quote is wrapped SOL, the instruction names the token account the SOL comes from (buy) or goes to (sell):
+  // it must be the wallet's own, or a sale could pay a stranger.
+  if (trade.quoteMint === WSOL_MINT) {
+    if (trade.quoteTokenProgram !== TOKEN_PROGRAM_ID || trade.quoteUser !== wrappedSolAccount(config.wallet)) {
+      return refuse("BAD_ACCOUNT", `The SOL would ${trade.kind === "buy" ? "be paid from" : "be paid to"} an account that is not this wallet's own.`);
+    }
   }
 
   const fee = priorityFeeLamports(tx.instructions);
@@ -183,7 +233,7 @@ export function checkSolanaTransaction(tx: InspectedTransaction, limits: SolanaL
   }
 
   if (trade.kind === "sell") {
-    return { ok: true, kind: "sell", mint: trade.mint, spendLamports: 0n, tokenAmount: trade.tokenAmount, minSolOut: trade.minSolOut, summary: `sell ${short(trade.mint)} on pump.fun` };
+    return { ok: true, kind: "sell", mint: trade.mint, spendLamports: 0n, tokenAmount: trade.tokenAmount, minSolOut: trade.minSolOut, summary: `sell ${short(trade.mint)} on ${trade.venue}` };
   }
 
   // BUY. Limits apply in a fixed order so the message names the first one hit. The spend counts the priority fee too.
@@ -206,5 +256,5 @@ export function checkSolanaTransaction(tx: InspectedTransaction, limits: SolanaL
   if (state.balanceLamports < spend + config.gasReserveLamports) {
     return refuse("INSUFFICIENT_SOL", `That buy needs ${sol(spend)} plus ${sol(config.gasReserveLamports)} kept for fees, and the wallet holds ${sol(state.balanceLamports)}.`);
   }
-  return { ok: true, kind: "buy", mint: trade.mint, spendLamports: spend, tokenAmount: trade.tokenAmount, minSolOut: 0n, summary: `buy ${short(trade.mint)} on pump.fun` };
+  return { ok: true, kind: "buy", mint: trade.mint, spendLamports: spend, tokenAmount: trade.tokenAmount, minSolOut: 0n, summary: `buy ${short(trade.mint)} on ${trade.venue}` };
 }

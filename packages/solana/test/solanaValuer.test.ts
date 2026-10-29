@@ -63,13 +63,13 @@ describe("pump.fun's bonding curve", () => {
   });
 });
 
-function valuer(over: { down?: boolean; price?: unknown } = {}) {
+function valuer(over: { down?: boolean; price?: unknown; balances?: Record<string, bigint> } = {}) {
   const calls: string[] = [];
   const accounts = new Map<string, Uint8Array>([
     [bondingCurveAddress(CURVE_MINT), curveBytes(CURVE)],
     [bondingCurveAddress(GRAD_MINT), curveBytes({ ...CURVE, complete: true })],
   ]);
-  const balances: Record<string, bigint> = { [CURVE_MINT]: 10_000_000_000_000n, [GRAD_MINT]: 500n, [DEAD_MINT]: 70n };
+  const balances: Record<string, bigint> = { [CURVE_MINT]: 10_000_000_000_000n, [GRAD_MINT]: 500n, [DEAD_MINT]: 70n, ...over.balances };
   const rpc = {
     getBalance: async () => SOL / 2n,
     getAccountData: async (address: string) => {
@@ -82,8 +82,8 @@ function valuer(over: { down?: boolean; price?: unknown } = {}) {
     calls.push(url);
     if (over.down) throw new Error("fetch failed");
     if (url.includes("/price/v3")) return { ok: true, status: 200, json: async () => over.price ?? { [WSOL_MINT]: { usdPrice: 150 } }, text: async () => "" };
-    const mint = new URL(url).searchParams.get("inputMint");
-    if (mint === DEAD_MINT) return { ok: false, status: 400, json: async () => ({}), text: async () => "no route" };
+    const params = new URL(url).searchParams;
+    if (params.get("inputMint") === DEAD_MINT || params.get("outputMint") === DEAD_MINT) return { ok: false, status: 400, json: async () => ({}), text: async () => "no route" };
     return { ok: true, status: 200, json: async () => ({ outAmount: "7000", inAmount: "500" }), text: async () => "" };
   };
   return { calls, v: new SolanaValuer(rpc, fetchImpl as never) };
@@ -124,10 +124,25 @@ describe("valuing the wallet's holdings", () => {
     expect(calls).toEqual([]);
   });
 
-  it("estimates the tokens a buy brings on the curve, and none off it", async () => {
-    const { v } = valuer();
+  it("estimates the tokens a buy brings on the curve without calling Jupiter", async () => {
+    const { v, calls } = valuer();
     expect(await v.quoteBuy(CURVE_MINT, SOL)).toBeGreaterThan(0n);
-    expect(await v.quoteBuy(GRAD_MINT, SOL)).toBe(0n);
+    expect(calls).toEqual([]);
+  });
+
+  it("estimates a buy of a graduated coin (on PumpSwap) with a Jupiter quote from SOL, and none when there is no route", async () => {
+    const { v, calls } = valuer();
+    expect(await v.quoteBuy(GRAD_MINT, SOL)).toBe(7000n);
+    const asked = new URL(calls[0]!).searchParams;
+    expect([asked.get("inputMint"), asked.get("outputMint"), asked.get("amount")]).toEqual([WSOL_MINT, GRAD_MINT, SOL.toString()]);
+    expect(await v.quoteBuy(DEAD_MINT, SOL)).toBe(0n);
+  });
+
+  it("counts SOL left wrapped after a PumpSwap trade as SOL", async () => {
+    const { v } = valuer({ balances: { [WSOL_MINT]: SOL / 4n } });
+    const h = await v.holdings("owner", []);
+    expect(h.solLamports).toBe(SOL / 2n + SOL / 4n);
+    expect(h.equityLamports).toBe(SOL / 2n + SOL / 4n);
   });
 
   it("reads the SOL price in dollars, and says so when it cannot", async () => {

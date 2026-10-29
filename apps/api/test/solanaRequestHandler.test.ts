@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import bs58 from "bs58";
 import { ComputeBudgetProgram, Keypair, PublicKey, TransactionInstruction, TransactionMessage, VersionedTransaction } from "@solana/web3.js";
-import { PUMP_INSTRUCTIONS, SOLANA_MAINNET_CAIP2, SolanaExecutor, TOKEN_2022_PROGRAM_ID, WSOL_MINT, associatedTokenAddress } from "@mypropguard/solana";
+import { PUMP_INSTRUCTIONS, SOLANA_MAINNET_CAIP2, SolanaExecutor, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID, WSOL_MINT, associatedTokenAddress } from "@mypropguard/solana";
 import { SolanaRequestHandler } from "../src/solana/solanaRequestHandler.js";
 import type { SolanaRequestRecord, SolanaWalletRow } from "../src/solana/solanaStore.js";
 import { OneClickRequestHandler } from "../src/oneClick/oneClickRequestHandler.js";
@@ -208,6 +208,8 @@ function tradeTx(name: "buy_v3" | "sell_v3", args: bigint[]): string {
   put(layout.accounts.tokenProgram, new PublicKey(TOKEN_2022_PROGRAM_ID));
   put(layout.accounts.associatedUser, new PublicKey(ata));
   put(layout.accounts.quoteMint, new PublicKey(WSOL_MINT));
+  put(layout.accounts.quoteTokenProgram, new PublicKey(TOKEN_PROGRAM_ID));
+  put(layout.accounts.quoteUser, new PublicKey(associatedTokenAddress(WALLET, TOKEN_PROGRAM_ID, WSOL_MINT)));
   const data = Buffer.alloc(8 + 8 * args.length + 2);
   Buffer.from(disc, "hex").copy(data);
   args.forEach((v, i) => data.writeBigUInt64LE(v, 8 + 8 * i));

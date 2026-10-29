@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { Keypair } from "@solana/web3.js";
 import { InMemoryRiskLedgerStore } from "@mypropguard/test-fixtures";
 import { RuleType } from "@mypropguard/domain";
+import { WSOL_MINT } from "@mypropguard/solana";
 import { buildApp } from "../src/app.js";
 import type { SolanaDeps } from "../src/routes/solana.js";
 import type { SolanaRequestRecord, SolanaWalletRow } from "../src/solana/solanaStore.js";
@@ -54,7 +55,7 @@ function rig(opts: { withNetwork?: boolean } = {}) {
       ? {
           rpc: {
             getBalance: async () => 2n * SOL,
-            getTokenBalance: async () => 500n,
+            getTokenBalance: async (_owner: string, mint: string) => (mint === WSOL_MINT ? 0n : 500n),
             getAccountData: async () => mintData,
             getAccountOwner: async () => "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
             getLatestBlockhash: async () => "EETubP5AKHgjPAhzPAFcb8BAY1hMH639CWCFTqi3hq1k",

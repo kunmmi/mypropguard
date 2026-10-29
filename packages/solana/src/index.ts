@@ -2,6 +2,7 @@ export * from "./constants.js";
 export * from "./txInspect.js";
 export * from "./loginMessage.js";
 export * from "./pumpfun.js";
+export * from "./pumpswap.js";
 export * from "./solanaPolicy.js";
 export * from "./pumpCurve.js";
 export * from "./rpc.js";

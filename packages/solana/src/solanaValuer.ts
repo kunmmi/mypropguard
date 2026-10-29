@@ -55,11 +55,16 @@ export class SolanaValuer {
     return typeof out === "string" ? BigInt(out) : 0n;
   }
 
-  /** Tokens that spending `lamports` buys on the curve (0 when the coin is not on the curve). */
+  /** Tokens that spending `lamports` buys now: the curve's maths, or a Jupiter quote once on PumpSwap (0 when no route). */
   async quoteBuy(mint: string, lamports: bigint): Promise<bigint> {
+    if (lamports <= 0n) return 0n;
     const data = await this.rpc.getAccountData(bondingCurveAddress(mint));
     const curve = data ? decodeBondingCurve(data) : undefined;
-    return curve && !curve.complete ? curveBuyQuote(curve, lamports) : 0n;
+    if (curve && !curve.complete) return curveBuyQuote(curve, lamports);
+    const qs = new URLSearchParams({ inputMint: WSOL_MINT, outputMint: mint, amount: lamports.toString(), slippageBps: "100", swapMode: "ExactIn" });
+    const { body } = await this.getJson(`${this.jupiterBase}/swap/v1/quote?${qs}`);
+    const out = (body as { outAmount?: unknown } | null)?.outAmount;
+    return typeof out === "string" ? BigInt(out) : 0n;
   }
 
   /** A coin's decimals, read from its mint account (byte 44 in both token programs). */
@@ -73,10 +78,13 @@ export class SolanaValuer {
     return this.rpc.getTokenBalance(owner, mint);
   }
 
-  /** Everything the wallet holds, valued. Only the coins named are counted: unsolicited airdrops cannot inflate it. */
+  /**
+   * Everything the wallet holds, valued. Only the coins named are counted: unsolicited airdrops cannot inflate it. SOL
+   * left wrapped after a PumpSwap trade is still the wallet's SOL, so it is counted as SOL (not as a loss).
+   */
   async holdings(wallet: string, mints: readonly string[]): Promise<SolanaHoldings> {
     const [solLamports, positions] = await Promise.all([
-      this.rpc.getBalance(wallet),
+      Promise.all([this.rpc.getBalance(wallet), this.rpc.getTokenBalance(wallet, WSOL_MINT)]).then(([native, wrapped]) => native + wrapped),
       Promise.all(
         mints.map(async (mint): Promise<SolanaPosition> => {
           const balance = await this.rpc.getTokenBalance(wallet, mint);
