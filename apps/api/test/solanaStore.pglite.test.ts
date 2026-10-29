@@ -19,7 +19,7 @@ let store: SolanaStore;
 beforeAll(async () => {
   db = new PGlite();
   await db.exec("create table protected_accounts (account_id text primary key);");
-  for (const file of ["0012_one_click_trading.sql", "0013_float_wallet.sql", "0014_solana_wallet.sql", "0015_solana_trading.sql"]) {
+  for (const file of ["0012_one_click_trading.sql", "0013_float_wallet.sql", "0014_solana_wallet.sql", "0015_solana_trading.sql", "0016_solana_withdrawal_delay.sql"]) {
     await db.exec(readFileSync(join(MIGRATIONS, file), "utf-8"));
   }
   pool = { query: (sql: string, params?: unknown[]) => db.query(sql, params as never[]) } as unknown as pg.Pool;
@@ -128,6 +128,65 @@ describe("the owner's limits and withdrawal address", () => {
   it("keeps the withdrawal address", async () => {
     await store.setWithdrawalAddress("acct_1", "OwnerAddr1111111111111111111111111111111111");
     expect((await store.get("acct_1"))!.withdrawalAddress).toBe("OwnerAddr1111111111111111111111111111111111");
+  });
+
+  describe("a changed withdrawal address waits 24 hours", () => {
+    const FIRST = "OwnerAddr1111111111111111111111111111111111";
+    const SECOND = "OwnerAddr2222222222222222222222222222222222";
+    const THIRD = "OwnerAddr3333333333333333333333333333333333";
+    /** Moves a waiting change's time into the past, as if the 24 hours had gone by. */
+    const letTimePass = () => db.exec("update sol_wallets set pending_withdrawal_at = now() - interval '1 second' where pending_withdrawal_at is not null");
+
+    it("applies the first address at once: until there is one nothing can be withdrawn", async () => {
+      await store.setWithdrawalAddress("acct_1", FIRST);
+      expect(await store.get("acct_1")).toMatchObject({ withdrawalAddress: FIRST, pendingWithdrawalAddress: null, pendingWithdrawalAt: null });
+    });
+
+    it("keeps withdrawals going to the current address while a new one waits, and says until when", async () => {
+      await store.setWithdrawalAddress("acct_1", FIRST);
+      const before = Date.now();
+      await store.setWithdrawalAddress("acct_1", SECOND);
+      const w = (await store.get("acct_1"))!;
+      expect(w).toMatchObject({ withdrawalAddress: FIRST, pendingWithdrawalAddress: SECOND });
+      const waitMs = new Date(w.pendingWithdrawalAt!).getTime() - before;
+      expect(waitMs).toBeGreaterThan(24 * 3600_000 - 60_000);
+      expect(waitMs).toBeLessThan(24 * 3600_000 + 60_000);
+    });
+
+    it("switches to the new address once the 24 hours have passed, with nothing left waiting", async () => {
+      await store.setWithdrawalAddress("acct_1", FIRST);
+      await store.setWithdrawalAddress("acct_1", SECOND);
+      await letTimePass();
+      expect(await store.get("acct_1")).toMatchObject({ withdrawalAddress: SECOND, pendingWithdrawalAddress: null, pendingWithdrawalAt: null });
+      // And a later change starts from the new address.
+      await store.setWithdrawalAddress("acct_1", THIRD);
+      expect(await store.get("acct_1")).toMatchObject({ withdrawalAddress: SECOND, pendingWithdrawalAddress: THIRD });
+    });
+
+    it("restarts the wait when another address is asked for, so it can never be shortened", async () => {
+      await store.setWithdrawalAddress("acct_1", FIRST);
+      await store.setWithdrawalAddress("acct_1", SECOND);
+      await db.exec("update sol_wallets set pending_withdrawal_at = now() + interval '1 minute'"); // nearly done
+      await store.setWithdrawalAddress("acct_1", THIRD);
+      const w = (await store.get("acct_1"))!;
+      expect(w).toMatchObject({ withdrawalAddress: FIRST, pendingWithdrawalAddress: THIRD });
+      expect(new Date(w.pendingWithdrawalAt!).getTime() - Date.now()).toBeGreaterThan(23 * 3600_000);
+    });
+
+    it("cancels a waiting change when the current address is saved again", async () => {
+      await store.setWithdrawalAddress("acct_1", FIRST);
+      await store.setWithdrawalAddress("acct_1", SECOND);
+      await store.setWithdrawalAddress("acct_1", FIRST);
+      expect(await store.get("acct_1")).toMatchObject({ withdrawalAddress: FIRST, pendingWithdrawalAddress: null, pendingWithdrawalAt: null });
+    });
+
+    it("touches no other account", async () => {
+      await create("acct_2");
+      await store.setWithdrawalAddress("acct_2", FIRST);
+      await store.setWithdrawalAddress("acct_1", FIRST);
+      await store.setWithdrawalAddress("acct_1", SECOND);
+      expect(await store.get("acct_2")).toMatchObject({ withdrawalAddress: FIRST, pendingWithdrawalAddress: null });
+    });
   });
 
   it("refuses shares outside 1-100% at the database", async () => {

@@ -212,6 +212,9 @@ export interface SolanaStatus {
     value: { maxDailyLossUsd?: number; maxDrawdown?: number; maxExposureUsd?: number; tokenLimits?: Record<string, number> };
   };
   withdrawalAddress?: string | null;
+  /** A changed withdrawal address that is waiting its 24 hours, and when it takes effect (ISO). Null when none. */
+  pendingWithdrawalAddress?: string | null;
+  pendingWithdrawalAt?: string | null;
   /** SOL in the wallet, in lamports, or null when it could not be read just now. */
   balanceLamports?: string | null;
   holdings?: Array<{ mint: string; balance: string; valueLamports: string }>;
@@ -354,7 +357,8 @@ export const api = {
   freezeSolana: (accountId: string, frozen: boolean) =>
     request<{ ok: boolean }>(`/v1/accounts/${encodeURIComponent(accountId)}/solana/freeze`, { method: "POST", body: JSON.stringify({ frozen }) }),
   setSolanaWithdrawalAddress: (accountId: string, address: string) =>
-    request<{ ok: boolean; withdrawalAddress: string }>(`/v1/accounts/${encodeURIComponent(accountId)}/solana/withdrawal-address`, { method: "POST", body: JSON.stringify({ address }) }),
+    request<{ ok: boolean; withdrawalAddress: string; pendingWithdrawalAddress: string | null; pendingWithdrawalAt: string | null; message: string }>(
+      `/v1/accounts/${encodeURIComponent(accountId)}/solana/withdrawal-address`, { method: "POST", body: JSON.stringify({ address }) }),
   withdrawSolana: (accountId: string) =>
     request<SolanaWithdrawResult>(`/v1/accounts/${encodeURIComponent(accountId)}/solana/withdraw`, { method: "POST", body: "{}" }),
 
